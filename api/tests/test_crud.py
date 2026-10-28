@@ -282,6 +282,14 @@ async def test_self_service_edit_scope(admin_client, client, db, seeded):
     assert ok.status_code == 200, ok.text
     assert ok.json()["name"] == "自改2" and ok.json()["avatar"] == "a5"
 
+    # 前端回传整份表单：登录名/is_admin 是只读回显，值没变不能当成越权（否则改名都改不了）
+    r = await client.put(
+        f"/api/people/{me['id']}",
+        json={"name": "自改3", "gitlab_username": "selfedit", "is_admin": False},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["name"] == "自改3"
+
     for bad in ({"gitlab_username": "hijack"}, {"octo_uid": "uid-x"}, {"is_admin": True}, {"password": "pw2"}):
         r = await client.put(f"/api/people/{me['id']}", json=bad)
         assert r.status_code == 403, (bad, r.text)

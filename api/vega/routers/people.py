@@ -85,9 +85,13 @@ async def update_person(
         # 自己能改：姓名/邮箱/头像/LLM 配置/am key。登录名是身份匹配与登录依据、
         # octo 绑定决定通知去向、管理员标记是权限，都只能管理员动；
         # 改密码必须走 /api/auth/password（校验旧密码），这里不带旧密码就能改会有绕过。
-        if any(getattr(body, k) is not None for k in ("is_admin", "octo_uid", "gitlab_username")):
-            raise HTTPException(403, "无权修改该字段")
-        if body.password is not None:
+        # 判「真的改了」而不是「提交了」：前端回传整份表单时 disabled 的登录名和
+        # is_admin 也在里面，按提交与否拒绝会让普通用户连姓名都改不了。
+        data = body.model_dump(exclude_unset=True)
+        for k in ("is_admin", "octo_uid", "gitlab_username"):
+            if k in data and data[k] is not None and data[k] != getattr(person, k):
+                raise HTTPException(403, "无权修改该字段")
+        if body.password:
             raise HTTPException(403, "修改密码请走修改密码接口（需校验旧密码）")
     _apply(body, person)
     await db.commit()

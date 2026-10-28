@@ -57,6 +57,8 @@ export default function People() {
     const body: any = { ...v };
     // 空 key 不提交，避免把已有配置清掉
     for (const k of ["password", "llm_api_key", "am_user_key"]) if (!body[k]) delete body[k];
+    // 非管理员：登录名/管理员标记/重置密码都不许改（表单回传的是只读值，不是修改意图）
+    if (!isAdmin()) for (const k of ["is_admin", "gitlab_username", "password"]) delete body[k];
     try {
       if (editing.id) await api(`/api/people/${editing.id}`, { method: "PUT", body: JSON.stringify(body) });
       else await api("/api/people", { method: "POST", body: JSON.stringify(body) });
@@ -120,7 +122,9 @@ export default function People() {
               title: "操作",
               render: (_, r) => (
                 <Space size={0} split={<Divider type="vertical" />} wrap>
-                  <a onClick={() => open(r)}>编辑</a>
+                  {(isAdmin() || String(r.id) === localStorage.getItem("vega_me")) && (
+                    <a onClick={() => open(r)}>编辑</a>
+                  )}
                   {isAdmin() && (
                     <Popconfirm
                       title="删除该人员？"
@@ -162,9 +166,12 @@ export default function People() {
           <Form.Item name="gitlab_email" label="GitLab 邮箱">
             <Input />
           </Form.Item>
-          <Form.Item name="password" label={editing?.id ? "重置密码（留空不改）" : "初始密码"}>
-            <Input.Password />
-          </Form.Item>
+          {/* 非管理员改自己不能重置密码：走顶栏「个人设置」里的修改密码（校验旧密码） */}
+          {isAdmin() && (
+            <Form.Item name="password" label={editing?.id ? "重置密码（留空不改）" : "初始密码"}>
+              <Input.Password />
+            </Form.Item>
+          )}
           <Form.Item name="is_admin" label="管理员" valuePropName="checked">
             <Switch disabled={!isAdmin()} />
           </Form.Item>
