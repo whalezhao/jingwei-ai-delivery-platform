@@ -1,0 +1,22 @@
+# 环境与密钥（.env.example 除外）
+.env
+*.env
+!.env.example
+
+# 本地数据与运行时
+*.db
+*.db-journal
+backups/
+data/
+.DS_Store
+
+# Python
+__pycache__/
+.venv/
+*.pyc
+.pytest_cache/
+
+# Node
+node_modules/
+dist/
+*.tsbuildinfo

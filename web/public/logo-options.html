@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Vega 标识 · 第三批（字体驱动）</title>
+    <style>
+      body { font-family: -apple-system, "PingFang SC", sans-serif; background: #f5f5f5; margin: 0; padding: 36px; color: rgba(0,0,0,.88); }
+      h1 { font-size: 20px; }
+      .hint { font-size: 13px; color: rgba(0,0,0,.45); margin: 4px 0 24px; line-height: 1.7; }
+      .row { display: flex; gap: 24px; flex-wrap: wrap; }
+      .card { background: #fff; border: 1px solid rgba(0,0,0,.06); border-radius: 14px; padding: 24px 28px; width: 340px; }
+      .card h2 { font-size: 16px; margin: 0 0 4px; }
+      .card p { font-size: 12px; color: rgba(0,0,0,.45); margin: 0 0 18px; line-height: 1.7; min-height: 58px; }
+      .spec { display: flex; align-items: center; gap: 22px; flex-wrap: wrap; }
+      .tile { width: 96px; height: 96px; border-radius: 24px; display: grid; place-items: center; flex: none; }
+      .tile16 { width: 16px; height: 16px; border-radius: 4.5px; display: grid; place-items: center; flex: none; }
+      .wm { font-size: 30px; letter-spacing: -0.01em; }
+      .cap { font-size: 11px; color: rgba(0,0,0,.35); margin-top: 6px; }
+      .dark-strip { margin-top: 16px; background: #0b1020; border-radius: 10px; padding: 10px 14px; display: flex; align-items: center; gap: 10px; }
+      .dark-strip .name { color: #fff; font-size: 15px; }
+      .dark-strip .nav { color: rgba(255,255,255,.4); font-size: 12px; margin-left: 8px; }
+    </style>
+  </head>
+  <body>
+    <h1>Vega 标识 · 第三批：字体驱动（已选定 J · 字标 + 句点）</h1>
+    <p class="hint">前两批手绘多边形达不到专业字形的精度，这一批直接用系统里真实的高品质字库做标识——字形本身是字体设计师打磨过的，精度和气质是手搓 SVG 给不了的。六个方向全部零手绘：<b>H</b> 迪多体高对比衬线（时尚刊物质感）、<b>I</b> 包豪斯几何无衬线、<b>J</b> 纯字标加句点（宣言式）、<b>K</b> 斜体衬线（织梭的动势）、<b>L</b> 等宽 V 加光标（AI 正在替你干活）、<b>M</b> 人类衬线 Optima（雕刻感）。</p>
+    <div class="row">
+      <div class="card">
+        <h2>H · Didone V（当前应用）</h2>
+        <p>Didot 高对比衬线：细发丝线 + 粗主干，时尚刊物（Vogue 系）的同款气质。内网工具里出现这种字形，安静但贵。</p>
+        <div class="spec">
+          <div><div class="tile" style="background:#101C3D"><span style="font-family:Didot,'Bodoni 72','Playfair Display',Georgia,serif;font-size:54px;color:#fff">V</span></div><div class="cap">图标 96</div></div>
+          <div><div class="wm" style="font-family:Didot,'Bodoni 72',Georgia,serif">Vega</div><div class="cap">字标</div></div>
+          <div><div class="tile16" style="background:#101C3D"><span style="font-family:Didot,Georgia,serif;font-size:11px;color:#fff">V</span></div><div class="cap">16</div></div>
+        </div>
+        <div class="dark-strip"><div class="tile16" style="background:#fff"><span style="font-family:Didot,Georgia,serif;font-size:11px;color:#101C3D">V</span></div><span class="name" style="font-family:Didot,Georgia,serif">Vega</span><span class="nav">需求池 / 开发任务 / MR 审核</span></div>
+      </div>
+      <div class="card">
+        <h2>I · 几何 V（Futura）</h2>
+        <p>包豪斯几何无衬线，圆规直尺画出来的字母，工程感和现代主义的自信。蓝底白字是最经典的现代主义配色。</p>
+        <div class="spec">
+          <div><div class="tile" style="background:#2E5BFF"><span style="font-family:Futura,'Avenir Next','Century Gothic',sans-serif;font-weight:700;font-size:52px;color:#fff">V</span></div><div class="cap">图标 96</div></div>
+          <div><div class="wm" style="font-family:Futura,'Avenir Next',sans-serif;font-weight:600;letter-spacing:.04em">VEGA</div><div class="cap">字标（全大写加宽字距）</div></div>
+          <div><div class="tile16" style="background:#2E5BFF"><span style="font-family:Futura,sans-serif;font-weight:700;font-size:11px;color:#fff">V</span></div><div class="cap">16</div></div>
+        </div>
+        <div class="dark-strip"><div class="tile16" style="background:#2E5BFF"><span style="font-family:Futura,sans-serif;font-weight:700;font-size:11px;color:#fff">V</span></div><span class="name" style="font-family:Futura,'Avenir Next',sans-serif;letter-spacing:.06em">VEGA</span><span class="nav">需求池 / 开发任务 / MR 审核</span></div>
+      </div>
+      <div class="card">
+        <h2>J · 字标 + 句点 Vega.（已选定）</h2>
+        <p>不要图标，字标即标识——句点是宣言的标点（Ramp.、Linear. 的做法），蓝色句点是全站唯一的强调。最克制，也最像成熟产品。</p>
+        <div class="spec">
+          <div><div class="wm" style="font-family:'Avenir Next','Avenir',sans-serif;font-weight:600;font-size:40px;letter-spacing:-.02em">Vega<span style="color:#2E5BFF">.</span></div><div class="cap">字标 96 等高</div></div>
+          <div><div class="wm" style="font-family:'Avenir Next',sans-serif;font-weight:500;font-size:22px">Vega<span style="color:#2E5BFF">.</span></div><div class="cap">导航尺寸</div></div>
+        </div>
+        <div class="dark-strip"><span class="name" style="font-family:'Avenir Next',sans-serif;font-weight:600">Vega<span style="color:#7C9BFF">.</span></span><span class="nav">需求池 / 开发任务 / MR 审核</span></div>
+      </div>
+      <div class="card">
+        <h2>K · 斜体衬线 Vega</h2>
+        <p>Didot 斜体小写——斜体的动势像织梭掠过（织女的「织」），小写显得亲近。适合走「聪明的助手」人设而非冷冰冰的工具。</p>
+        <div class="spec">
+          <div><div class="wm" style="font-family:Didot,'Bodoni 72',Georgia,serif;font-style:italic;font-size:38px">vega</div><div class="cap">字标</div></div>
+          <div><div class="tile" style="background:#101C3D"><span style="font-family:Didot,Georgia,serif;font-style:italic;font-size:52px;color:#fff">V</span></div><div class="cap">图标 96</div></div>
+          <div><div class="tile16" style="background:#101C3D"><span style="font-family:Didot,Georgia,serif;font-style:italic;font-size:11px;color:#fff">V</span></div><div class="cap">16</div></div>
+        </div>
+        <div class="dark-strip"><span class="name" style="font-family:Didot,Georgia,serif;font-style:italic">vega</span><span class="nav">需求池 / 开发任务 / MR 审核</span></div>
+      </div>
+      <div class="card">
+        <h2>L · V + 光标</h2>
+        <p>等宽字体的 V 后面跟一个实心光标块——「AI 正在替你输入」。开发者一眼就懂的语言，终端原生气质，故事最贴平台。</p>
+        <div class="spec">
+          <div><div style="font-family:Menlo,'SF Mono',monospace;font-size:46px;color:#101C3D">V<span style="display:inline-block;width:22px;height:44px;background:#2E5BFF;margin-left:6px;border-radius:2px"></span></div><div class="cap">标识</div></div>
+          <div><div class="wm" style="font-family:Menlo,monospace;font-size:24px">Vega<span style="display:inline-block;width:11px;height:22px;background:#2E5BFF;margin-left:4px;border-radius:1px"></span></div><div class="cap">字标</div></div>
+          <div><div class="tile16" style="background:#101C3D"><span style="font-family:Menlo,monospace;font-size:9px;color:#fff">V</span></div><div class="cap">16</div></div>
+        </div>
+        <div class="dark-strip"><span class="name" style="font-family:Menlo,monospace">V<span style="display:inline-block;width:8px;height:15px;background:#2E5BFF;margin-left:3px;border-radius:1px"></span></span><span class="nav">需求池 / 开发任务 / MR 审核</span></div>
+      </div>
+      <div class="card">
+        <h2>M · Optima 雕刻 V</h2>
+        <p>Optima 是「带衬线笔触的无衬线」——笔画两端有微妙的喇叭口，像石刻铭文。既现代又有手工温度，几乎没人用，辨识度高。</p>
+        <div class="spec">
+          <div><div class="tile" style="background:#101C3D"><span style="font-family:Optima,'Optima Medium',Candara,sans-serif;font-weight:500;font-size:52px;color:#fff">V</span></div><div class="cap">图标 96</div></div>
+          <div><div class="wm" style="font-family:Optima,Candara,sans-serif;font-weight:500">Vega</div><div class="cap">字标</div></div>
+          <div><div class="tile16" style="background:#101C3D"><span style="font-family:Optima,sans-serif;font-size:11px;color:#fff">V</span></div><div class="cap">16</div></div>
+        </div>
+        <div class="dark-strip"><div class="tile16" style="background:#fff"><span style="font-family:Optima,sans-serif;font-size:11px;color:#101C3D">V</span></div><span class="name" style="font-family:Optima,sans-serif">Vega</span><span class="nav">需求池 / 开发任务 / MR 审核</span></div>
+      </div>
+    </div>
+  </body>
+</html>

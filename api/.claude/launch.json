@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "vega-web",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--dir", "/Users/han/vega/web", "dev"],
+      "port": 5173
+    }
+  ]
+}

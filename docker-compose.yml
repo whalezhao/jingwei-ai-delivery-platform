@@ -1,0 +1,103 @@
+name: vega
+
+x-logging: &logging
+  logging:
+    driver: json-file
+    options:
+      max-size: "20m"
+      max-file: "5"
+
+services:
+  # 可选：只在 --profile bundled-db 时启动。复用现成 PG 时不需要它，
+  # 但 profiles 里的变量仍会被 compose 解析，所以密码不能写成 :?（空密码会让 PG 自己拒绝启动）。
+  db:
+    profiles: ["bundled-db"]
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: vega
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+      POSTGRES_DB: vega
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vega -d vega"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    <<: *logging
+
+  api:
+    build:
+      context: ./api
+      target: api
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # 必填：外部 PG（如 内网主机 上现成的实例）或内置 db（--profile bundled-db）都填这里；
+      # 沿用现成 SQLite 文件也行：sqlite+aiosqlite:////data/vega.db
+      VEGA_DATABASE_URL: ${VEGA_DATABASE_URL:?请在 .env 里设置 VEGA_DATABASE_URL}
+    volumes:
+      - ./data:/data
+    depends_on:
+      db:
+        condition: service_healthy
+        required: false  # 复用外部 PG 时 db 不在本次启动范围
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/openapi.json', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    <<: *logging
+
+  web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+      args:
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org}
+    restart: unless-stopped
+    ports:
+      - "8180:80"
+    depends_on:
+      - api
+    <<: *logging
+
+  # 可选：runner 节点。界面里创建节点拿 token 后，填进 .env 再
+  #   docker compose --profile runner up -d --build runner
+  runner:
+    profiles: ["runner"]
+    build:
+      context: ./api
+      target: runner
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org}
+        # eclipse 直连很慢（国内实测几十 KB/s），可用局域网缓存地址覆盖
+        JDTLS_URL: ${JDTLS_URL:-https://download.eclipse.org/jdtls/snapshots/jdt-language-server-latest.tar.gz}
+        # apt 默认官方源（国内实测 14 KB/s），传到镜像站
+        APT_MIRROR: ${APT_MIRROR:-deb.debian.org}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      VEGA_API_URL: http://api:8000
+      VEGA_RUNNER_TOKEN: ${VEGA_RUNNER_TOKEN:-}
+      VEGA_RUNNER_NAME: ${VEGA_RUNNER_NAME:-vega-runner-1}
+    volumes:
+      # claude 会话文件（plan 粘性会话）与工作区都要持久化，容器重建不丢
+      - claude-config:/root/.claude-vega
+      - runner-home:/root/vega-runner
+      - runner-workspace:/root/vega-workspace
+    depends_on:
+      api:
+        condition: service_healthy
+    <<: *logging
+
+volumes:
+  pgdata:
+  claude-config:
+  runner-home:
+  runner-workspace:
