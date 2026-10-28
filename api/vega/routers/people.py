@@ -82,8 +82,13 @@ async def update_person(
     if not me.is_admin and me.id != person_id:
         raise HTTPException(403, "只能改自己")
     if not me.is_admin:
-        if body.is_admin is not None or body.octo_uid is not None:
+        # 自己能改：姓名/邮箱/头像/LLM 配置/am key。登录名是身份匹配与登录依据、
+        # octo 绑定决定通知去向、管理员标记是权限，都只能管理员动；
+        # 改密码必须走 /api/auth/password（校验旧密码），这里不带旧密码就能改会有绕过。
+        if any(getattr(body, k) is not None for k in ("is_admin", "octo_uid", "gitlab_username")):
             raise HTTPException(403, "无权修改该字段")
+        if body.password is not None:
+            raise HTTPException(403, "修改密码请走修改密码接口（需校验旧密码）")
     _apply(body, person)
     await db.commit()
     return person_to_out(person)

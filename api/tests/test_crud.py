@@ -264,3 +264,33 @@ async def test_octo_global_bot_token_roundtrip(admin_client):
     r = await admin_client.get("/api/integrations/octo-groups")
     assert r.status_code == 200, r.text
     assert r.json()["items"] == [] and "token" in (r.json()["error"] or "")
+
+
+async def test_self_service_edit_scope(admin_client, client, db, seeded):
+    """普通用户能改自己的资料/LLM/头像，但登录名、octo 绑定、管理员标记、直接改密码都要拒。"""
+    r = await admin_client.post(
+        "/api/people", json={"name": "自改", "gitlab_username": "selfedit", "password": "pw1"}
+    )
+    me = r.json()
+    token, _ = await login_as(client, db, "selfedit", "pw1")
+    client.headers["Authorization"] = f"Bearer {token}"
+
+    ok = await client.put(
+        f"/api/people/{me['id']}",
+        json={"name": "自改2", "gitlab_email": "me@test.cn", "avatar": "a5", "llm_base_url": "http://x/v1"},
+    )
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["name"] == "自改2" and ok.json()["avatar"] == "a5"
+
+    for bad in ({"gitlab_username": "hijack"}, {"octo_uid": "uid-x"}, {"is_admin": True}, {"password": "pw2"}):
+        r = await client.put(f"/api/people/{me['id']}", json=bad)
+        assert r.status_code == 403, (bad, r.text)
+
+    # 改别人一律 403
+    other = await admin_client.post("/api/people", json={"name": "别人", "gitlab_username": "other1"})
+    r = await client.put(f"/api/people/{other.json()['id']}", json={"name": "x"})
+    assert r.status_code == 403
+
+    # 密码走专用接口（校验旧密码）
+    r = await client.post("/api/auth/password", json={"old": "pw1", "new": "pw2new"})
+    assert r.status_code == 200, r.text

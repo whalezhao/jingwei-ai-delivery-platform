@@ -11,9 +11,9 @@ import {
   TeamOutlined,
 } from "@ant-design/icons";
 import { ProLayout } from "@ant-design/pro-components";
-import { Dropdown, Form, Input, Modal, Select, message } from "antd";
+import { Dropdown, Select } from "antd";
 import Logo from "./components/Logo";
-import AvatarPicker from "./components/AvatarPicker";
+import ProfileModal, { Me } from "./components/ProfileModal";
 import { avatarSrc } from "./components/PersonAvatar";
 import { GroupProvider, useGroup } from "./group";
 import { AUTH_EVENT, api, goLogin, pingAuth, token } from "./api";
@@ -44,12 +44,10 @@ const MENU = [
 function Shell() {
   const loc = useLocation();
   const items = useMemo(() => MENU.map((m) => ({ path: m.path, name: m.name, icon: m.icon })), []);
-  const [pwOpen, setPwOpen] = useState(false);
-  const [pwForm] = Form.useForm();
   const { groups, groupId, setGroupId } = useGroup();
   const [myAvatar, setMyAvatar] = useState<string | null>(null);
-  const [avatarOpen, setAvatarOpen] = useState(false);
-  const [avatarPick, setAvatarPick] = useState("");
+  const [meRecord, setMeRecord] = useState<Me | null>(null);
+  const [profileOpen, setProfileOpen] = useState(false);
 
   // 顶栏头像跟随「我的」人员记录；导航或人员页改到自己时刷新（无需重新登录）
   useEffect(() => {
@@ -58,43 +56,13 @@ function Shell() {
         .then((ps) => {
           const me = ps.find((p) => String(p.id) === localStorage.getItem("vega_me"));
           setMyAvatar(me?.avatar || null);
+          setMeRecord((me as Me) || null);
         })
         .catch(() => {});
     refreshMe();
     window.addEventListener("vega-me-updated", refreshMe);
     return () => window.removeEventListener("vega-me-updated", refreshMe);
   }, [loc.pathname]);
-
-  const saveAvatar = async () => {
-    const me = localStorage.getItem("vega_me");
-    if (!me) {
-      message.error("当前账号未绑定人员记录");
-      return;
-    }
-    try {
-      await api(`/api/people/${me}`, { method: "PUT", body: JSON.stringify({ avatar: avatarPick }) });
-      setMyAvatar(avatarPick || null);
-      setAvatarOpen(false);
-      message.success("头像已更新");
-    } catch (e: any) {
-      message.error(e.message);
-    }
-  };
-
-  const changePw = async (v: any) => {
-    if (v.new !== v.confirm) {
-      message.error("两次输入的新密码不一致");
-      return;
-    }
-    try {
-      await api("/api/auth/password", { method: "POST", body: JSON.stringify({ old: v.old, new: v.new }) });
-      message.success("密码已修改");
-      setPwOpen(false);
-      pwForm.resetFields();
-    } catch (e: any) {
-      message.error(e.message);
-    }
-  };
 
   return (
     <ProLayout
@@ -144,19 +112,13 @@ function Shell() {
           <Dropdown
             menu={{
               items: [
-                { key: "avatar", label: "修改头像" },
-                { key: "password", label: "修改密码" },
+                { key: "profile", label: "个人设置" },
                 { type: "divider" },
                 { key: "logout", label: "退出登录" },
               ],
               onClick: ({ key }) => {
-                if (key === "avatar") {
-                  setAvatarPick(myAvatar || "");
-                  setAvatarOpen(true);
-                  return;
-                }
-                if (key === "password") {
-                  setPwOpen(true);
+                if (key === "profile") {
+                  setProfileOpen(true);
                   return;
                 }
                 if (key === "logout") {
@@ -174,39 +136,7 @@ function Shell() {
         ),
       }}
     >
-      <Modal
-        open={pwOpen}
-        title="修改密码"
-        onCancel={() => setPwOpen(false)}
-        onOk={() => pwForm.submit()}
-        destroyOnHidden
-      >
-        <Form form={pwForm} layout="vertical" onFinish={changePw}>
-          <Form.Item name="old" label="旧密码" rules={[{ required: true, message: "请输入旧密码" }]}>
-            <Input.Password />
-          </Form.Item>
-          <Form.Item
-            name="new"
-            label="新密码"
-            rules={[{ required: true, message: "至少 6 位" }, { min: 6, message: "至少 6 位" }]}
-          >
-            <Input.Password />
-          </Form.Item>
-          <Form.Item name="confirm" label="确认新密码" rules={[{ required: true, message: "再输一次新密码" }]}>
-            <Input.Password />
-          </Form.Item>
-        </Form>
-      </Modal>
-      <Modal
-        open={avatarOpen}
-        title="修改头像"
-        onCancel={() => setAvatarOpen(false)}
-        onOk={saveAvatar}
-        okText="保存"
-        destroyOnHidden
-      >
-        <AvatarPicker value={avatarPick} onChange={setAvatarPick} />
-      </Modal>
+      <ProfileModal open={profileOpen} me={meRecord} onClose={() => setProfileOpen(false)} />
       <Routes>
         <Route path="/" element={<Navigate to="/workbench" replace />} />
         <Route path="*" element={<Navigate to="/workbench" replace />} />
