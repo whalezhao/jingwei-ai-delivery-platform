@@ -302,3 +302,58 @@ async def test_self_service_edit_scope(admin_client, client, db, seeded):
     # 密码走专用接口（校验旧密码）
     r = await client.post("/api/auth/password", json={"old": "pw1", "new": "pw2new"})
     assert r.status_code == 200, r.text
+
+
+async def test_delete_requirement(client, db, seeded):
+    """删除需求：连带清掉文档/方案/会话/事件/未开发任务；已进 MR 流程的拒绝删；删后取号不回退。"""
+    from vega.models import DevTask, PlanEvent, PlanMessage, PlanVersion, Requirement, RequirementDoc
+    from conftest import login_as
+
+    token, person = await login_as(client, db, seeded["person"].gitlab_username)
+    client.headers["Authorization"] = f"Bearer {token}"
+    pid = seeded["project"].id
+
+    # 别人创建的需求，非认领人不能删
+    r = await client.post("/api/requirements", json={"project_id": pid, "title": "待删"})
+    req = r.json()
+    other = await client.post("/api/requirements", json={"project_id": pid, "title": "别人的"})
+    # 造全套子表数据
+    db.add(RequirementDoc(requirement_id=req["id"], filename="需求.md", content=b"# x"))
+    db.add(PlanVersion(requirement_id=req["id"], content="# 方案"))
+    db.add(PlanMessage(requirement_id=req["id"], role="user", content="hi"))
+    db.add(DevTask(requirement_id=req["id"], code=f"TASK-{req['code']}-1", creator_id=person.id))
+    await db.commit()
+
+    r = await client.delete(f"/api/requirements/{req['id']}")
+    assert r.status_code == 200, r.text
+
+    from sqlalchemy import func, select
+
+    for model in (RequirementDoc, PlanVersion, PlanMessage, DevTask):
+        left = await db.scalar(
+            select(func.count()).select_from(model).where(model.requirement_id == req["id"])
+        )
+        assert left == 0, model.__name__
+    assert await db.get(Requirement, req["id"]) is None
+
+    # 取号不回退：删掉中间一个后新建，不能撞上仍在库里的旧号（code unique）。
+    # 此刻库里只剩 other（后一号）；count+1 会算出与它相同的号直接冲突。
+    fresh = await client.post("/api/requirements", json={"project_id": pid, "title": "删后新建"})
+    assert fresh.status_code == 200, fresh.text
+    assert int(fresh.json()["code"].rsplit("-", 1)[1]) > int(other.json()["code"].rsplit("-", 1)[1])
+
+    # 任务已有 MR → 拒绝
+    stuck = (await client.post("/api/requirements", json={"project_id": pid, "title": "开发中"})).json()
+    db.add(
+        DevTask(
+            requirement_id=stuck["id"],
+            code=f"TASK-{stuck['code']}-1",
+            creator_id=person.id,
+            status="reviewing",
+            mr_iid=77,
+        )
+    )
+    await db.commit()
+    r = await client.delete(f"/api/requirements/{stuck['id']}")
+    assert r.status_code == 400 and "不能删除" in r.json()["detail"]
+    assert await db.get(Requirement, stuck["id"]) is not None

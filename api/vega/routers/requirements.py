@@ -19,6 +19,7 @@ from ..llm import am_user_key, build_claude_env, resolve_llm
 from ..models import (
     DevGroup,
     DevTask,
+    DevTaskEvent,
     GroupMember,
     Person,
     PlanEvent,
@@ -194,6 +195,52 @@ async def update_requirement_tags(
     claimant = await db.get(Person, req.claimant_id) if req.claimant_id else None
     project = await db.get(Project, req.project_id)
     return req_to_out(req, claimant, project)
+
+
+@router.delete("/{req_id}")
+async def delete_requirement(
+    req_id: int, db: AsyncSession = Depends(get_db), me: Person = Depends(current_person)
+) -> dict:
+    """删除需求及其全部过程数据（文档、方案、会话、事件、任务）。
+
+    只允许删还没进开发流程的：任务一旦推到 GitLab 就带着 MR 关联，删了需求会让
+    webhook 按 (project, mr_iid) 找不到 DevTask 而静默 return，那条 MR 永远毕不了业。
+    """
+    req = await _get_req(db, req_id)
+    if req.claimant_id not in (None, me.id) and not me.is_admin:
+        raise HTTPException(403, "只有认领人或管理员可删除需求")
+
+    tasks = (await db.scalars(select(DevTask).where(DevTask.requirement_id == req.id))).all()
+    if any(t.mr_iid or t.status not in ("pending", "failed") for t in tasks):
+        raise HTTPException(400, "需求下已有任务进入开发/评审流程，不能删除")
+
+    running = await db.scalar(
+        select(RunnerTask.id)
+        .where(
+            RunnerTask.requirement_id == req.id,
+            RunnerTask.status.in_(("queued", "claimed", "running")),
+        )
+        .limit(1)
+    )
+    if running:
+        raise HTTPException(400, "本轮还在生成，请先停止再删除")
+
+    # 子表没有 ondelete cascade，且 dev_task.requirement_id 是 NOT NULL，逐个显式删更可控
+    task_ids = [t.id for t in tasks]
+    msg_ids = list(await db.scalars(select(PlanMessage.id).where(PlanMessage.requirement_id == req.id)))
+    if task_ids:
+        await db.execute(delete(DevTaskEvent).where(DevTaskEvent.dev_task_id.in_(task_ids)))
+        await db.execute(delete(DevTask).where(DevTask.id.in_(task_ids)))
+    # plan_event 同时挂 requirement 和 runner_task：按任一维度删都会漏，先按需求删干净
+    await db.execute(delete(PlanEvent).where(PlanEvent.requirement_id == req.id))
+    if msg_ids:
+        await db.execute(delete(PlanMessage).where(PlanMessage.id.in_(msg_ids)))
+    await db.execute(delete(PlanVersion).where(PlanVersion.requirement_id == req.id))
+    await db.execute(delete(RequirementDoc).where(RequirementDoc.requirement_id == req.id))
+    await db.execute(delete(RunnerTask).where(RunnerTask.requirement_id == req.id))
+    await db.delete(req)
+    await db.commit()
+    return {"ok": True, "code": req.code}
 
 
 @router.post("/{req_id}/docs")

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Button, Divider, Empty, Form, Input, Modal, Select, Space, Tag, Typography, message } from "antd";
+import { Button, Divider, Empty, Form, Input, Modal, Popconfirm, Select, Space, Tag, Typography, message } from "antd";
 import ResizableTable from "../ResizableTable";
 import { CheckCircleFilled, CheckCircleOutlined, PlusOutlined } from "@ant-design/icons";
 import { api, isAdmin } from "../api";
@@ -100,6 +100,16 @@ export default function Requirements() {
         body: JSON.stringify({ tags }),
       });
       setRows((prev) => prev.map((x) => (x.id === r.id ? updated : x)));
+    } catch (e: any) {
+      message.error(e.message);
+    }
+  };
+
+  const remove = async (r: Req) => {
+    try {
+      await api(`/api/requirements/${r.id}`, { method: "DELETE" });
+      message.success(`已删除 ${r.code}`);
+      setRows((prev) => prev.filter((x) => x.id !== r.id));
     } catch (e: any) {
       message.error(e.message);
     }
@@ -300,6 +310,18 @@ export default function Requirements() {
                     >
                       编辑
                     </a>
+                  )}
+                  {(isAdmin() || r.claimant_id === Number(localStorage.getItem("vega_me")) || r.claimant_id == null) && (
+                    <Popconfirm
+                      title="删除该需求？"
+                      description="需求文档、方案、对话记录和未开发的任务会一起删除，不可恢复。"
+                      okButtonProps={{ danger: true }}
+                      onConfirm={() => remove(r)}
+                    >
+                      <a className="danger-link" onClick={(e) => e.stopPropagation()}>
+                        删除
+                      </a>
+                    </Popconfirm>
                   )}
                 </Space>
               ),
