@@ -19,4 +19,5 @@ def person_to_out(p: Person) -> dict:
         "llm_effort": p.llm_effort,
         "has_llm_key": bool(p.llm_api_key_enc),
         "has_am_key": bool(p.am_user_key_enc),
+        "roles": p.roles or [],
     }

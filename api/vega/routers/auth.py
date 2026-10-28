@@ -14,7 +14,7 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 @router.post("/login", response_model=TokenOut)
 async def login(body: LoginIn, db: AsyncSession = Depends(get_db)) -> TokenOut:
     person, token = await do_login(db, body.username, body.password)
-    return TokenOut(token=token, person_id=person.id, is_admin=person.is_admin)
+    return TokenOut(token=token, person_id=person.id, is_admin=person.is_admin, roles=person.roles or [])
 
 
 @router.post("/password")

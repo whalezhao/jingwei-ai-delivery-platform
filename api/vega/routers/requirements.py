@@ -64,7 +64,12 @@ def _join_tags(tags: list[str]) -> str | None:
     return ",".join(clean[:10]) or None
 
 
-def req_to_out(r: Requirement, claimant: Person | None = None, project: Project | None = None) -> dict:
+def req_to_out(
+    r: Requirement,
+    claimant: Person | None = None,
+    project: Project | None = None,
+    proposer: Person | None = None,
+) -> dict:
     return {
         "id": r.id,
         "project_id": r.project_id,
@@ -78,6 +83,8 @@ def req_to_out(r: Requirement, claimant: Person | None = None, project: Project 
         "tags": _split_tags(r.tags),
         "claimant_id": r.claimant_id,
         "claimant_name": claimant.name if claimant else None,
+        "proposer_id": r.proposer_id,
+        "proposer_name": proposer.name if proposer else None,
         "plan_md": r.plan_md,
         "created_at": str(r.created_at) if r.created_at else None,
     }
@@ -87,6 +94,35 @@ async def _get_req(db: AsyncSession, req_id: int) -> Requirement:
     req = await db.get(Requirement, req_id)
     if not req:
         raise HTTPException(404, "需求不存在")
+    return req
+
+
+def _can_claim(req: Requirement, me: Person, has_final_doc: bool) -> bool:
+    """当前登录人此刻能不能认领：池中 + 该阶段对应的角色（管理员不设限）。"""
+    if req.status != "pool":
+        return False
+    if me.is_admin:
+        return True
+    return ("dev" if has_final_doc else "product") in (me.roles or [])
+
+
+def _can_open(req: Requirement, me: Person) -> bool:
+    """详情可见性：被认领之后只有认领人自己能打开。
+
+    未认领的不锁（池中谁都能看才谈得上认领）；但已由产品定稿移交、等待开发接手时
+    只对开发开放——产品此时已交出认领权，不应该还能翻详情。
+    """
+    if me.is_admin or req.claimant_id == me.id:
+        return True
+    if req.claimant_id is None:
+        return req.proposer_id is None or "dev" in (me.roles or [])
+    return False
+
+
+async def _get_req_open(db: AsyncSession, req_id: int, me: Person) -> Requirement:
+    req = await _get_req(db, req_id)
+    if not _can_open(req, me):
+        raise HTTPException(403, "需求已被他人认领，无权查看详情")
     return req
 
 
@@ -112,10 +148,24 @@ async def list_requirements(
             await db.scalars(select(Project).where(Project.id.in_([r.project_id for r in rows])))
         ).all()
     }
+    # 一次取全量定稿文档的需求 id，避免 N 次查
+    finalized = set(
+        await db.scalars(
+            select(RequirementDoc.requirement_id).where(RequirementDoc.is_final.is_(True))
+        )
+    )
     out = []
     for r in rows:
         claimant = await db.get(Person, r.claimant_id) if r.claimant_id else None
-        out.append(req_to_out(r, claimant, projects.get(r.project_id)))
+        proposer = await db.get(Person, r.proposer_id) if r.proposer_id else None
+        # 列表照旧全量可见（只读摘要）；can_open / can_claim 告诉前端能不能点进详情、能不能认领
+        out.append(
+            {
+                **req_to_out(r, claimant, projects.get(r.project_id), proposer),
+                "can_open": _can_open(r, me),
+                "can_claim": _can_claim(r, me, r.id in finalized),
+            }
+        )
     return out
 
 
@@ -123,10 +173,15 @@ async def list_requirements(
 async def get_requirement(
     req_id: int, db: AsyncSession = Depends(get_db), me: Person = Depends(current_person)
 ) -> RequirementOut:
-    req = await _get_req(db, req_id)
+    req = await _get_req_open(db, req_id, me)
     claimant = await db.get(Person, req.claimant_id) if req.claimant_id else None
+    proposer = await db.get(Person, req.proposer_id) if req.proposer_id else None
     project = await db.get(Project, req.project_id)
-    return req_to_out(req, claimant, project)
+    return {
+        **req_to_out(req, claimant, project, proposer),
+        "can_open": True,
+        "can_claim": _can_claim(req, me, await _has_final_doc(db, req.id)),
+    }
 
 
 @router.post("", response_model=RequirementOut)
@@ -146,7 +201,8 @@ async def create_requirement(
     db.add(req)
     await db.commit()
     await db.refresh(req)
-    return req_to_out(req)
+    # 新建的需求必在池中、必无定稿文档：能不能认领只看角色
+    return {**req_to_out(req), "can_claim": _can_claim(req, me, False)}
 
 
 @router.put("/{req_id}", response_model=RequirementOut)
@@ -159,7 +215,8 @@ async def update_requirement(
     req = await _get_req(db, req_id)
     if req.status in ("confirmed", "archived", "online"):
         raise HTTPException(400, "需求已定稿，进入开发阶段，不能再修改")
-    if req.claimant_id not in (None, me.id) and not me.is_admin:
+    # 文档已定稿、等开发承接（claimant 已空出）时同样不许改：需求内容已定
+    if req.claimant_id != me.id and (req.claimant_id is not None or req.proposer_id is not None) and not me.is_admin:
         raise HTTPException(403, "只有认领人或管理员可修改需求")
 
     data = body.model_dump(exclude_unset=True)
@@ -187,7 +244,7 @@ async def update_requirement_tags(
 ) -> RequirementOut:
     """迭代版本标签：已定稿/已上线的需求也能改（发布后仍要按版本归档）。"""
     req = await _get_req(db, req_id)
-    if req.claimant_id not in (None, me.id) and not me.is_admin:
+    if req.claimant_id != me.id and (req.claimant_id is not None or req.proposer_id is not None) and not me.is_admin:
         raise HTTPException(403, "只有认领人或管理员可修改标签")
     req.tags = _join_tags(body.tags)
     await db.commit()
@@ -207,7 +264,7 @@ async def delete_requirement(
     webhook 按 (project, mr_iid) 找不到 DevTask 而静默 return，那条 MR 永远毕不了业。
     """
     req = await _get_req(db, req_id)
-    if req.claimant_id not in (None, me.id) and not me.is_admin:
+    if req.claimant_id != me.id and (req.claimant_id is not None or req.proposer_id is not None) and not me.is_admin:
         raise HTTPException(403, "只有认领人或管理员可删除需求")
 
     tasks = (await db.scalars(select(DevTask).where(DevTask.requirement_id == req.id))).all()
@@ -251,6 +308,10 @@ async def upload_doc(
     me: Person = Depends(current_person),
 ) -> dict:
     req = await _get_req(db, req_id)
+    # 池中没人认领过的需求允许直接上传（录需求的一种方式）；已被认领或已由产品定稿
+    # 移交出去之后，只能认领人自己传——否则别人可以往别人手里的需求塞文档
+    if req.claimant_id != me.id and (req.claimant_id is not None or req.proposer_id is not None) and not me.is_admin:
+        raise HTTPException(403, "只有认领人可上传需求文档")
     name = (file.filename or "doc").replace("\\", "/").rsplit("/", 1)[-1]
     if not name.endswith((".md", ".txt", ".markdown", ".docx")):
         raise HTTPException(400, "仅支持 .md / .txt / .docx")
@@ -264,6 +325,10 @@ async def upload_doc(
             requirement_id=req.id, filename=name, content=raw, version=nxt, is_final=first
         )
     )
+    # 第一版即定稿（上传原型就是定稿需求）：同样要把认领权交给开发，
+    # 否则会出现「有定稿文档但认领人仍是产品」的中间态，谁都走不下去
+    if first:
+        await _hand_over_to_dev(db, req)
     await db.commit()
     return {"ok": True, "filename": name, "size": len(raw), "version": nxt, "is_final": first}
 
@@ -275,7 +340,11 @@ async def finalize_doc(
     db: AsyncSession = Depends(get_db),
     me: Person = Depends(current_person),
 ) -> dict:
-    """把某个版本定为需求定稿版本（同需求唯一，其余自动取消）。"""
+    """把某个版本定为需求定稿版本（同需求唯一，其余自动取消）。
+
+    定稿 = 产品这一段交卷：认领权交还需求池，等开发重新认领做方案。产品留痕为
+    「需求提出人」，此后不再能打开详情。身兼开发的定稿人不必来回交接，认领权留在自己手上。
+    """
     req = await _get_req(db, req_id)
     if req.claimant_id != me.id and not me.is_admin:
         raise HTTPException(403, "只有认领人可定稿文档")
@@ -287,8 +356,19 @@ async def finalize_doc(
     rows = (await db.scalars(select(RequirementDoc).where(RequirementDoc.requirement_id == req_id))).all()
     for d in rows:
         d.is_final = d.id == doc_id
+    await _hand_over_to_dev(db, req)
     await db.commit()
     return {"ok": True, "final_version": doc.version}
+
+
+async def _hand_over_to_dev(db: AsyncSession, req: Requirement) -> None:
+    """需求文档定稿后把认领权交还需求池（只有开发能再认领）。"""
+    claimant = await db.get(Person, req.claimant_id) if req.claimant_id else None
+    if not claimant or claimant.is_admin or "dev" in (claimant.roles or []):
+        return
+    req.proposer_id = req.proposer_id or claimant.id
+    req.claimant_id = None
+    req.status = "pool"
 
 
 @router.post("/{req_id}/docs/{doc_id}/unfinalize")
@@ -298,10 +378,14 @@ async def unfinalize_doc(
     db: AsyncSession = Depends(get_db),
     me: Person = Depends(current_person),
 ) -> dict:
-    """撤回需求文档定稿：仅在方案未定稿（pool / claimed）时可回退，回到需求讨论。"""
+    """撤回需求文档定稿：仅在方案未定稿（pool / claimed）时可回退，回到需求讨论。
+
+    定稿后认领权已交还池子：提出人自己（或管理员）可以撤回，撤回即把认领权还给他——
+    需求讨论本来就是产品那一段的活。
+    """
     req = await _get_req(db, req_id)
-    if req.claimant_id != me.id and not me.is_admin:
-        raise HTTPException(403, "只有认领人可撤回定稿")
+    if me.id not in (req.claimant_id, req.proposer_id) and not me.is_admin:
+        raise HTTPException(403, "只有认领人或提出人可撤回定稿")
     if req.status not in ("pool", "claimed"):
         raise HTTPException(400, "方案已定稿，需求文档不能撤回")
     doc = await db.get(RequirementDoc, doc_id)
@@ -310,6 +394,8 @@ async def unfinalize_doc(
     rows = (await db.scalars(select(RequirementDoc).where(RequirementDoc.requirement_id == req_id))).all()
     for d in rows:
         d.is_final = False
+    if req.proposer_id:
+        req.claimant_id, req.proposer_id, req.status = req.proposer_id, None, "claimed"
     await db.commit()
     return {"ok": True}
 
@@ -377,6 +463,7 @@ async def download_doc(
     me: Person = Depends(current_person),
 ) -> Response:
     """UI 下载/预览原始字节（docx 预览靠它在前端转 html）。"""
+    await _get_req_open(db, req_id, me)
     doc = await db.get(RequirementDoc, doc_id)
     if not doc or doc.requirement_id != req_id:
         raise HTTPException(404, "文档不存在")
@@ -393,6 +480,7 @@ async def download_doc(
 async def list_docs(
     req_id: int, db: AsyncSession = Depends(get_db), me: Person = Depends(current_person)
 ) -> list[dict]:
+    await _get_req_open(db, req_id, me)
     rows = (
         await db.scalars(
             select(RequirementDoc).where(RequirementDoc.requirement_id == req_id).order_by(RequirementDoc.id)
@@ -414,6 +502,7 @@ async def list_docs(
 async def get_doc(
     req_id: int, doc_id: int, db: AsyncSession = Depends(get_db), me: Person = Depends(current_person)
 ) -> dict:
+    await _get_req_open(db, req_id, me)
     doc = await db.get(RequirementDoc, doc_id)
     if not doc or doc.requirement_id != req_id:
         raise HTTPException(404, "文档不存在")
@@ -430,7 +519,7 @@ async def list_plan_versions(
     req_id: int, db: AsyncSession = Depends(get_db), me: Person = Depends(current_person)
 ) -> list[dict]:
     """方案版本史：人在对话里点「采用此方案」才成版；finalize 标记定稿。"""
-    await _get_req(db, req_id)
+    await _get_req_open(db, req_id, me)
     rows = (
         await db.scalars(
             select(PlanVersion).where(PlanVersion.requirement_id == req_id).order_by(PlanVersion.id)
@@ -496,6 +585,17 @@ async def claim(
     )
     if not gm and not me.is_admin:
         raise HTTPException(403, "只有该研发组成员可认领")
+
+    # 两段式：需求文档没定稿前是产品的活（写需求），定稿之后交回池子给开发（做方案开发）
+    if not me.is_admin:
+        need, why = (
+            ("dev", "需求已定稿，只能由开发认领")
+            if await _has_final_doc(db, req.id)
+            else ("product", "需求未定稿，只能由产品认领")
+        )
+        if need not in (me.roles or []):
+            raise HTTPException(403, why)
+
     req.claimant_id = me.id
     req.status = "claimed"
     await db.commit()
@@ -840,6 +940,7 @@ async def list_plan_messages(
     db: AsyncSession = Depends(get_db),
     me: Person = Depends(current_person),
 ) -> list[dict]:
+    await _get_req_open(db, req_id, me)
     stmt = select(PlanMessage).where(PlanMessage.requirement_id == req_id)
     if mode:
         stmt = stmt.where(PlanMessage.mode == mode)
@@ -865,6 +966,7 @@ async def list_plan_messages(
 async def plan_stream(
     req_id: int,
     mode: Literal["requirement", "plan"] | None = Query(None),
+    db: AsyncSession = Depends(get_db),
     me: Person = Depends(current_person),
 ) -> StreamingResponse:
     """SSE：先回放历史，再实时推 runner 回传的事件。mode 用于隔离两种讨论的历史与直播。
@@ -872,6 +974,7 @@ async def plan_stream(
     回放用一次性 session，查完即关：SSE 长连接能开几个小时，若整条连接都占着
     数据库连接，多开几个页面就会把连接池耗尽，所有接口一起卡住。
     """
+    await _get_req_open(db, req_id, me)  # 权限在建流前判，否则前端拿到 200 才慢慢发现没数据
 
     async def gen():
         q = bus.subscribe(req_id)

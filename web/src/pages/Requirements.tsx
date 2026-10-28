@@ -20,8 +20,14 @@ interface Req {
   tags: string[];
   claimant_id: number | null;
   claimant_name: string | null;
+  // 需求提出人：产品认领并定稿文档后留痕在此，认领权已交给开发
+  proposer_id: number | null;
+  proposer_name: string | null;
   plan_md: string | null;
   created_at: string | null;
+  // 后端按当前登录人算出的两个开关：能不能认领、能不能打开详情
+  can_claim: boolean;
+  can_open: boolean;
 }
 
 const STATUS: Record<string, [string, string]> = {
@@ -210,7 +216,9 @@ export default function Requirements() {
           dataSource={shown}
           pagination={PAGE}
           rowClassName={() => "row-click"}
-          onRow={(r) => ({ onClick: () => nav(`/reqs/${r.id}`) })}
+          onRow={(r) => ({
+            onClick: () => (r.can_open ? nav(`/reqs/${r.id}`) : message.info("该需求已被他人认领，仅认领人可打开")),
+          })}
           locale={{
             emptyText: (
               <Empty
@@ -231,7 +239,24 @@ export default function Requirements() {
               width: 235,
               render: (v) => <span className="mono">{v}</span>,
             },
-            { title: "标题", dataIndex: "title", ellipsis: true, render: (v, r) => <a onClick={(e) => { e.stopPropagation(); nav(`/reqs/${r.id}`); }}>{v}</a> },
+            {
+              title: "标题",
+              dataIndex: "title",
+              ellipsis: true,
+              render: (v, r) =>
+                r.can_open ? (
+                  <a
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      nav(`/reqs/${r.id}`);
+                    }}
+                  >
+                    {v}
+                  </a>
+                ) : (
+                  <span className="muted">{v}</span>
+                ),
+            },
             {
               title: "项目",
               dataIndex: "project_name",
@@ -261,28 +286,45 @@ export default function Requirements() {
               title: "迭代版本",
               dataIndex: "tags",
               width: 150,
-              render: (v: string[] | undefined, r) => (
-                <div onClick={(e) => e.stopPropagation()}>
-                  <Select
-                    mode="tags"
-                    size="small"
-                    variant="borderless"
-                    style={{ width: "100%" }}
-                    placeholder="加迭代版本标签"
-                    value={v || []}
-                    tokenSeparators={[",", "，"]}
-                    onChange={(tags: string[]) => saveTags(r, tags)}
-                  />
-                </div>
-              ),
+              render: (v: string[] | undefined, r) =>
+                // 无权打开详情的人也不该能改标签（后端同样会拒）
+                !r.can_open ? (
+                  <span className="muted">{(v || []).join("、") || "—"}</span>
+                ) : (
+                  <div onClick={(e) => e.stopPropagation()}>
+                    <Select
+                      mode="tags"
+                      size="small"
+                      variant="borderless"
+                      style={{ width: "100%" }}
+                      placeholder="加迭代版本标签"
+                      value={v || []}
+                      tokenSeparators={[",", "，"]}
+                      onChange={(tags: string[]) => saveTags(r, tags)}
+                    />
+                  </div>
+                ),
             },
-            { title: "认领人", dataIndex: "claimant_name", render: (v) => v || "—", width: 80 },
+            {
+              title: "认领人",
+              dataIndex: "claimant_name",
+              width: 110,
+              render: (v, r) =>
+                v ? (
+                  v
+                ) : r.proposer_name ? (
+                  // 定稿后认领权已交还开发，产品留痕为提出人
+                  <span className="muted">待开发认领 · {r.proposer_name} 提出</span>
+                ) : (
+                  "—"
+                ),
+            },
             {
               title: "操作",
               width: 150,
               render: (_, r) => (
                 <Space size={0} split={<Divider type="vertical" />}>
-                  {r.status === "pool" ? (
+                  {r.can_claim ? (
                     <a
                       onClick={(e) => {
                         e.stopPropagation();
@@ -291,7 +333,7 @@ export default function Requirements() {
                     >
                       认领
                     </a>
-                  ) : (
+                  ) : r.can_open ? (
                     <a
                       onClick={(e) => {
                         e.stopPropagation();
@@ -300,18 +342,21 @@ export default function Requirements() {
                     >
                       {r.status === "claimed" ? "继续讨论" : "查看"}
                     </a>
-                  )}
-                  {r.status !== "confirmed" && r.status !== "archived" && r.status !== "online" && (
-                    <a
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        openEdit(r);
-                      }}
-                    >
-                      编辑
-                    </a>
-                  )}
-                  {(isAdmin() || r.claimant_id === Number(localStorage.getItem("vega_me")) || r.claimant_id == null) && (
+                  ) : null}
+                  {r.can_open &&
+                    r.status !== "confirmed" &&
+                    r.status !== "archived" &&
+                    r.status !== "online" && (
+                      <a
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openEdit(r);
+                        }}
+                      >
+                        编辑
+                      </a>
+                    )}
+                  {(isAdmin() || r.claimant_id === Number(localStorage.getItem("vega_me"))) && (
                     <Popconfirm
                       title="删除该需求？"
                       description="需求文档、方案、对话记录和未开发的任务会一起删除，不可恢复。"

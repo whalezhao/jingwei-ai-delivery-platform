@@ -22,7 +22,20 @@ interface Person {
   llm_effort: string | null;
   has_llm_key: boolean;
   has_am_key: boolean;
+  roles: string[];
 }
+
+// 研发体系角色：product 认领未定稿需求并写需求，dev 定稿后接管做方案与开发；
+// 其余三个目前只用于标识与展示，不参与认领门禁
+const ROLES: { value: string; label: string; color: string }[] = [
+  { value: "pm", label: "项目经理", color: "blue" },
+  { value: "product", label: "产品", color: "cyan" },
+  { value: "tech_lead", label: "技术经理", color: "purple" },
+  { value: "dev", label: "开发", color: "green" },
+  { value: "qa", label: "测试", color: "orange" },
+];
+
+const ROLE_LABEL = Object.fromEntries(ROLES.map((r) => [r.value, r.label]));
 
 const empty: any = {
   name: "",
@@ -30,6 +43,7 @@ const empty: any = {
   gitlab_email: "",
   password: "",
   is_admin: false,
+  roles: [],
   llm_base_url: "",
   llm_api_key: "",
   llm_model: "",
@@ -57,8 +71,8 @@ export default function People() {
     const body: any = { ...v };
     // 空 key 不提交，避免把已有配置清掉
     for (const k of ["password", "llm_api_key", "am_user_key"]) if (!body[k]) delete body[k];
-    // 非管理员：登录名/管理员标记/重置密码都不许改（表单回传的是只读值，不是修改意图）
-    if (!isAdmin()) for (const k of ["is_admin", "gitlab_username", "password"]) delete body[k];
+    // 非管理员：登录名/管理员标记/角色/重置密码都不许改（表单回传的是只读值，不是修改意图）
+    if (!isAdmin()) for (const k of ["is_admin", "gitlab_username", "password", "roles"]) delete body[k];
     try {
       if (editing.id) await api(`/api/people/${editing.id}`, { method: "PUT", body: JSON.stringify(body) });
       else await api("/api/people", { method: "POST", body: JSON.stringify(body) });
@@ -115,6 +129,23 @@ export default function People() {
             {
               title: "LLM",
               render: (_, r) => (r.has_llm_key ? r.llm_model || "默认" : "—"),
+            },
+            {
+              title: "角色",
+              dataIndex: "roles",
+              width: 170,
+              render: (v: string[]) =>
+                (v || []).length ? (
+                  <Space size={4} wrap>
+                    {v.map((x) => (
+                      <Tag key={x} color={ROLES.find((r) => r.value === x)?.color}>
+                        {ROLE_LABEL[x] || x}
+                      </Tag>
+                    ))}
+                  </Space>
+                ) : (
+                  <Tag>未设置</Tag>
+                ),
             },
             { title: "am key", render: (_, r) => (r.has_am_key ? "已配置" : "—") },
             { title: "管理员", dataIndex: "is_admin", render: (v) => (v ? <Tag color="gold">admin</Tag> : null) },
@@ -174,6 +205,19 @@ export default function People() {
           )}
           <Form.Item name="is_admin" label="管理员" valuePropName="checked">
             <Switch disabled={!isAdmin()} />
+          </Form.Item>
+          <Form.Item
+            name="roles"
+            label="角色"
+            tooltip="产品认领未定稿需求并写需求文档；定稿后认领权交给开发。技术经理兼开发请两个都选"
+            extra="可多选。未选角色的账号两个阶段都认领不了"
+          >
+            <Select
+              mode="multiple"
+              disabled={!isAdmin()}
+              placeholder="选择研发体系角色"
+              options={ROLES.map((r) => ({ value: r.value, label: r.label }))}
+            />
           </Form.Item>
           <Form.Item name="llm_base_url" label="LLM Base URL（个人，留空用研发组兜底）">
             <Input placeholder="https://…/v1" />

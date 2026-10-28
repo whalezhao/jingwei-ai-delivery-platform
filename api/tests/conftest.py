@@ -124,8 +124,14 @@ async def seeded(db):
     from vega.crypto import encrypt
     from vega.models import DevGroup, GroupMember, Person, Project, ProjectPM
 
+    # 产品+开发双角色：现有用例都是「一个人从写需求一路走到定稿方案」，
+    # 单角色会卡在两段式交接上；真实环境里兼职开发的技术经理正是这种配置
     person = Person(
-        name="张三", gitlab_username=username, gitlab_email=f"{username}@test.cn", password_hash=None
+        name="张三",
+        gitlab_username=username,
+        gitlab_email=f"{username}@test.cn",
+        password_hash=None,
+        roles=["product", "dev"],
     )
     db.add(person)
     await db.flush()

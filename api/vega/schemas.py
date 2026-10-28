@@ -11,6 +11,10 @@ Effort = Literal["low", "medium", "high", "xhigh", "max"]
 # 前端「未设置」选项传空串；空串与 null 同义（清除，落到下一级兜底），不能当成非法档位
 EffortOpt = Annotated[Effort | None, BeforeValidator(lambda v: v or None)]
 
+# 研发体系角色：product 认领需求池里的需求并定稿需求文档；dev 在定稿后接管做方案与开发。
+# pm / tech_lead / qa 目前只作标识与展示，不参与认领门禁
+Role = Literal["pm", "product", "tech_lead", "dev", "qa"]
+
 
 class LoginIn(BaseModel):
     username: str
@@ -21,6 +25,7 @@ class TokenOut(BaseModel):
     token: str
     person_id: int
     is_admin: bool
+    roles: list[str] = Field(default_factory=list)
 
 
 class PasswordChangeIn(BaseModel):
@@ -41,6 +46,7 @@ class PersonIn(BaseModel):
     llm_model: str | None = None
     llm_effort: EffortOpt = None
     am_user_key: str | None = None
+    roles: list[Role] = Field(default_factory=list)
 
 
 class PersonUpd(BaseModel):
@@ -56,6 +62,7 @@ class PersonUpd(BaseModel):
     llm_effort: EffortOpt = None
     am_user_key: str | None = None
     octo_uid: str | None = None
+    roles: list[Role] | None = None
 
 
 class PersonOut(BaseModel):
@@ -73,6 +80,7 @@ class PersonOut(BaseModel):
     llm_effort: str | None
     has_llm_key: bool = False
     has_am_key: bool = False
+    roles: list[str] = Field(default_factory=list)
 
 
 class GroupIn(BaseModel):
@@ -222,8 +230,15 @@ class RequirementOut(BaseModel):
     tags: list[str] = Field(default_factory=list)
     claimant_id: int | None
     claimant_name: str | None = None
+    # 需求提出人：产品认领并定稿后留痕在此，认领权移交开发
+    proposer_id: int | None = None
+    proposer_name: str | None = None
     plan_md: str | None
     created_at: str | None = None
+    # 当前登录人能否打开详情（被他人认领后为 false，列表里只给只读摘要）
+    can_open: bool = True
+    # 当前登录人此刻能否认领（池中 + 该阶段要求的角色）
+    can_claim: bool = False
 
 
 class PlanMessageIn(BaseModel):

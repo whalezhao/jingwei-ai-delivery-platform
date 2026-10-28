@@ -37,6 +37,9 @@ def _apply(body: PersonIn | PersonUpd, person: Person) -> None:
         person.llm_api_key_enc = encrypt(s, data["llm_api_key"]) if data["llm_api_key"] else None
     if "llm_effort" in data:  # 空串/null = 清除（继承下一级）
         person.llm_effort = data["llm_effort"] or None
+    if data.get("roles") is not None:  # 未传 = 不动；传空数组 = 清空角色
+        person.roles = list(dict.fromkeys(data["roles"]))  # 去重保序
+
     if "am_user_key" in data:
         person.am_user_key_enc = encrypt(s, data["am_user_key"]) if data["am_user_key"] else None
 
@@ -84,6 +87,7 @@ async def update_person(
     if not me.is_admin:
         # 自己能改：姓名/邮箱/头像/LLM 配置/am key。登录名是身份匹配与登录依据、
         # octo 绑定决定通知去向、管理员标记是权限，都只能管理员动；
+        # 角色决定认领权限（产品/开发），自己改等于给自己提权，也只能管理员动。
         # 改密码必须走 /api/auth/password（校验旧密码），这里不带旧密码就能改会有绕过。
         # 判「真的改了」而不是「提交了」：前端回传整份表单时 disabled 的登录名和
         # is_admin 也在里面，按提交与否拒绝会让普通用户连姓名都改不了。
@@ -91,6 +95,8 @@ async def update_person(
         for k in ("is_admin", "octo_uid", "gitlab_username"):
             if k in data and data[k] is not None and data[k] != getattr(person, k):
                 raise HTTPException(403, "无权修改该字段")
+        if data.get("roles") is not None and list(data["roles"]) != list(person.roles or []):
+            raise HTTPException(403, "无权修改角色")
         if body.password:
             raise HTTPException(403, "修改密码请走修改密码接口（需校验旧密码）")
     _apply(body, person)

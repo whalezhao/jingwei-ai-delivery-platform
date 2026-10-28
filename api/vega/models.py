@@ -46,6 +46,9 @@ class Person(Base):
     octo_uid: Mapped[str | None] = mapped_column(String(64), index=True)
     password_hash: Mapped[str | None] = mapped_column(String(256))  # 空 = 不能登录
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 研发体系角色（JSON 数组，可多选）：决定谁能认领需求——未定稿只认 product，
+    # 定稿后只认 dev。空数组 = 无角色，两段都认领不了
+    roles: Mapped[list | None] = mapped_column(JSON, default=list)
 
     # 人员级 LLM（resolve_llm 第一优先级）
     llm_base_url: Mapped[str | None] = mapped_column(String(512))
@@ -179,6 +182,8 @@ class Requirement(Base):
     # 迭代版本标签，逗号分隔（如 V2.3,V2.4）；迭代状态不落库，由 status==online 推导成「正式」
     tags: Mapped[str | None] = mapped_column(String(256))
     claimant_id: Mapped[int | None] = mapped_column(ForeignKey("person.id"))
+    # 需求提出人：产品认领并定稿文档后，认领权移交开发，产品留在这里供展示
+    proposer_id: Mapped[int | None] = mapped_column(ForeignKey("person.id"))
     # 需求讨论与方案讨论各用一条 session（agent / 资产注入不同，不能串）
     req_session_id: Mapped[str | None] = mapped_column(String(64))
     plan_session_id: Mapped[str | None] = mapped_column(String(64))

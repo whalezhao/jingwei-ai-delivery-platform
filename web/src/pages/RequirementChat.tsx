@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import Page from "../Page";
 import { Bubble, FileCard, Prompts, Sender } from "@ant-design/x";
 import ThoughtChain from "@ant-design/x/es/thought-chain";
 import type { ThoughtChainItemType } from "@ant-design/x/es/thought-chain";
@@ -547,8 +548,11 @@ export function TurnChain({
 export default function RequirementChat() {
   const { id } = useParams();
   const reqId = Number(id);
+  const nav = useNavigate();
 
   const [req, setReq] = useState<any>(null);
+  // 需求已被他人认领：后端 403，页面只给提示，不渲染详情
+  const [denied, setDenied] = useState("");
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [streaming, setStreaming] = useState("");
   const [busy, setBusy] = useState(false);
@@ -588,15 +592,22 @@ export default function RequirementChat() {
     req && req.status === "claimed" ? (docs.some((d) => d.is_final) ? "plan" : "requirement") : null;
 
   const reload = async () => {
-    // 一起取完再落状态：req 先到、docs 后到会让「当前模式」闪一下需求讨论
-    const [r, d, t] = await Promise.all([
-      api<any>(`/api/requirements/${reqId}`),
-      api<any[]>(`/api/requirements/${reqId}/docs`),
-      api<any[]>(`/api/dev-tasks?requirement_id=${reqId}`),
-    ]);
-    setReq(r);
-    setDocs(d);
-    setTasks(t);
+    // 被他人认领后详情只对认领人开放：后端 403 就停在这里给出提示，
+    // 不要继续往下发后续请求（会连着弹一串同样的报错）
+    try {
+      // 一起取完再落状态：req 先到、docs 后到会让「当前模式」闪一下需求讨论
+      const [r, d, t] = await Promise.all([
+        api<any>(`/api/requirements/${reqId}`),
+        api<any[]>(`/api/requirements/${reqId}/docs`),
+        api<any[]>(`/api/dev-tasks?requirement_id=${reqId}`),
+      ]);
+      setReq(r);
+      setDocs(d);
+      setTasks(t);
+    } catch (e: any) {
+      setDenied(e.message);
+      return;
+    }
     api<any[]>(`/api/requirements/${reqId}/plan-versions`).then(setPlanVers).catch(() => setPlanVers([]));
   };
   useEffect(() => {
@@ -794,7 +805,16 @@ export default function RequirementChat() {
   const finalizeDoc = async (doc: any) => {
     try {
       await api(`/api/requirements/${reqId}/docs/${doc.id}/finalize`, { method: "POST" });
-      message.success(`v${doc.version} 已设为定稿版本`);
+      message.success(`v${doc.version} 已定稿`);
+      // 定稿即移交：自己不是开发的话这一刻就失去详情访问，直接回需求池，
+      // 否则留在页面上只会看到 403 提示
+      try {
+        await api(`/api/requirements/${reqId}`);
+      } catch {
+        message.info("需求已移交开发认领，你作为需求提出人已留痕");
+        nav("/reqs");
+        return;
+      }
       await reload();
       setPreview({ type: "doc", data: { ...doc, is_final: true } });
     } catch (e: any) {
@@ -867,12 +887,30 @@ export default function RequirementChat() {
     }
   };
 
+  if (denied)
+    return (
+      <Page title="需求详情" desc="被认领的需求只有认领人本人能打开">
+        <div className="page-card" style={{ padding: 48, textAlign: "center" }}>
+          <Typography.Title level={5} style={{ marginBottom: 8 }}>
+            {denied}
+          </Typography.Title>
+          <Typography.Text type="secondary">认领之后详情对其他人关闭；需要跟进请联系认领人或管理员。</Typography.Text>
+          <div style={{ marginTop: 16 }}>
+            <Button onClick={() => nav("/reqs")}>返回需求池</Button>
+          </div>
+        </div>
+      </Page>
+    );
   if (!req) return <Spin style={{ marginTop: 80, width: "100%" }} />;
   const st = STATUS[req.status] || ["default", req.status];
   const chatable = req.status === "claimed";
   // 阶段：需求文档未定稿 → 需求讨论（AI 可改文档）；已定稿 → 方案讨论；方案定稿 → 开发阶段
   const planFinal = ["confirmed", "archived", "online"].includes(req.status);
   const examples = EXAMPLES[chatMode ?? "plan"];
+  // 池中却认领不了 = 角色不对：文档已定稿该开发上，没定稿该产品上
+  const claimHint = docs.some((d) => d.is_final)
+    ? "需求已定稿，等待开发认领承接方案"
+    : "需求未定稿，等待产品认领完善需求";
 
   /** 附件卡片的图标（按文件名后缀）。 */
   const fileIcon = (name: string): "markdown" | "word" | "default" =>
@@ -1024,10 +1062,19 @@ export default function RequirementChat() {
                       const fd = new FormData();
                       fd.append("file", opt.file as any);
                       try {
-                        await api(`/api/requirements/${reqId}/docs`, { method: "POST", body: fd });
-                        message.success("已上传新版本");
-                        reload();
+                        const up = await api<{ is_final: boolean }>(`/api/requirements/${reqId}/docs`, {
+                          method: "POST",
+                          body: fd,
+                        });
+                        message.success(up.is_final ? "已上传（首版即定稿，需求已移交开发认领）" : "已上传新版本");
+                        try {
+                          await api(`/api/requirements/${reqId}`);
+                        } catch {
+                          nav("/reqs");
+                          return;
+                        }
                         (opt as any).onSuccess?.({});
+                        reload();
                       } catch (e: any) {
                         message.error(e.message);
                       }
@@ -1105,6 +1152,7 @@ export default function RequirementChat() {
                 <Descriptions.Item label="描述">{req.description || "—"}</Descriptions.Item>
                 <Descriptions.Item label="项目">{req.project_name || `#${req.project_id}`}</Descriptions.Item>
                 <Descriptions.Item label="认领人">{req.claimant_name || "—"}</Descriptions.Item>
+                <Descriptions.Item label="需求提出人">{req.proposer_name || "—"}</Descriptions.Item>
                 <Descriptions.Item label="创建">
                   <span className="mono">{(req.created_at || "").slice(0, 19)}</span>
                 </Descriptions.Item>
@@ -1167,19 +1215,23 @@ export default function RequirementChat() {
                     {req.title}
                   </Typography.Title>
                   <Typography.Text type="secondary">{req.description || "（无描述）"}</Typography.Text>
-                  <Button
-                    type="primary"
-                    onClick={async () => {
-                      try {
-                        await api(`/api/requirements/${reqId}/claim`, { method: "POST" });
-                        reload();
-                      } catch (e: any) {
-                        message.error(e.message);
-                      }
-                    }}
-                  >
-                    认领此需求
-                  </Button>
+                  {req.can_claim ? (
+                    <Button
+                      type="primary"
+                      onClick={async () => {
+                        try {
+                          await api(`/api/requirements/${reqId}/claim`, { method: "POST" });
+                          reload();
+                        } catch (e: any) {
+                          message.error(e.message);
+                        }
+                      }}
+                    >
+                      认领此需求
+                    </Button>
+                  ) : (
+                    <Typography.Text type="secondary">{claimHint}</Typography.Text>
+                  )}
                 </div>
               ) : (
                 <div className="rc-preview-empty">
@@ -1298,19 +1350,23 @@ export default function RequirementChat() {
                 {req.title}
               </Typography.Title>
               <Typography.Text type="secondary">认领后与 AI 对话制定执行方案</Typography.Text>
-              <Button
-                type="primary"
-                onClick={async () => {
-                  try {
-                    await api(`/api/requirements/${reqId}/claim`, { method: "POST" });
-                    reload();
-                  } catch (e: any) {
-                    message.error(e.message);
-                  }
-                }}
-              >
-                认领此需求
-              </Button>
+              {req.can_claim ? (
+                <Button
+                  type="primary"
+                  onClick={async () => {
+                    try {
+                      await api(`/api/requirements/${reqId}/claim`, { method: "POST" });
+                      reload();
+                    } catch (e: any) {
+                      message.error(e.message);
+                    }
+                  }}
+                >
+                  认领此需求
+                </Button>
+              ) : (
+                <Typography.Text type="secondary">{claimHint}</Typography.Text>
+              )}
             </div>
           ) : chatable ? (
             <>

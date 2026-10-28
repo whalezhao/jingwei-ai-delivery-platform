@@ -16,6 +16,7 @@ export interface Me {
   llm_effort: string | null;
   has_llm_key: boolean;
   has_am_key: boolean;
+  roles: string[];
 }
 
 /** 个人设置：基本信息/头像 + 个人 LLM 配置 + am key + 改密码。
@@ -112,6 +113,9 @@ export default function ProfileModal({
             </Form.Item>
             <Form.Item label="登录名 / octo 绑定">
               <Input value={`${me.gitlab_username || "—"} · octo: ${me.octo_uid || "未绑定（管理员维护）"}`} disabled />
+            </Form.Item>
+            <Form.Item label="角色（管理员维护）">
+              <Input value={(me.roles || []).join("、") || "未设置"} disabled />
             </Form.Item>
             <Divider plain style={{ fontSize: 12, margin: "8px 0" }}>
               个人 LLM 配置（留空继承研发组/兜底）
