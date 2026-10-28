@@ -107,6 +107,10 @@ def test_build_claude_env():
     assert env2["ANTHROPIC_MODEL"] == get_settings().am_default_model
     assert env2["VEGA_CLAUDE_EFFORT"] == get_settings().am_default_effort
 
+    # proxy 剥 content-encoding 却转发压缩 body：必须显式要 identity，否则自定义上游
+    # 一压缩 claude 就 JSON Parse error（用户侧表现为 unrecognized_model）
+    assert "accept-encoding: identity" in env["ANTHROPIC_CUSTOM_HEADERS"].splitlines()
+
 
 def test_build_claude_env_conversation_headers():
     """conversation_id 触发 proxy 全局会话直选四头；不传则完全不带（现网行为不变）。"""

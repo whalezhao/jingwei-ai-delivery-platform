@@ -94,6 +94,12 @@ def build_claude_env(
         headers.append(f"p-url: {target.base_url}")
         if target.api_key:
             headers.append(f"p-api-key: {target.api_key}")
+    # proxy 把响应的 content-encoding 头剥掉却转发压缩后的 body（上游按客户端的
+    # accept-encoding 压了）。claude 客户端自带 br/zstd，遇到会压缩的自定义上游
+    # （如 DeepSeek）就解析失败：claude -p 退出 1，stderr 只有一句无关的
+    # unrecognized_model 告警（"JSON Parse error: Unexpected token '('"）。
+    # 显式要 identity，让上游不压缩。
+    headers.append("accept-encoding: identity")
 
     env = {
         "ANTHROPIC_BASE_URL": f"{s.am_base_url.rstrip('/')}/claude-code/{s.am_space_id}",
