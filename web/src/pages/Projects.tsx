@@ -42,6 +42,7 @@ export default function Projects() {
   const [groups, setGroups] = useState<any[]>([]);
   const [people, setPeople] = useState<any[]>([]);
   const [editing, setEditing] = useState<any>(null);
+  const [keyword, setKeyword] = useState("");
   const [form] = Form.useForm();
   // 专家列表随团队：项目团队 → 未选回退研发组团队
   const watchTeam: string | undefined = Form.useWatch("am_team_id", form);
@@ -103,6 +104,13 @@ export default function Projects() {
 
   const gname = (gid: number) => groups.find((g) => g.id === gid)?.name || gid;
   const pname = (pid: number) => people.find((p) => p.id === pid)?.name || pid;
+  const term = keyword.trim().toLowerCase();
+  const shown = term
+    ? rows.filter((r) =>
+        [r.path, r.name, r.code_prefix, r.default_branch, r.mr_target_branch, gname(r.group_id)]
+          .some((s) => String(s ?? "").toLowerCase().includes(term)),
+      )
+    : rows;
 
   return (
     <Page
@@ -117,9 +125,16 @@ export default function Projects() {
       }
     >
       <div className="page-card">
+        <Input.Search
+          style={{ width: 280, marginBottom: 12 }}
+          allowClear
+          placeholder="项目路径 / 名称 / 编号前缀 / 研发组"
+          onSearch={(v) => setKeyword(v)}
+          onChange={(e) => !e.target.value && setKeyword("")}
+        />
         <ResizableTable<Project>
           rowKey="id"
-          dataSource={rows}
+          dataSource={shown}
           pagination={PAGE}
           columns={[
             {
@@ -203,7 +218,12 @@ export default function Projects() {
       >
         <Form form={form} layout="vertical" initialValues={editing || {}} onFinish={save}>
           <Form.Item name="group_id" label="研发组" rules={[{ required: true }]}>
-            <Select disabled={!!editing?.id} options={groups.map((g) => ({ value: g.id, label: g.name }))} />
+            <Select
+              disabled={!!editing?.id}
+              showSearch
+              optionFilterProp="label"
+              options={groups.map((g) => ({ value: g.id, label: g.name }))}
+            />
           </Form.Item>
           <Form.Item name="gitlab_project_id" label="GitLab 项目 ID" rules={[{ required: true }]}>
             <Input disabled={!!editing?.id} />
@@ -224,10 +244,20 @@ export default function Projects() {
             <Input />
           </Form.Item>
           <Form.Item name="tech_lead_person_ids" label="技术负责人（日报接收 / 卡 MR 升级对象）">
-            <Select mode="multiple" options={people.map((p) => ({ value: p.id, label: p.name }))} />
+            <Select
+              mode="multiple"
+              showSearch
+              optionFilterProp="label"
+              options={people.map((p) => ({ value: p.id, label: p.name }))}
+            />
           </Form.Item>
           <Form.Item name="owner_person_ids" label="项目负责人">
-            <Select mode="multiple" options={people.map((p) => ({ value: p.id, label: p.name }))} />
+            <Select
+              mode="multiple"
+              showSearch
+              optionFilterProp="label"
+              options={people.map((p) => ({ value: p.id, label: p.name }))}
+            />
           </Form.Item>
           <Form.Item
             name="audit_prefixes"

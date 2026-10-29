@@ -99,6 +99,8 @@ export default function Tasks() {
           <Select
             style={{ width: 260 }}
             allowClear
+            showSearch
+            optionFilterProp="label"
             placeholder="按项目筛选"
             value={projectId}
             onChange={setProjectId}
@@ -107,6 +109,8 @@ export default function Tasks() {
           <Select
             style={{ width: 140 }}
             allowClear
+            showSearch
+            optionFilterProp="label"
             placeholder="按状态筛选"
             value={status}
             onChange={setStatus}

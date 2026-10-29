@@ -24,8 +24,9 @@ const FLOW: Record<string, [string, string]> = {
   hold_not_mergeable: ["orange", "待重试"],
 };
 
-/** 分页表格的公共拉取：三个日志 Tab 结构一致，抽一个 hook 少写三遍。 */
-function usePaged<T>(url: string) {
+/** 分页表格的公共拉取：三个日志 Tab 结构一致，抽一个 hook 少写三遍。
+ *  q 变化回到第一页重新拉（服务端过滤）。 */
+function usePaged<T>(url: string, q: string) {
   const [data, setData] = useState<Paged<T>>({ items: [], total: 0 });
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
@@ -33,19 +34,37 @@ function usePaged<T>(url: string) {
     async (p: number) => {
       setLoading(true);
       try {
-        setData(await api<Paged<T>>(`${url}?page=${p}&page_size=${PAGE_SIZE}`));
+        const qs = new URLSearchParams({ page: String(p), page_size: String(PAGE_SIZE) });
+        if (q) qs.set("q", q);
+        setData(await api<Paged<T>>(`${url}?${qs}`));
       } catch (e: any) {
         message.error(e.message);
       } finally {
         setLoading(false);
       }
     },
-    [url],
+    [url, q],
   );
+  useEffect(() => {
+    setPage(1);
+  }, [q]);
   useEffect(() => {
     load(page);
   }, [page, load]);
   return { data, page, setPage, loading, reload: () => load(page) };
+}
+
+/** 日志检索框：回车/清空即查，和分页 hook 的 q 配套 */
+function LogSearch({ onChange, placeholder }: { onChange: (v: string) => void; placeholder: string }) {
+  return (
+    <Input.Search
+      style={{ width: 280, marginBottom: 12 }}
+      allowClear
+      placeholder={placeholder}
+      onSearch={(v) => onChange(v.trim())}
+      onChange={(e) => !e.target.value && onChange("")}
+    />
+  );
 }
 
 function Credentials() {
@@ -141,72 +160,87 @@ function Credentials() {
 }
 
 function GitlabEvents() {
-  const { data, page, setPage, loading } = usePaged<any>("/api/integrations/events");
+  const [q, setQ] = useState("");
+  const { data, page, setPage, loading } = usePaged<any>("/api/integrations/events", q);
   return (
-    <ResizableTable<any>
-      rowKey="id"
-      size="small"
-      loading={loading}
-      dataSource={data.items}
-      pagination={{ current: page, pageSize: PAGE_SIZE, total: data.total, onChange: setPage }}
-      expandable={{
-        expandedRowRender: (r) => (
-          <pre style={{ maxHeight: 300, overflow: "auto", fontSize: 12 }}>{JSON.stringify(r.payload, null, 2)}</pre>
-        ),
-      }}
-      columns={[
-        { title: "ID", dataIndex: "id", width: 70 },
-        { title: "事件", dataIndex: "event_type", render: (v) => <Tag>{v}</Tag> },
-        { title: "组", dataIndex: "group_id", width: 70 },
-        {
-          title: "摘要",
-          render: (_, r) => {
-            const a = r.payload?.object_attributes || {};
-            return a.title || a.ref || (r.payload?.project && r.payload.project.name) || "—";
+    <>
+      <LogSearch onChange={setQ} placeholder="事件类型，如 push / merge_request" />
+      <ResizableTable<any>
+        rowKey="id"
+        size="small"
+        loading={loading}
+        dataSource={data.items}
+        pagination={{ current: page, pageSize: PAGE_SIZE, total: data.total, onChange: setPage }}
+        expandable={{
+          expandedRowRender: (r) => (
+            <pre style={{ maxHeight: 300, overflow: "auto", fontSize: 12 }}>{JSON.stringify(r.payload, null, 2)}</pre>
+          ),
+        }}
+        columns={[
+          { title: "ID", dataIndex: "id", width: 70 },
+          { title: "事件", dataIndex: "event_type", render: (v) => <Tag>{v}</Tag> },
+          { title: "组", dataIndex: "group_id", width: 70 },
+          {
+            title: "摘要",
+            render: (_, r) => {
+              const a = r.payload?.object_attributes || {};
+              return a.title || a.ref || (r.payload?.project && r.payload.project.name) || "—";
+            },
           },
-        },
-        { title: "处理时间", dataIndex: "handled_at", render: (v) => (v ? v.slice(0, 19) : "未处理") },
-      ]}
-    />
+          { title: "处理时间", dataIndex: "handled_at", render: (v) => (v ? v.slice(0, 19) : "未处理") },
+        ]}
+      />
+    </>
   );
 }
 
 function NotifyLogs() {
-  const { data, page, setPage, loading } = usePaged<any>("/api/integrations/notify-logs");
+  const [q, setQ] = useState("");
+  const { data, page, setPage, loading } = usePaged<any>("/api/integrations/notify-logs", q);
   return (
-    <ResizableTable<any>
-      rowKey="id"
-      size="small"
-      loading={loading}
-      dataSource={data.items}
-      pagination={{ current: page, pageSize: PAGE_SIZE, total: data.total, onChange: setPage }}
-      columns={[
-        { title: "ID", dataIndex: "id", width: 70 },
-        { title: "原因", dataIndex: "reason", render: (v) => <Tag>{v}</Tag> },
-        { title: "结果", dataIndex: "ok", render: (v) => (v ? <Tag color="green">已送达</Tag> : <Tag color="red">失败</Tag>) },
-        {
-          title: "内容",
-          dataIndex: "content",
-          ellipsis: true,
-          render: (v) => <span style={{ whiteSpace: "pre-wrap" }}>{v}</span>,
-        },
-        { title: "@", dataIndex: "mentioned_uids", width: 90, render: (v: any[]) => (v?.length ? v.length : "—") },
-        { title: "时间", dataIndex: "created_at", width: 160, render: (v) => v?.slice(0, 19) },
-      ]}
-    />
+    <>
+      <LogSearch onChange={setQ} placeholder="通知内容 / 原因" />
+      <ResizableTable<any>
+        rowKey="id"
+        size="small"
+        loading={loading}
+        dataSource={data.items}
+        pagination={{ current: page, pageSize: PAGE_SIZE, total: data.total, onChange: setPage }}
+        columns={[
+          { title: "ID", dataIndex: "id", width: 70 },
+          { title: "原因", dataIndex: "reason", render: (v) => <Tag>{v}</Tag> },
+          {
+            title: "结果",
+            dataIndex: "ok",
+            render: (v) => (v ? <Tag color="green">已送达</Tag> : <Tag color="red">失败</Tag>),
+          },
+          {
+            title: "内容",
+            dataIndex: "content",
+            ellipsis: true,
+            render: (v) => <span style={{ whiteSpace: "pre-wrap" }}>{v}</span>,
+          },
+          { title: "@", dataIndex: "mentioned_uids", width: 90, render: (v: any[]) => (v?.length ? v.length : "—") },
+          { title: "时间", dataIndex: "created_at", width: 160, render: (v) => v?.slice(0, 19) },
+        ]}
+      />
+    </>
   );
 }
 
 function MrReviews() {
-  const { data, page, setPage, loading } = usePaged<any>("/api/integrations/mr-reviews");
+  const [q, setQ] = useState("");
+  const { data, page, setPage, loading } = usePaged<any>("/api/integrations/mr-reviews", q);
   return (
-    <ResizableTable<any>
-      rowKey="id"
-      size="small"
-      loading={loading}
-      dataSource={data.items}
-      pagination={{ current: page, pageSize: PAGE_SIZE, total: data.total, onChange: setPage }}
-      columns={[
+    <>
+      <LogSearch onChange={setQ} placeholder="MR 标题 / 项目路径" />
+      <ResizableTable<any>
+        rowKey="id"
+        size="small"
+        loading={loading}
+        dataSource={data.items}
+        pagination={{ current: page, pageSize: PAGE_SIZE, total: data.total, onChange: setPage }}
+        columns={[
         { title: "MR", width: 110, render: (_, r) => <span className="mono">{r.project_path} !{r.mr_iid}</span> },
         { title: "标题", dataIndex: "title", ellipsis: true },
         {
@@ -236,8 +270,9 @@ function MrReviews() {
         { title: "改动", dataIndex: "changed_files", width: 70, render: (v: any[]) => v?.length ?? 0 },
         { title: "摘要", dataIndex: "summary", ellipsis: true },
         { title: "提交", dataIndex: "head_sha", width: 100, render: (v) => <span className="mono">{v?.slice(0, 8)}</span> },
-      ]}
-    />
+        ]}
+      />
+    </>
   );
 }
 

@@ -66,3 +66,60 @@ async def test_events_and_notify_logs_paged(client, admin_client, db, seeded):
 
     r = await admin_client.get("/api/integrations/mr-reviews")
     assert r.status_code == 200 and r.json()["items"] == []
+
+
+async def test_log_search_filters(admin_client, db, seeded):
+    """q 走服务端过滤：通知查正文/原因，MR 查标题/项目路径，事件查类型。"""
+    from vega.models import MrReview, Project
+
+    gid = seeded["group"].id
+    db.add_all(
+        [
+            NotifyLog(group_id=gid, reason="push", content="流水线失败 adjudicator", ok=True),
+            NotifyLog(group_id=gid, reason="mr_review", content="别的通知", ok=True),
+        ]
+    )
+    proj = Project(
+        group_id=gid,
+        gitlab_project_id=901,
+        path="grp/nightly-target",
+        name="target",
+        code_prefix="TGT",
+        default_branch="master",
+        mr_target_branch="nightly",
+    )
+    db.add(proj)
+    await db.flush()
+    db.add_all(
+        [
+            MrReview(
+                project_id=proj.id, group_id=gid, mr_iid=1, head_sha="a" * 40,
+                title="修复登录", verdict="approve",
+            ),
+            MrReview(
+                project_id=proj.id, group_id=gid, mr_iid=2, head_sha="b" * 40,
+                title="调整样式", verdict="approve",
+            ),
+        ]
+    )
+    db.add_all(
+        [
+            GitlabEvent(group_id=gid, event_type="Push Hook", payload={}),
+            GitlabEvent(group_id=gid, event_type="Merge Request Hook", payload={}),
+        ]
+    )
+    await db.commit()
+
+    rows = (await admin_client.get("/api/integrations/notify-logs", params={"q": "adjudicator"})).json()
+    assert [r["content"] for r in rows["items"]] == ["流水线失败 adjudicator"] and rows["total"] == 1
+
+    rows = (await admin_client.get("/api/integrations/mr-reviews", params={"q": "登录"})).json()
+    assert [r["mr_iid"] for r in rows["items"]] == [1]
+    rows = (await admin_client.get("/api/integrations/mr-reviews", params={"q": "nightly-target"})).json()
+    assert sorted(r["mr_iid"] for r in rows["items"]) == [1, 2]
+
+    rows = (await admin_client.get("/api/integrations/events", params={"q": "merge request"})).json()
+    assert [r["event_type"] for r in rows["items"]] == ["Merge Request Hook"]
+    # 用户输入里的 % 当字面量，不当通配符
+    rows = (await admin_client.get("/api/integrations/notify-logs", params={"q": "%"})).json()
+    assert rows["total"] == 0

@@ -55,6 +55,7 @@ export default function People() {
   const { groupId } = useGroup();
   const [rows, setRows] = useState<Person[]>([]);
   const [editing, setEditing] = useState<any>(null); // {id?: number, ...}
+  const [keyword, setKeyword] = useState("");
   const [form] = Form.useForm();
 
   const load = () => api<Person[]>(`/api/people${groupId ? `?group_id=${groupId}` : ""}`).then(setRows);
@@ -86,6 +87,13 @@ export default function People() {
     }
   };
 
+  const term = keyword.trim().toLowerCase();
+  const shown = term
+    ? rows.filter((r) =>
+        [r.name, r.gitlab_username, r.gitlab_email].some((s) => (s || "").toLowerCase().includes(term)),
+      )
+    : rows;
+
   return (
     <Page
       title="人员"
@@ -99,9 +107,16 @@ export default function People() {
       }
     >
       <div className="page-card">
+        <Input.Search
+          style={{ width: 260, marginBottom: 12 }}
+          allowClear
+          placeholder="姓名 / GitLab 用户名 / 邮箱"
+          onSearch={(v) => setKeyword(v)}
+          onChange={(e) => !e.target.value && setKeyword("")}
+        />
         <ResizableTable<Person>
           rowKey="id"
-          dataSource={rows}
+          dataSource={shown}
           pagination={PAGE}
           columns={[
             {
@@ -215,6 +230,8 @@ export default function People() {
             <Select
               mode="multiple"
               disabled={!isAdmin()}
+              showSearch
+              optionFilterProp="label"
               placeholder="选择研发体系角色"
               options={ROLES.map((r) => ({ value: r.value, label: r.label }))}
             />
@@ -230,6 +247,8 @@ export default function People() {
           </Form.Item>
           <Form.Item name="llm_effort" label="思考等级" tooltip="透传 claude --effort；默认 Qwen 上游只认 xhigh/medium/low，high/max 适合 claude 系或自定义上游">
             <Select
+              showSearch
+              optionFilterProp="label"
               options={[
                 { value: "", label: "未设置（继承研发组/兜底 xhigh）" },
                 { value: "low", label: "低（low）" },

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import octo
@@ -94,6 +94,7 @@ async def summary(
 @router.get("/events")
 async def list_events(
     group_id: int | None = None,
+    q: str | None = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
@@ -102,6 +103,10 @@ async def list_events(
     stmt = select(GitlabEvent)
     if group_id:
         stmt = stmt.where(GitlabEvent.group_id == group_id)
+    term = (q or "").strip().lower()
+    if term:
+        # payload 是 JSON，跨库按文本查不通用；事件检索只按事件类型匹配
+        stmt = stmt.where(func.lower(GitlabEvent.event_type).contains(term, autoescape=True))
     rows, total = await _paged(db, stmt, GitlabEvent.id, page, page_size)
     items = [
         {
@@ -119,6 +124,7 @@ async def list_events(
 @router.get("/notify-logs")
 async def list_notify_logs(
     group_id: int | None = None,
+    q: str | None = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
@@ -127,6 +133,12 @@ async def list_notify_logs(
     stmt = select(NotifyLog)
     if group_id:
         stmt = stmt.where(NotifyLog.group_id == group_id)
+    term = (q or "").strip().lower()
+    if term:
+        stmt = stmt.where(
+            func.lower(NotifyLog.content).contains(term, autoescape=True)
+            | func.lower(NotifyLog.reason).contains(term, autoescape=True)
+        )
     rows, total = await _paged(db, stmt, NotifyLog.id, page, page_size)
     return {
         "items": [
@@ -148,6 +160,7 @@ async def list_notify_logs(
 @router.get("/mr-reviews")
 async def list_mr_reviews(
     group_id: int | None = None,
+    q: str | None = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
@@ -156,6 +169,14 @@ async def list_mr_reviews(
     stmt = select(MrReview, Project).join(Project, MrReview.project_id == Project.id)
     if group_id:
         stmt = stmt.where(MrReview.group_id == group_id)
+    term = (q or "").strip().lower()
+    if term:
+        stmt = stmt.where(
+            or_(
+                func.lower(MrReview.title).contains(term, autoescape=True),
+                func.lower(Project.path).contains(term, autoescape=True),
+            )
+        )
     total = (await db.scalar(select(func.count()).select_from(stmt.subquery()))) or 0
     rows = (
         await db.execute(

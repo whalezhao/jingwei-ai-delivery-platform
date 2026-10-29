@@ -131,6 +131,8 @@ export default function ProfileModal({
             </Form.Item>
             <Form.Item name="llm_effort" label="思考等级" tooltip="透传 claude --effort；默认 Qwen 上游只认 xhigh/medium/low，high/max 适合 claude 系或自定义上游">
               <Select
+                showSearch
+                optionFilterProp="label"
                 options={[
                   { value: "", label: "未设置（继承研发组/兜底 xhigh）" },
                   { value: "low", label: "低（low）" },

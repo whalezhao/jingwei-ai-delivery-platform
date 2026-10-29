@@ -91,6 +91,8 @@ const empty: any = {
 export default function Groups() {
   const nav = useNavigate();
   const [rows, setRows] = useState<Group[]>([]);
+  const [keyword, setKeyword] = useState("");
+  const [mkeyword, setMkeyword] = useState("");
   const [editing, setEditing] = useState<any>(null);
   const [form] = Form.useForm();
   // 成员抽屉
@@ -297,6 +299,24 @@ export default function Groups() {
     }
   };
 
+  const gterm = keyword.trim().toLowerCase();
+  const grpShown = gterm
+    ? rows.filter((r) =>
+        [r.name, r.gitlab_base_url].some((s) => (s || "").toLowerCase().includes(gterm)),
+      )
+    : rows;
+  const mterm = mkeyword.trim().toLowerCase();
+  // 排序前先复制：直接 sort(members) 会就地改 state 数组
+  const memShown = [
+    ...(mterm
+      ? members.filter((m) =>
+          [m.person_name, m.gitlab_username, m.gitlab_email, m.octo_nickname, m.octo_uid].some((s) =>
+            (s || "").toLowerCase().includes(mterm),
+          ),
+        )
+      : members),
+  ].sort((a, b) => Number(!!b.octo_uid) - Number(!!a.octo_uid));
+
   return (
     <Page
       title="研发组"
@@ -310,9 +330,16 @@ export default function Groups() {
       }
     >
       <div className="page-card">
+        <Input.Search
+          style={{ width: 280, marginBottom: 12 }}
+          allowClear
+          placeholder="研发组 / GitLab 地址"
+          onSearch={(v) => setKeyword(v.trim())}
+          onChange={(e) => !e.target.value && setKeyword("")}
+        />
         <ResizableTable<Group>
           rowKey="id"
-          dataSource={rows}
+          dataSource={grpShown}
           pagination={PAGE}
           columns={[
             { title: "研发组", dataIndex: "name" },
@@ -438,6 +465,7 @@ export default function Groups() {
             <Select
               mode="multiple"
               allowClear
+              showSearch
               optionFilterProp="label"
               placeholder="可多选"
               options={people.map((p) => ({ value: p.id, label: p.name }))}
@@ -457,6 +485,8 @@ export default function Groups() {
           </Form.Item>
           <Form.Item name="llm_effort" label="组思考等级" tooltip="透传 claude --effort；默认 Qwen 上游只认 xhigh/medium/low，high/max 适合 claude 系或自定义上游">
             <Select
+              showSearch
+              optionFilterProp="label"
               options={[
                 { value: "", label: "未设置（兜底 xhigh）" },
                 { value: "low", label: "低（low）" },
@@ -480,7 +510,10 @@ export default function Groups() {
         title={`成员与对配 · ${mgroup?.name || ""}`}
         width={1100}
         open={!!mgroup}
-        onClose={() => setMgroup(null)}
+        onClose={() => {
+          setMgroup(null);
+          setMkeyword(""); // 换了组，上一组的检索词不该带过去
+        }}
       >
         <Space style={{ marginBottom: 12 }}>
           <Button onClick={runMatch} disabled={!isAdmin()}>
@@ -508,10 +541,17 @@ export default function Groups() {
           showIcon
           message="三方对配：Vega 用户 ↔ GitLab 账号 ↔ octo 群成员。运行自动对配会先从本组 GitLab 项目拉成员自动建档，再按 规则精确 → AI（置信度 ≥ 0.8 生效）→ 人工调整（锁定后永不被覆盖）绑定 octo 身份"
         />
+        <Input.Search
+          style={{ width: 280, marginBottom: 12 }}
+          allowClear
+          placeholder="成员 / GitLab / octo 昵称"
+          onSearch={(v) => setMkeyword(v.trim())}
+          onChange={(e) => !e.target.value && setMkeyword("")}
+        />
         <ResizableTable<Member>
           rowKey="id"
           // 已绑 octo 的排前面：抽屉一打开先看到有身份的，未绑的堆在后面待处理
-          dataSource={[...members].sort((a, b) => Number(!!b.octo_uid) - Number(!!a.octo_uid))}
+          dataSource={memShown}
           pagination={PAGE}
           size="small"
           tableLayout="fixed"

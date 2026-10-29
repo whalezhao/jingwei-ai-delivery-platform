@@ -329,6 +329,7 @@ export default function CodeStats({ groupId, projectId }: { groupId?: number; pr
         <Select
           style={{ width: 180 }}
           allowClear
+          showSearch
           optionFilterProp="label"
           placeholder="视角：团队汇总"
           value={personId}

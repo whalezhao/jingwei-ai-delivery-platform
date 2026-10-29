@@ -99,6 +99,8 @@ function Shell() {
           key="group-switch"
           style={{ width: 180 }}
           allowClear
+          showSearch
+          optionFilterProp="label"
           placeholder="全部研发组"
           value={groupId ?? undefined}
           onChange={(v) => setGroupId(v ?? null)}

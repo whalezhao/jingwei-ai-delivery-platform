@@ -416,6 +416,8 @@ export default function Workbench() {
         <Select
           style={{ width: 280 }}
           allowClear
+          showSearch
+          optionFilterProp="label"
           placeholder="项目"
           value={projectId}
           onChange={setProjectId}

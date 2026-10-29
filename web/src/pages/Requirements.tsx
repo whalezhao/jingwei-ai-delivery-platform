@@ -68,6 +68,7 @@ export default function Requirements() {
   const [statusFilter, setStatusFilter] = useState<string | undefined>();
   const [iterFilter, setIterFilter] = useState<string | undefined>();
   const [tagFilter, setTagFilter] = useState<string | undefined>();
+  const [keyword, setKeyword] = useState("");
   const [setup, setSetup] = useState<Setup | null>(null);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Req | null>(null);
@@ -133,13 +134,17 @@ export default function Requirements() {
 
   // 列表本来就整页取回（无服务端分页），三个维度直接在前端过滤
   const tagOptions = Array.from(new Set(rows.flatMap((r) => r.tags || []))).sort();
+  const term = keyword.trim().toLowerCase();
   const shown = rows.filter(
     (r) =>
       (!statusFilter || r.status === statusFilter) &&
       (!iterFilter || r.iteration_status === iterFilter) &&
-      (!tagFilter || (r.tags || []).includes(tagFilter)),
+      (!tagFilter || (r.tags || []).includes(tagFilter)) &&
+      (!term ||
+        [r.code, r.title, r.description, r.project_name, r.claimant_name, r.proposer_name]
+          .some((s) => (s || "").toLowerCase().includes(term))),
   );
-  const filtering = !!(projFilter || statusFilter || iterFilter || tagFilter);
+  const filtering = !!(projFilter || statusFilter || iterFilter || tagFilter || term);
 
   return (
     <Page
@@ -178,9 +183,18 @@ export default function Requirements() {
       )}
       <div className="page-card">
         <div style={{ marginBottom: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <Input.Search
+            style={{ width: 240 }}
+            allowClear
+            placeholder="编号 / 标题 / 描述 / 认领人"
+            onSearch={(v) => setKeyword(v)}
+            onChange={(e) => !e.target.value && setKeyword("")}
+          />
           <Select
             style={{ width: 280 }}
             allowClear
+            showSearch
+            optionFilterProp="label"
             placeholder="按项目筛选（项目下才有需求池）"
             value={projFilter}
             onChange={setProjFilter}
@@ -189,6 +203,8 @@ export default function Requirements() {
           <Select
             style={{ width: 150 }}
             allowClear
+            showSearch
+            optionFilterProp="label"
             placeholder="按状态筛选"
             value={statusFilter}
             onChange={setStatusFilter}
@@ -197,6 +213,8 @@ export default function Requirements() {
           <Select
             style={{ width: 150 }}
             allowClear
+            showSearch
+            optionFilterProp="label"
             placeholder="按迭代状态筛选"
             value={iterFilter}
             onChange={setIterFilter}
@@ -205,6 +223,8 @@ export default function Requirements() {
           <Select
             style={{ width: 170 }}
             allowClear
+            showSearch
+            optionFilterProp="label"
             placeholder="按迭代版本筛选"
             value={tagFilter}
             onChange={setTagFilter}
@@ -416,6 +436,8 @@ export default function Requirements() {
           <Form.Item name="project_id" label="项目" rules={[{ required: true }]} tooltip="项目创建后不可修改">
             <Select
               disabled={!!editing}
+              showSearch
+              optionFilterProp="label"
               options={projects.map((p) => ({
                 value: p.id,
                 label: `${p.path}（${p.code_prefix}）`,
