@@ -273,7 +273,9 @@ async def add_member(
     gm = GroupMember(
         group_id=group_id,
         person_id=person.id,
-        am_agent_id=person.gitlab_username or person.name,
+        # 专家 id 只能由 agent-memory 发放（agt-…）；这里不猜，猜错的值会让 proxy
+        # 判 header mismatch 去弹交互表单，claude -p 答不了这一轮就作废
+        am_agent_id=None,
     )
     db.add(gm)
     await db.commit()

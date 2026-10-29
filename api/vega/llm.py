@@ -81,15 +81,20 @@ def build_claude_env(
     """
     s = get_settings()
     headers: list[str] = []
-    if team_id:
+    # team/agent 必须成对下发：proxy 只有两者都在账号可见列表里命中才直选注册；
+    # 只给 team 时它会发"选专家"表单，给错 agent 时它判 mismatch 回退"是否关联资产"
+    # 表单——两种都是 AskUserQuestion，而 claude -p 里该工具被禁用，这一轮直接报错作废。
+    # 宁可整组都不下发（会话照常跑，只是不注入团队资产），也不发半套。
+    if team_id and agent_id:
         # HTTP 头值不允许非 ASCII（claude CLI 会拒掉整个 ANTHROPIC_CUSTOM_HEADERS 直接退出 1），
         # 中文 team/agent id 用百分号编码传输，ASCII id 原样
         headers.append(f"x-team-id: {quote(team_id)}")
-    if agent_id:
         headers.append(f"x-agent-id: {quote(agent_id)}")
-    if conversation_id:
-        headers.append("x-task-id: no-task")
-        headers.append(f"x-conversation-id: {quote(conversation_id)}")
+        # 没有 x-conversation-id 时 proxy 整段跳过 session-init，连表单都不会发，
+        # 所以它跟 team/agent 同生同死
+        if conversation_id:
+            headers.append("x-task-id: no-task")
+            headers.append(f"x-conversation-id: {quote(conversation_id)}")
     if target.base_url:
         headers.append(f"p-url: {target.base_url}")
         if target.api_key:

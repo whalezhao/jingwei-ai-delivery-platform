@@ -96,10 +96,16 @@ def test_build_claude_env():
     assert env["VEGA_CLAUDE_EFFORT"] == "low"
 
     # 中文 team id 不能裸进 HTTP 头（claude CLI 会拒掉非 ASCII 头直接退出 1）
-    env_cn = build_claude_env(LLMTarget(), team_id="示例团队", agent_id=None, user_key="k")
+    env_cn = build_claude_env(LLMTarget(), team_id="示例团队", agent_id="agt-中国", user_key="k")
     hdr = [h for h in env_cn["ANTHROPIC_CUSTOM_HEADERS"].splitlines() if h.startswith("x-team-id")][0]
     assert hdr.isascii() and "x-team-id: %E4%B8%AD" in hdr
     assert "CLAUDE_CODE_MAX_OUTPUT_TOKENS" in env
+
+    # team 单独存在时不下发：proxy 会为"选专家"发 AskUserQuestion，claude -p 答不了
+    env_team_only = build_claude_env(LLMTarget(), team_id="team-9", agent_id=None, user_key="k")
+    assert all(
+        not h.startswith(("x-team-id", "x-agent-id")) for h in env_team_only["ANTHROPIC_CUSTOM_HEADERS"].splitlines()
+    )
 
     # 无自定义 LLM：不带 p-* 头；model/effort 落到 am 兜底（proxy 不认 claude 原生名）
     env2 = build_claude_env(LLMTarget(), team_id=None, agent_id=None, user_key="k")
@@ -115,7 +121,7 @@ def test_build_claude_env():
 def test_build_claude_env_conversation_headers():
     """conversation_id 触发 proxy 全局会话直选四头；不传则完全不带（现网行为不变）。"""
     env = build_claude_env(
-        LLMTarget(), team_id="team-9", agent_id=None, user_key="k", conversation_id="vega-mr-1-2"
+        LLMTarget(), team_id="team-9", agent_id="agt-1", user_key="k", conversation_id="vega-mr-1-2"
     )
     headers = env["ANTHROPIC_CUSTOM_HEADERS"].splitlines()
     assert "x-team-id: team-9" in headers

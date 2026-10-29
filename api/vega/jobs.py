@@ -226,7 +226,9 @@ async def _sync_gitlab_people(db: AsyncSession, group: DevGroup) -> tuple[int, i
             await db.flush()
             created += 1
         if person.id not in in_group:
-            db.add(GroupMember(group_id=group.id, person_id=person.id, am_agent_id=username))
+            # 同上：GitLab 用户名不是 agent-memory 的专家 id，存进去只会让
+            # proxy 判 mismatch 弹表单。专家由人员在 Vega 里显式选。
+            db.add(GroupMember(group_id=group.id, person_id=person.id))
             in_group.add(person.id)
     if created or merged or ok:
         await db.commit()
@@ -290,7 +292,6 @@ async def sync_members_and_match(db: AsyncSession, group: DevGroup) -> dict:
             GroupMember(
                 group_id=group.id,
                 person_id=person.id,
-                am_agent_id=person.gitlab_username or person.name,
                 octo_uid=uid,
                 octo_nickname=nickname,
                 match_status="manual",
