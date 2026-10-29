@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Empty, Select, Tabs, Tag } from "antd";
+import { Empty, Select, Tabs, Tag, message } from "antd";
 import dayjs from "dayjs";
 import { api } from "../api";
 import { useGroup } from "../group";
@@ -45,12 +45,15 @@ interface Task {
   updated_at: string | null;
   agents: { sub: number; events: number } | null;
   mr: Mr | null;
+  /** 详情含需求文档/方案正文，非认领人后端 403 —— 入口按此禁用 */
+  can_open: boolean;
 }
 interface Req {
   id: number;
   code: string;
   title: string;
   status: string;
+  can_open: boolean;
   claimant_name: string | null;
   created_at: string | null;
   project_id: number;
@@ -246,6 +249,8 @@ function nodeInfo(r: Req, key: NodeKey, state: St): { main: string; sub?: string
 }
 
 /** 任务卡：并进流程里它当前所处的阶段节点，不再单独挂在下方；带该阶段的必要信息 */
+const DENIED = "该需求已被他人认领，仅认领人可打开";
+
 function TaskCard({ t, r, onOpen }: { t: Task; r: Req; onOpen: () => void }) {
   const cls = flowCls(t);
   const ci = ciChip(t);
@@ -256,7 +261,11 @@ function TaskCard({ t, r, onOpen }: { t: Task; r: Req; onOpen: () => void }) {
     <div className={`wb-card wb-task ${cls}`}>
       <div className="wb-task-head">
         <i className={`wb-dot ${cls}`} />
-        <span className="wb-task-title" title={t.scope || t.title || ""}>
+        <span
+          className={`wb-task-title${t.can_open ? "" : " muted"}`}
+          title={t.can_open ? t.scope || t.title || "" : "需求已被他人认领，详情不对你开放"}
+          onClick={t.can_open ? undefined : () => message.info(DENIED)}
+        >
           {t.title || t.code}
         </span>
         <span
@@ -268,7 +277,11 @@ function TaskCard({ t, r, onOpen }: { t: Task; r: Req; onOpen: () => void }) {
         <Tag className="wb-phase" color={phase[0]}>{phase[1]}</Tag>
       </div>
       <div className="wb-chips">
-        <a className="wb-chip mono" title={`查看任务 ${t.code}`} onClick={onOpen}>
+        <a
+          className={`wb-chip mono${t.can_open ? "" : " muted"}`}
+          title={t.can_open ? `查看任务 ${t.code}` : DENIED}
+          onClick={t.can_open ? onOpen : () => message.info(DENIED)}
+        >
           {t.code}
         </a>
         <span className="wb-chip">
@@ -276,8 +289,8 @@ function TaskCard({ t, r, onOpen }: { t: Task; r: Req; onOpen: () => void }) {
         </span>
         {t.agents && t.agents.sub > 0 && (
           <a
-            className={`wb-chip${cls === "live" ? " live" : ""}`}
-            onClick={onOpen}
+            className={`wb-chip${cls === "live" ? " live" : ""}${t.can_open ? "" : " muted"}`}
+            onClick={t.can_open ? onOpen : () => message.info(DENIED)}
             title={`${t.agents.events} 条过程事件 · 点击看各 agent 泳道`}
           >
             🤖 主 + {t.agents.sub} 子{cls === "live" ? " 协作中" : ""}
@@ -459,7 +472,11 @@ export default function Workbench() {
                 <div className="wb-line" key={r.id}>
                   <div className="wb-chain">
                     {/* 需求信息直接做成流程起点的卡片，不额外加标题行 */}
-                    <div className="wb-card wb-req-card" onClick={() => nav(`/reqs/${r.id}`)}>
+                    <div
+                      className={`wb-card wb-req-card${r.can_open ? "" : " muted-card"}`}
+                      title={r.can_open ? undefined : DENIED}
+                      onClick={() => (r.can_open ? nav(`/reqs/${r.id}`) : message.info(DENIED))}
+                    >
                       <div className="wb-req-top">
                         <Tag color={(REQ_STATUS[r.status] || ["default", r.status])[0]}>
                           {(REQ_STATUS[r.status] || ["default", r.status])[1]}

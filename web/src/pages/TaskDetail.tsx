@@ -5,6 +5,7 @@ import { BulbOutlined, CheckOutlined, CloseOutlined, RightOutlined } from "@ant-
 import Markdown from "react-markdown";
 import ThoughtChain from "@ant-design/x/es/thought-chain";
 import type { ThoughtChainItemType } from "@ant-design/x/es/thought-chain";
+import { rawNode } from "../eventNodes";
 import { api } from "../api";
 import Page from "../Page";
 import DocPreview from "../components/DocPreview";
@@ -46,7 +47,7 @@ const KIND_TITLE: Record<string, string> = {
 function evtBody(e: TaskEvent & { parent?: string }): string {
   if (e.kind === "tool_use") return e.input || "";
   if (e.kind === "tool_result" || e.kind === "result") return e.content || e.text || "";
-  return e.text || (e.kind === "raw" ? JSON.stringify((e as any).event || {}).slice(0, 2000) : "");
+  return e.text || "";
 }
 
 /** 泳道事件 → ThoughtChain 节点（与需求对话页同款）：
@@ -112,35 +113,9 @@ function laneItems(
         });
       }
     } else if (e.kind === "raw") {
-      // claude 的 system 事件：init 只是会话元信息（工作目录/工具清单），对人没信息量；
-      // 其余几类是一行可读的进度或里程碑，不该把整段 JSON 铺给用户看
-      const ev = (e as any).event || {};
-      const sub = ev.subtype || "";
-      if (sub === "init" || (sub === "task_summary" && !ev.detail)) continue;
-      const node: ChainNode = { kind: "raw", key: `k${e.seq}`, icon: <RightOutlined />, title: "原始事件" };
-      if (sub === "task_summary") {
-        node.title = ev.detail;
-      } else if (sub === "vcs_state_changed") {
-        node.icon = <CheckOutlined />;
-        node.title = ev.kind === "commit" ? "提交代码" : "Git 状态变化";
-        node.description = ev.branch;
-      } else if (sub === "task_progress") {
-        node.title = "子代理进展";
-        node.description = ev.description;
-        if (ev.usage) {
-          node.footer = `${ev.usage.tool_uses ?? 0} 工具 · ${((ev.usage.total_tokens ?? 0) / 1000).toFixed(1)}k tokens`;
-        }
-      } else if (sub === "post_turn_summary") {
-        node.icon = <BulbOutlined />;
-        node.title = "本轮总结";
-        node.collapsible = true;
-        node.content = <pre className="tc-body">{String(ev.status_detail || "").slice(0, 4000)}</pre>;
-      } else {
-        node.title = `原始事件 · ${sub || "?"}`;
-        node.collapsible = true;
-        node.content = <pre className="tc-body">{JSON.stringify(ev).slice(0, 2000)}</pre>;
-      }
-      items.push(node);
+      // 原始事件统一交给 eventNodes：认得出的给一行可读节点，认不出的才折叠原始 JSON
+      const node = rawNode((e as any).event || {}, `k${e.seq}`);
+      if (node) items.push(node as ChainNode);
     } else {
       const body = evtBody(e);
       items.push({
@@ -185,6 +160,8 @@ export default function TaskDetail() {
   const { id } = useParams();
   const taskId = Number(id);
   const [d, setD] = useState<Detail | null>(null);
+  // 详情含需求文档/方案正文：非认领人后端 403，页面只给提示（别停在「加载中」）
+  const [denied, setDenied] = useState("");
   const [events, setEvents] = useState<(TaskEvent & { parent?: string })[]>([]);
   const seenRef = useRef<Set<number>>(new Set());
   // 会话树选中态：main = 主会话，否则为子会话 key（= 派生它的 Task tool_use id）
@@ -194,18 +171,25 @@ export default function TaskDetail() {
   const [progOpen, setProgOpen] = useState(true);
 
   const reload = async () => {
-    const detail = await api<Detail>(`/api/dev-tasks/${taskId}/detail`);
-    setD(detail);
-    return detail;
+    try {
+      const detail = await api<Detail>(`/api/dev-tasks/${taskId}/detail`);
+      setD(detail);
+      return detail;
+    } catch (e: any) {
+      if (e.status === 403) setDenied(e.message);
+      throw e;
+    }
   };
 
   useEffect(() => {
+    if (denied) return; // 403 已经定论，别再每 5 秒锤一次
     reload().catch(() => {});
     const t = setInterval(() => reload().catch(() => {}), 5000);
     return () => clearInterval(t);
-  }, [taskId]);
+  }, [taskId, denied]);
 
   useEffect(() => {
+    if (denied) return;
     const load = async () => {
       const rows = await api<(TaskEvent & { parent?: string })[]>(`/api/dev-tasks/${taskId}/events`).catch(() => []);
       rows.forEach((r) => seenRef.current.add(r.seq));
@@ -214,7 +198,7 @@ export default function TaskDetail() {
     load();
     const t = setInterval(load, 3000);
     return () => clearInterval(t);
-  }, [taskId]);
+  }, [taskId, denied]);
 
   // SSE：需求级实时流里过滤本任务的过程事件（dev_raw.task_id = RunnerTask 号）
   useEffect(() => {
@@ -228,7 +212,13 @@ export default function TaskDetail() {
           ac.signal,
           (evt) => {
             if (evt.type === "dev_raw" && ids.has(evt.task_id)) {
-              setEvents((list) => [...list, { seq: -(Date.now() + list.length), ...evt.event }]);
+              // 归一化块自带 kind；system 事件只有 type/subtype，补上 raw 才走原始事件分支
+              const e = evt.event || {};
+              const kind = e.kind || "raw";
+              setEvents((list) => [
+                ...list,
+                { seq: -(Date.now() + list.length), ...e, kind, event: kind === "raw" ? e : undefined },
+              ]);
             }
           },
         );
@@ -269,6 +259,22 @@ export default function TaskDetail() {
     return { main, subLanes };
   }, [events]);
 
+  if (denied)
+    return (
+      <Page title="任务详情" desc="被认领的需求，任务详情只有认领人本人能打开">
+        <div className="page-card" style={{ padding: 48, textAlign: "center" }}>
+          <Typography.Title level={5} style={{ marginBottom: 8 }}>
+            {denied}
+          </Typography.Title>
+          <Typography.Text type="secondary">
+            任务本身在任务池里公开可见；详情会带出需求文档与方案正文，所以只对需求认领人开放。
+          </Typography.Text>
+          <div style={{ marginTop: 16 }}>
+            <Link to="/tasks">返回任务池</Link>
+          </div>
+        </div>
+      </Page>
+    );
   if (!d) return <Page title="任务详情" desc="加载中…" />;
   const { task, requirement: req, final_doc, final_plan } = d;
   const st = STATUS[task.status] || ["default", task.status];

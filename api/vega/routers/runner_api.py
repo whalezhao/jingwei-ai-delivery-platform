@@ -57,6 +57,11 @@ def _is_token_tick(evt: dict) -> bool:
     return evt.get("kind") == "raw" and (evt.get("event") or {}).get("subtype") == "thinking_tokens"
 
 
+# plan 会话回放要跳过的 system 事件：逐 token 计量会刷爆表，init 只是会话元信息
+# （工具清单/模型/工作目录），每次开新会话都来一条，对回看执行过程没有价值。
+_PLAN_NOISE = {"thinking_tokens", "init"}
+
+
 async def _auth_node(
     authorization: str = Header(default=""), db: AsyncSession = Depends(get_db)
 ) -> RunnerNode:
@@ -186,9 +191,12 @@ async def post_events(
             kind = evt.get("kind")
             if kind in ("thinking", "tool_use", "tool_result") and not evt.get("parent"):
                 payload = evt
-            elif kind == "raw" and (evt.get("event") or {}).get("subtype") == "task_progress":
-                # 原始事件按前端 plan_raw 的形状存内层 event，回放与直播同构
+            elif kind == "raw" and (evt.get("event") or {}).get("subtype") not in _PLAN_NOISE:
+                # 原始事件按前端 plan_raw 的形状存内层 event，回放与直播同构。
+                # 除逐 token 计量/会话元信息这类噪声外都留：子任务、压缩、重试、
+                # 拒答都是用户想回看的执行痕迹，只存 task_progress 会让刷新后凭空消失
                 payload = evt.get("event") or {}
+                payload["kind"] = "raw"  # 回放要能分清归一化块与 system 事件
             else:
                 continue
             seq += 1

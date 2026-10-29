@@ -858,7 +858,7 @@ async def stop_plan_turn(
         .values(message_id=msg.id)
     )
     events = [
-        e.payload
+        _evt_out(e)
         for e in (
             await db.scalars(select(PlanEvent).where(PlanEvent.message_id == msg.id).order_by(PlanEvent.seq))
         ).all()
@@ -915,6 +915,16 @@ async def clear_plan_session(
     return {"ok": True, "mode": body.mode, "cleared": len(ids)}
 
 
+def _evt_out(e: PlanEvent) -> dict:
+    """回放事件统一带 kind：归一化块（kind=thinking/tool_use/tool_result）payload 自带，
+    system 事件（task_started / hook_* / compact_boundary …）只有 type/subtype，
+    这里补上 raw 并原样塞进 event 字段，与直播帧 plan_raw 同构——
+    否则前端认不出该往哪个渲染分支走，只能丢或当原始 JSON 铺出来。"""
+    if (e.payload or {}).get("kind"):
+        return e.payload
+    return {**e.payload, "kind": "raw", "event": e.payload}
+
+
 async def _events_by_message(db: AsyncSession, req_id: int, msg_ids: list[int]) -> dict[int, list[dict]]:
     if not msg_ids:
         return {}
@@ -929,7 +939,7 @@ async def _events_by_message(db: AsyncSession, req_id: int, msg_ids: list[int]) 
     for e in rows:
         if e.message_id is None:
             continue
-        out.setdefault(e.message_id, []).append(e.payload)
+        out.setdefault(e.message_id, []).append(_evt_out(e))
     return out
 
 
@@ -1012,7 +1022,7 @@ async def plan_stream(
                                 .order_by(PlanEvent.seq)
                             )
                         ).all()
-                        pending = [e.payload for e in erows]
+                        pending = [_evt_out(e) for e in erows]
             for mid, role, content, m_mode, m_team, m_agent, evts in record:
                 yield f"data: {json.dumps({'type': 'message', 'id': mid, 'role': role, 'content': content, 'mode': m_mode, 'team_id': m_team, 'agent_id': m_agent, 'events': evts}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'ready', 'pending_events': pending}, ensure_ascii=False)}\n\n"

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { Input, Select, Tag, Typography } from "antd";
+import { Input, Select, Tag, Typography, message } from "antd";
 import ResizableTable from "../ResizableTable";
 import { api } from "../api";
 import { useGroup } from "../group";
@@ -21,6 +21,8 @@ interface Task {
   runner_name: string | null;
   error: string | null;
   created_at: string | null;
+  /** 详情页含需求文档/方案正文，非认领人后端 403 —— 入口直接灰掉 */
+  can_open: boolean;
 }
 
 /** 过程事件（任务详情页 AI 工作进展渲染用；parent 为空 = 主 Agent，否则为子 Agent 泳道） */
@@ -47,6 +49,21 @@ export const STATUS: Record<string, [string, string]> = {
   done: ["green", "完成"],
   failed: ["error", "失败"],
 };
+
+const DENIED = "该需求已被他人认领，仅认领人可打开";
+
+/** 任务详情 / 需求详情都含需求文档与方案正文：can_open=false 时不给入口，点也不跳 */
+function openOrTell(r: Task, to: string, label: string, className?: string) {
+  return r.can_open ? (
+    <Link to={to} className={className}>
+      {label}
+    </Link>
+  ) : (
+    <span className={className} style={{ color: "var(--muted)", cursor: "help" }} onClick={() => message.info(DENIED)}>
+      {label}
+    </span>
+  );
+}
 
 export default function Tasks() {
   const { groupId } = useGroup();
@@ -112,11 +129,7 @@ export default function Tasks() {
               title: "任务号",
               dataIndex: "code",
               width: 250,
-              render: (v, r) => (
-                <Link to={`/tasks/${r.id}`} className="mono">
-                  {v}
-                </Link>
-              ),
+              render: (v, r) => openOrTell(r, `/tasks/${r.id}`, v, "mono"),
             },
             {
               title: "任务标题",
@@ -129,7 +142,7 @@ export default function Tasks() {
             {
               title: "需求",
               dataIndex: "requirement_id",
-              render: (v) => <Link to={`/reqs/${v}`}>查看需求</Link>,
+              render: (v, r) => openOrTell(r, `/reqs/${v}`, "查看需求"),
               width: 100,
             },
             {
@@ -184,7 +197,7 @@ export default function Tasks() {
             },
             {
               title: "操作",
-              render: (_, r) => <Link to={`/tasks/${r.id}`}>详情</Link>,
+              render: (_, r) => openOrTell(r, `/tasks/${r.id}`, "详情"),
               width: 80,
             },
           ]}

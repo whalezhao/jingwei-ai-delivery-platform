@@ -194,3 +194,31 @@ async def test_task_detail_aggregate(client, db, seeded):
     # 同需求的另一任务看到同一份定稿方案与文档
     d2 = (await client.get(f"/api/dev-tasks/{t2.id}/detail")).json()
     assert d2["final_plan"]["content"] == "# 定稿方案" and d2["final_doc"]["filename"] == "定稿文档.md"
+
+
+async def test_task_detail_denies_non_claimant(client, db, seeded):
+    """任务详情带需求文档与方案正文，必须和需求详情同权：非认领人 403。"""
+    token, person = await login_as(client, db, seeded["person"].gitlab_username)
+    client.headers["Authorization"] = f"Bearer {token}"
+    rid = await _mk_req(client, db, seeded, "他人认领")
+    task = DevTask(requirement_id=rid, code="TASK-DENY-1", status="running", creator_id=person.id)
+    db.add(task)
+    await db.flush()
+    task_id = task.id
+    # 换一个没有认领需求的开发当访问者
+    other_token, _ = await login_as(client, db, "lisi-deny")
+    client.headers["Authorization"] = f"Bearer {other_token}"
+
+    # 未认领时不锁（池中谁都能看）
+    assert (await client.get(f"/api/dev-tasks/{task_id}/detail")).status_code == 200
+    assert (await client.get(f"/api/dev-tasks/{task_id}/events")).status_code == 200
+
+    req = await db.get(Requirement, rid)
+    req.claimant_id = person.id
+    await db.commit()
+
+    assert (await client.get(f"/api/dev-tasks/{task_id}/detail")).status_code == 403
+    assert (await client.get(f"/api/dev-tasks/{task_id}/events")).status_code == 403
+    # 列表仍在（任务池公开），只是 can_open=false
+    rows = (await client.get(f"/api/dev-tasks?requirement_id={rid}")).json()
+    assert [(r["code"], r["can_open"]) for r in rows] == [("TASK-DENY-1", False)]

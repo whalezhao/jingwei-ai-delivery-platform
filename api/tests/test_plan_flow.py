@@ -237,6 +237,12 @@ async def test_plan_events_persist_for_replay(admin_client, client, db, seeded):
                 "usage": {"tool_uses": 1, "total_tokens": 10},
             },
         },
+        # 子任务/压缩这类 system 事件也要能回放，不只 task_progress
+        {"kind": "raw", "event": {"type": "system", "subtype": "task_started", "task_id": "t1", "description": "调研"}},
+        {
+            "kind": "raw",
+            "event": {"type": "system", "subtype": "compact_boundary", "compact_metadata": {"trigger": "auto", "pre_tokens": 90000}},
+        },
         {"kind": "result", "text": "最终执行计划全文", "is_error": False},
     ]
     async with _runner_client(app, node_token) as rc:
@@ -252,7 +258,7 @@ async def test_plan_events_persist_for_replay(admin_client, client, db, seeded):
         await db.scalars(select(PlanEvent).where(PlanEvent.runner_task_id == task_id).order_by(PlanEvent.seq))
     ).all()
     # result 不入库；thinking_tokens 是直播计量噪声，也不入库
-    assert [e.kind for e in rows] == ["thinking", "tool_use", "tool_result", "raw"]
+    assert [e.kind for e in rows] == ["thinking", "tool_use", "tool_result", "raw", "raw", "raw"]
     assert rows[3].payload["subtype"] == "task_progress"  # raw 存内层事件，回放形状与直播一致
     assert all(e.message_id is not None for e in rows)
     msg = await db.get(PlanMessage, rows[0].message_id)
@@ -262,11 +268,14 @@ async def test_plan_events_persist_for_replay(admin_client, client, db, seeded):
     msgs = (await client.get(f"/api/requirements/{req_id}/plan/messages")).json()
     assert [m["role"] for m in msgs] == ["assistant"]
     evs = msgs[-1]["events"]
-    assert [e.get("kind") or e.get("subtype") for e in evs] == [
-        "thinking",
-        "tool_use",
-        "tool_result",
-        "task_progress",
+    # 回放与直播同构：system 事件带 kind=raw，前端才知道该走原始事件分支
+    assert [(e.get("kind"), e.get("subtype") or e.get("kind")) for e in evs] == [
+        ("thinking", "thinking"),
+        ("tool_use", "tool_use"),
+        ("tool_result", "tool_result"),
+        ("raw", "task_progress"),
+        ("raw", "task_started"),
+        ("raw", "compact_boundary"),
     ]
     assert evs[1]["name"] == "Bash"
 

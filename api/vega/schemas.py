@@ -289,6 +289,8 @@ class DevTaskOut(BaseModel):
     runner_name: str | None = None
     error: str | None
     created_at: str | None = None
+    # 任务本身在池子里人人可见，但详情里的需求文档/方案只有认领人能看
+    can_open: bool = True
 
 
 class NodeCreateIn(BaseModel):

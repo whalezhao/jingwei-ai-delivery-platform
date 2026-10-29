@@ -15,11 +15,28 @@ from ..models import DevGroup, DevTask, DevTaskEvent, GroupMember, Person, Proje
 from ..numbering import gen_session_id
 from ..queue import enqueue
 from ..schemas import DevTaskOut
+from .requirements import _can_open  # 需求详情可见性：任务详情复用同一口径
 
 router = APIRouter(prefix="/api/dev-tasks", tags=["dev-tasks"])
 
 
-def task_to_out(t: DevTask, runner_name: str | None = None) -> dict:
+async def _get_open_task(db: AsyncSession, task_id: int, me: Person) -> DevTask:
+    """任务详情含需求文档与方案正文，必须和需求详情同权：非认领人 403。
+
+    可见性直接用需求池那套 _can_open，避免两处口径漂移。
+    """
+    from .requirements import _can_open
+
+    task = await db.get(DevTask, task_id)
+    if not task:
+        raise HTTPException(404, "任务不存在")
+    req = await db.get(Requirement, task.requirement_id)
+    if not req or not _can_open(req, me):
+        raise HTTPException(403, "需求已被他人认领，无权查看")
+    return task
+
+
+def task_to_out(t: DevTask, runner_name: str | None = None, can_open: bool = True) -> dict:
     return DevTaskOut(
         id=t.id,
         requirement_id=t.requirement_id,
@@ -34,6 +51,7 @@ def task_to_out(t: DevTask, runner_name: str | None = None) -> dict:
         runner_name=runner_name,
         error=t.error,
         created_at=str(t.created_at) if t.created_at else None,
+        can_open=can_open,
     ).model_dump()
 
 
@@ -94,7 +112,19 @@ async def list_tasks(
         )
     rows = (await db.scalars(stmt)).all()
     runners = await _runner_names(db, [t.id for t in rows])
-    return [task_to_out(t, runners.get(t.id)) for t in rows]
+    reqs = {
+        r.id: r
+        for r in (
+            await db.scalars(
+                select(Requirement).where(Requirement.id.in_([t.requirement_id for t in rows] or [0]))
+            )
+        ).all()
+    }
+    # can_open 让前端把「详情」入口按需求可见性灰掉，而不是点进去才 403
+    return [
+        task_to_out(t, runners.get(t.id), t.requirement_id in reqs and _can_open(reqs[t.requirement_id], me))
+        for t in rows
+    ]
 
 
 @router.get("/{task_id}", response_model=DevTaskOut)
@@ -104,7 +134,10 @@ async def get_task(
     task = await db.get(DevTask, task_id)
     if not task:
         raise HTTPException(404, "任务不存在")
-    return task_to_out(task)
+    from .requirements import _can_open
+
+    req = await db.get(Requirement, task.requirement_id)
+    return task_to_out(task, can_open=bool(req) and _can_open(req, me))
 
 
 @router.get("/{task_id}/detail")
@@ -114,9 +147,7 @@ async def task_detail(
     """任务详情页聚合：定稿需求（文档定稿版本）+ 同需求拆解任务 + 定稿方案 md + SSE 过滤用 runner 任务号。"""
     from ..models import PlanVersion, RunnerTask
 
-    task = await db.get(DevTask, task_id)
-    if not task:
-        raise HTTPException(404, "任务不存在")
+    task = await _get_open_task(db, task_id, me)
     req = await db.get(Requirement, task.requirement_id)
     project = await db.get(Project, req.project_id)
 
@@ -177,8 +208,8 @@ async def task_events(
 
     长任务事件数可上万，超量时取最近的：回放要看的是「现在做到哪」，不是开头。
     """
-    if not await db.get(DevTask, task_id):
-        raise HTTPException(404, "任务不存在")
+    # 过程事件里有 AI 读到的文档/代码内容，同样按需求可见性收紧
+    await _get_open_task(db, task_id, me)
     rows = (
         await db.scalars(
             select(DevTaskEvent)

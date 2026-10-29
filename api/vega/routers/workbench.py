@@ -28,6 +28,7 @@ from ..models import (
     Requirement,
     RequirementDoc,
 )
+from .requirements import _can_open
 from .tasks import _runner_names
 
 router = APIRouter(prefix="/api/workbench", tags=["workbench"])
@@ -253,6 +254,7 @@ async def workbench(
     for r in reqs:
         p = projects[r.project_id]
         group = groups[p.group_id]
+        req_open = _can_open(r, _me)
         task_items = []
         outcomes = []
         for t in by_req.get(r.id, []):
@@ -265,6 +267,8 @@ async def workbench(
                     "code": t.code,
                     "title": t.title,
                     "status": t.status,
+                    # 详情页含需求文档/方案正文：与需求池同一可见性，前端据此禁用入口
+                    "can_open": req_open,
                     "branch": t.branch,
                     "runner_name": runners.get(t.id),
                     "mr_iid": t.mr_iid,
@@ -296,6 +300,7 @@ async def workbench(
                 "code": r.code,
                 "title": r.title,
                 "status": r.status,
+                "can_open": req_open,
                 "claimant_name": claimants.get(r.claimant_id),
                 "created_at": _iso(r.created_at),
                 "project_id": p.id,

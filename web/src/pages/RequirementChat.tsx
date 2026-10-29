@@ -43,6 +43,7 @@ import {
 import Markdown from "react-markdown";
 import AmSelect from "../components/AmSelect";
 import DocPreview from "../components/DocPreview";
+import { rawNode } from "../eventNodes";
 import { api, token } from "../api";
 
 interface Msg {
@@ -279,7 +280,7 @@ export function deriveSubs(evts: any[]): SubItem[] {
 }
 
 type ChainNode = ThoughtChainItemType & {
-  kind: "think" | "tool" | "sub";
+  kind: "think" | "tool" | "sub" | "raw";
   toolName?: string;
   arg?: string;
 };
@@ -335,6 +336,12 @@ export function buildChain(
           </>
         );
       }
+    } else if (e.kind === "raw") {
+      // task_progress 已由下面的子代理节点承接，再画一遍就重复了
+      if (e.subtype === "task_progress") return;
+      // 其余 system 事件（子任务/压缩/重试/拒答…）统一由 eventNodes 出节点，认不出才折叠 JSON
+      const node = rawNode(e, `${prefix}-raw-${e.uuid || i}`);
+      if (node) items.push(node);
     }
   });
   const subList = subs ?? deriveSubs(evts);
@@ -709,9 +716,10 @@ export default function RequirementChat() {
                     const i = list.findIndex((s) => s.key === item.key);
                     return i >= 0 ? list.map((s, j) => (j === i ? item : s)) : [...list, item];
                   });
-                } else if (e.kind) {
-                  // 归一化块（thinking / tool_use / tool_result）进思考链
-                  setLiveEvts((l) => [...l, e]);
+                } else {
+                  // 归一化块（thinking / tool_use / tool_result）自带 kind；system 事件
+                  //（task_started / hook_* / api_retry …）只有 type/subtype，补 raw 才能进链
+                  setLiveEvts((l) => [...l, e.kind ? e : { ...e, kind: "raw" }]);
                 }
               } else if (evt.type === "plan_text") {
                 streamingAcc += evt.text;
