@@ -2,6 +2,8 @@
 
 English | [简体中文](README.md)
 
+[![CI](https://github.com/whalezhao/vega/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/whalezhao/vega/actions/workflows/ci.yml)
+[![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-D97757?logo=claude&logoColor=white)](https://claude.com/claude-code)
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white)
