@@ -190,6 +190,20 @@ function detailNode(ev: any, key: string): ChainNode | null {
       };
     }
 
+    // 工具调用在权限检查上等了约 4 秒仍无结论时上报 checking，同一 tool_use_id
+    // 在等待结束后再报一条 done——done 只表示"不再等了"，不等于已授权
+    case "permission_check_status": {
+      const waiting = ev.status !== "done";
+      return {
+        kind: "raw",
+        key,
+        icon: waiting ? <ClockCircleOutlined /> : <CheckOutlined />,
+        title: waiting ? "等待权限确认" : "权限确认结束",
+        description: ev.agent_id ? "子代理内调用" : undefined,
+        status: waiting ? "loading" : undefined,
+      };
+    }
+
     case "compact_boundary": {
       const m = ev.compact_metadata || {};
       const from = m.pre_tokens ? `${(m.pre_tokens / 1000).toFixed(0)}k` : "?";
