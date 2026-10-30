@@ -2,6 +2,13 @@
 
 [English](README.en.md) | 简体中文
 
+[![Claude Code](https://img.shields.io/badge/Claude%20Code-D97757?logo=claude&logoColor=white)](https://claude.com/claude-code)
+![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white)
+![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)
+![Docker](https://img.shields.io/badge/Docker%20Compose-2496ED?logo=docker&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17-4169E1?logo=postgresql&logoColor=white)
+
 > 「人员 → 研发组 → 项目 → 需求 → 计划 → AI 开发任务 → MR → CI → 合入 → 通知」全流程服务化系统。
 > AI 认领需求、和人对齐方案、写出代码、提交 MR、通过 AI 代码评审与 CI、自动合入 nightly，全程 octo 群播报、人只把关关键节点。
 

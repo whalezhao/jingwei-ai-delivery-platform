@@ -2,6 +2,13 @@
 
 English | [简体中文](README.md)
 
+[![Claude Code](https://img.shields.io/badge/Claude%20Code-D97757?logo=claude&logoColor=white)](https://claude.com/claude-code)
+![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white)
+![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)
+![Docker](https://img.shields.io/badge/Docker%20Compose-2496ED?logo=docker&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17-4169E1?logo=postgresql&logoColor=white)
+
 > A service-oriented system covering the full flow: **people → teams → projects → requirements → plans → AI dev tasks → MR → CI → merge → notifications**.
 > AI claims requirements, aligns on a plan with humans, writes the code, opens the MR, passes AI code review and CI, and auto-merges into nightly — with octo group-chat updates throughout. Humans only gate the key steps.
 
