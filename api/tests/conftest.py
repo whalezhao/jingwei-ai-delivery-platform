@@ -23,6 +23,9 @@ os.environ.update(
         "VEGA_API_URL": "http://api.test",
         "VEGA_ADMIN_USERNAME": "admin",
         "VEGA_ADMIN_PASSWORD": "admin-pass",
+        # 自动评审/自动漂移默认关：既有用例只验证流程本身，别被自动投递的任务干扰
+        "VEGA_EGM_AUTO_REVIEW": "0",
+        "VEGA_EGM_AUTO_DRIFT": "0",
     }
 )
 

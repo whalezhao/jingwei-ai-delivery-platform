@@ -40,6 +40,13 @@ class Settings(BaseSettings):
 
     # claude CLI（测试时指向 stub）
     claude_bin: str = "claude"
+    # EGM 插件目录（镜像里 COPY vendor/egm /opt/egm）：只随 EGM 任务用 --plugin-dir 加载，
+    # 普通开发/初审会话看不到这七个技能，既不占上下文也不会被误触发
+    egm_plugin_dir: str = "/opt/egm"
+    # EGM 自动化开关：采用方案版本即自动发起 Goldfish 评审；每周自动跑设计-代码漂移。
+    # 部署时可用 VEGA_EGM_AUTO_REVIEW=0 / VEGA_EGM_AUTO_DRIFT=0 关闭
+    egm_auto_review: bool = True
+    egm_auto_drift: bool = True
 
     # runner 进程自身
     runner_name: str = ""

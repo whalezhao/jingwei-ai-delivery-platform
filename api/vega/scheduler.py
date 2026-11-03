@@ -105,6 +105,17 @@ async def _job_mr_autoflow() -> None:
                 log.exception("mr_autoflow failed for %s", g.name)
 
 
+async def _job_egm_drift() -> None:
+    from .routers.projects import egm_drift_sweep
+
+    async with sessionmaker()() as s:
+        try:
+            n = await egm_drift_sweep(s)
+            log.info("egm_drift queued %s project(s)", n)
+        except Exception:  # noqa: BLE001
+            log.exception("egm_drift failed")
+
+
 async def _job_backup_db() -> None:
     try:
         from .db import backup_sqlite_db
@@ -124,6 +135,9 @@ def start_scheduler() -> None:
     )
     scheduler.add_job(
         _job_code_report, "cron", day=1, hour=9, minute=15, args=["monthly"], id="monthly_stats", max_instances=1
+    )
+    scheduler.add_job(
+        _job_egm_drift, "cron", day_of_week="mon", hour=9, minute=17, id="egm_drift", max_instances=1
     )
     scheduler.add_job(_job_backup_db, "cron", hour=3, minute=17, id="backup_db", max_instances=1)
     scheduler.add_job(_job_blocked_mrs, "cron", hour=9, minute=0, id="blocked_mrs_9", max_instances=1)

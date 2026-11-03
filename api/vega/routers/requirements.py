@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, UploadFile
@@ -24,6 +25,7 @@ from ..models import (
     Person,
     PlanEvent,
     PlanMessage,
+    PlanReview,
     PlanVersion,
     Project,
     Requirement,
@@ -38,6 +40,8 @@ from ..schemas import (
     DevTaskOut,
     PlanClearIn,
     PlanMessageIn,
+    PlanReviewIn,
+    PlanReviewOut,
     PlanVersionIn,
     RequirementDocIn,
     RequirementIn,
@@ -46,6 +50,8 @@ from ..schemas import (
     RequirementUpdate,
 )
 from . import person_to_out
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/requirements", tags=["requirements"])
 
@@ -569,7 +575,10 @@ async def create_plan_version(
     db.add(version)
     await db.commit()
     await db.refresh(version)
-    return {"id": version.id, "version": version.version, "created": True}
+    out = {"id": version.id, "version": version.version, "created": True}
+    if get_settings().egm_auto_review:
+        await _auto_review_on_adopt(db, req, version)
+    return out
 
 
 @router.post("/{req_id}/claim", response_model=RequirementOut)
@@ -616,6 +625,16 @@ _PLAN_RULE = """[输出约定]
 <!-- vega:ask:end -->
 需求文档已定稿，本轮只讨论方案，不再修改需求文档。
 讨论、确认、反问不要写进方案标记；本轮没有方案/问题就不要写对应标记。"""
+
+
+_EGM_RULE = """[EGM 设计模式]
+本轮由 /egm 技能接管，按技能要求把产物写进 EGM 产物目录的文件（brainstorm → concepts_brief.md，draft → design_draft.md），不要在聊天里整篇粘贴。
+聊天只写一两句进度或问题；需要用户在几个选项间拍板时，输出提问块（选项 2~4 个）：
+<!-- vega:ask:begin -->
+{"question": "要问的问题", "options": [{"label": "选项名", "desc": "一句说明"}]}
+<!-- vega:ask:end -->
+不要再输出 vega:plan 标记块——平台会直接把 design_draft.md 作为可采用的方案卡片。
+需求文档已定稿，本轮只讨论方案，不再修改需求文档。"""
 
 
 _DOC_RULE = """[输出约定]
@@ -678,6 +697,10 @@ async def post_plan_message(
             else "需求文档未定稿，请先讨论并定稿需求文档",
         )
 
+    egm = body.egm
+    if egm and mode != "plan":
+        raise HTTPException(400, "EGM 设计技能只在方案讨论里可用（需求文档定稿后）")
+
     project = await db.get(Project, req.project_id)
     group = await db.get(DevGroup, project.group_id)
     gm = await db.scalar(
@@ -725,7 +748,7 @@ async def post_plan_message(
         if first:
             req.plan_session_id = gen_session_id()
         session_id = req.plan_session_id
-        rule = _PLAN_RULE
+        rule = _EGM_RULE if egm else _PLAN_RULE
     resume = not first
     team_id = cur_team or project.am_team_id or group.am_team_id
     agent_id = cur_agent or project.am_agent_id or (gm.am_agent_id if gm else None)
@@ -798,6 +821,28 @@ async def post_plan_message(
         "mode": mode,
         "docs": [{"id": d.id, "filename": d.filename} for d in docs],
     }
+    if egm:
+        payload["egm"] = egm
+        if egm == "brainstorm":
+            payload["egm_target"] = f"{req.title}：{req.description or ''}".strip("：") or req.title
+        elif egm == "resolve":
+            if body.review_id:
+                review = await db.get(PlanReview, body.review_id)
+                if not review or review.requirement_id != req.id:
+                    raise HTTPException(404, "评审不存在")
+            else:
+                review = await db.scalar(
+                    select(PlanReview)
+                    .where(PlanReview.requirement_id == req.id, PlanReview.status == "done")
+                    .order_by(PlanReview.id.desc())
+                    .limit(1)
+                )
+            if not review or review.status != "done" or not review.report_md:
+                raise HTTPException(400, "没有可用的评审报告，请先跑一轮 Goldfish 评审")
+            version = await db.get(PlanVersion, review.plan_version_id) if review.plan_version_id else None
+            payload["egm_review_id"] = review.id
+            payload["egm_findings"] = review.report_md
+            payload["egm_design_md"] = version.content if version else ""
     if req.plan_runner_id:
         payload["sticky_runner_id"] = req.plan_runner_id
 
@@ -820,6 +865,142 @@ async def post_plan_message(
     )
     await db.commit()
     return {"task_id": task.id, "session_id": session_id, "mode": mode}
+
+
+def _review_out(r: PlanReview) -> dict:
+    return {
+        "id": r.id,
+        "requirement_id": r.requirement_id,
+        "plan_version_id": r.plan_version_id,
+        "status": r.status,
+        "report_md": r.report_md,
+        "blockers": r.blocker_count,
+        "findings": r.findings or [],
+        "created_at": str(r.created_at) if r.created_at else None,
+    }
+
+
+async def _enqueue_plan_review(
+    db: AsyncSession, req: Requirement, version: PlanVersion, *, trigger: str
+) -> PlanReview:
+    """建评审行并投 egm_review 任务；手动按钮与「采用即评审」共用同一条链路。"""
+    project = await db.get(Project, req.project_id)
+    group = await db.get(DevGroup, project.group_id)
+    person = await db.get(Person, req.claimant_id) if req.claimant_id else None
+    env = build_claude_env(
+        resolve_llm(person, group),
+        team_id=project.am_team_id or group.am_team_id,
+        agent_id=project.am_agent_id,
+        user_key=am_user_key(person),
+        conversation_id=gen_session_id(),
+    )
+    review = PlanReview(requirement_id=req.id, plan_version_id=version.id, status="running")
+    db.add(review)
+    await db.flush()
+    payload = {
+        "requirement_id": req.id,
+        "egm_review_id": review.id,
+        "design_md": version.content,
+        "trigger": trigger,  # auto / manual：报告留痕，便于排查自动触发是否生效
+    }
+    secrets = {"claude_env": env}
+    token = decrypt(get_settings().secret_key, group.gitlab_token_enc)
+    if group.gitlab_base_url and token:
+        payload["git_http_url"] = f"{group.gitlab_base_url.rstrip('/')}/{project.path}.git"
+        payload["default_branch"] = project.default_branch
+        secrets["git_token"] = token
+    task = await enqueue(
+        db,
+        type="egm_review",
+        payload=payload,
+        secrets=secrets,
+        requirement_id=req.id,
+        status="queued",
+    )
+    review.runner_task_id = task.id
+    return review
+
+
+async def _auto_review_on_adopt(db: AsyncSession, req: Requirement, version: PlanVersion) -> None:
+    """采用方案即自动送 Goldfish 评审；投递失败只记日志，绝不影响「采用」本身。"""
+    try:
+        if not await _has_final_doc(db, req.id):
+            log.info("需求 %s 文档未定稿，跳过自动评审 version=%s", req.id, version.id)
+            return
+        running = await db.scalar(
+            select(PlanReview.id)
+            .where(PlanReview.requirement_id == req.id, PlanReview.status == "running")
+            .limit(1)
+        )
+        if running:
+            log.info("需求 %s 已有评审在跑，跳过自动评审 version=%s", req.id, version.id)
+            return
+        review = await _enqueue_plan_review(db, req, version, trigger="auto")
+        await db.commit()
+        log.info("需求 %s 采用方案版本 %s，自动投递评审 review=%s", req.id, version.id, review.id)
+    except Exception:
+        await db.rollback()
+        log.exception("需求 %s 自动评审投递失败（采用方案不受影响）", req.id)
+
+
+@router.post("/{req_id}/plan/review", response_model=PlanReviewOut)
+async def create_plan_review(
+    req_id: int,
+    body: PlanReviewIn,
+    db: AsyncSession = Depends(get_db),
+    me: Person = Depends(current_person),
+) -> dict:
+    """发起 Goldfish 评审：零上下文的独立任务，评审指定（缺省最新）方案版本。
+
+    不进方案会话——评审的全部价值来自独立上下文；报告落库，前端抽屉回看。
+    """
+    req = await _get_req(db, req_id)
+    if req.claimant_id != me.id and not me.is_admin:
+        raise HTTPException(403, "只有认领人可发起评审")
+    if not await _has_final_doc(db, req.id):
+        raise HTTPException(400, "需求文档未定稿，先定稿再评审方案")
+    if body.plan_version_id:
+        version = await db.get(PlanVersion, body.plan_version_id)
+        if not version or version.requirement_id != req.id:
+            raise HTTPException(404, "方案版本不存在")
+    else:
+        version = await db.scalar(
+            select(PlanVersion)
+            .where(PlanVersion.requirement_id == req.id)
+            .order_by(PlanVersion.id.desc())
+            .limit(1)
+        )
+    if not version:
+        raise HTTPException(400, "还没有方案版本，先在对话里采用一版方案")
+    running = await db.scalar(
+        select(PlanReview.id)
+        .where(PlanReview.requirement_id == req.id, PlanReview.status == "running")
+        .limit(1)
+    )
+    if running:
+        raise HTTPException(400, "该需求已有一轮评审在跑，请等它结束")
+
+    review = await _enqueue_plan_review(db, req, version, trigger="manual")
+    await db.commit()
+    return _review_out(review)
+
+
+@router.get("/{req_id}/plan/reviews", response_model=list[PlanReviewOut])
+async def list_plan_reviews(
+    req_id: int,
+    db: AsyncSession = Depends(get_db),
+    me: Person = Depends(current_person),
+) -> list[dict]:
+    req = await _get_req_open(db, req_id, me)
+    rows = (
+        await db.scalars(
+            select(PlanReview)
+            .where(PlanReview.requirement_id == req.id)
+            .order_by(PlanReview.id.desc())
+            .limit(20)
+        )
+    ).all()
+    return [_review_out(r) for r in rows]
 
 
 @router.post("/{req_id}/plan/stop")

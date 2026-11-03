@@ -64,6 +64,9 @@ RUN mkdir -p "$CLAUDE_CONFIG_DIR" \
  && claude plugin install pyright-lsp@vega-plugins \
  && claude plugin install typescript-lsp@vega-plugins \
  && claude plugin install jdtls-lsp@vega-plugins
+# EGM（elephant-goldfish-model，Apache-2.0）原样 vendor，只随 EGM 任务用 --plugin-dir 加载，
+# 不装进 marketplace：普通开发/初审会话看不到这七个技能。升级换目录，见 vendor/egm/SOURCE.txt。
+COPY vendor/egm /opt/egm
 # 全局记忆：告诉 claude 这四个能力分别管什么（MCP 由 runner 启动时按 .env 合并进 .claude.json）。
 # 内容在 api/runner-claude.md，改提示词改那个文件（claude-config 卷只在首次创建时从镜像播种）。
 COPY runner-claude.md $CLAUDE_CONFIG_DIR/CLAUDE.md

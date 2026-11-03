@@ -110,6 +110,8 @@ async def run_claude(
                     if block.get("type") == "tool_result":
                         yield {
                             "kind": "tool_result",
+                            # 并行工具/子代理的结果会乱序回来，靠 id 对上调用方
+                            "tool_use_id": block.get("tool_use_id", ""),
                             "content": _cap(_tool_result_text(block.get("content")), 8_000),
                             "is_error": bool(block.get("is_error")),
                             "parent": parent,
@@ -157,6 +159,116 @@ def dev_args(session_id: str) -> list[str]:
         "--dangerously-skip-permissions",
         "--max-turns",
         "200",
+        "--session-id",
+        session_id,
+    ]
+
+
+def _rule_path(p: str) -> str:
+    """权限规则里的路径（gitignore 四分法）：家目录内用 ~/，其余绝对路径用 //。"""
+    home = os.path.expanduser("~").rstrip("/")
+    p = p.rstrip("/")
+    if p == home:
+        return "~"
+    if p.startswith(home + "/"):
+        return "~" + p[len(home) :]
+    return "/" + p
+
+
+def egm_plan_args(session_id: str, resume: bool, artifact_dir: str) -> list[str]:
+    """EGM 方案轮（brainstorm / draft / resolve）。
+
+    与 plan_args 的差别只有两处，但都是硬需求：要开子代理（六视角、评委），
+    且要能写产物文件——而 --permission-mode plan 禁写，draft 会写不出 design_draft.md。
+    所以这里不用 plan 模式，改用「默认模式 + 白名单」：读不限，写只给产物目录，
+    Bash 仅留 memory-bridge 检索。基线仓库依旧不可写，越界写由 runner 的
+    git status 断言兜底。
+    """
+    flag = "--resume" if resume else "--session-id"
+    am = get_settings().am_base_url.rstrip("/")
+    art = _rule_path(artifact_dir)
+    return [
+        "--allowedTools",
+        ",".join(
+            [
+                "Read",
+                "Grep",
+                "Glob",
+                "LS",
+                "Agent",
+                f"Write({art}/**)",
+                f"Edit({art}/**)",
+                f"Bash(curl *{am}/memory-bridge/*)",
+            ]
+        ),
+        # EGM 支持用 CLAUDE.md 里的 `EGM artifact directory:` 指定产物目录，
+        # 无头运行没有项目 CLAUDE.md，改成同一句话走 system prompt
+        "--append-system-prompt",
+        f"EGM artifact directory: {artifact_dir.rstrip('/')}",
+        # 产物目录在 cwd（基线仓库）之外：不加 --add-dir，白名单写了也进不去
+        "--add-dir",
+        artifact_dir.rstrip("/"),
+        # 插件目录也要显式加进工作区：EGM 的技能会 Read 自己的 docs/resources/agents
+        "--add-dir",
+        get_settings().egm_plugin_dir,
+        "--plugin-dir",
+        get_settings().egm_plugin_dir,
+        flag,
+        session_id,
+    ]
+
+
+def egm_review_args(session_id: str, artifact_dir: str) -> list[str]:
+    """Goldfish 评审：只读 + 子代理，不碰仓库、不跑命令。
+
+    写权限只给产物目录 —— 主编排要落 consolidated_review_report.md；
+    评委本身在 EGM 里是只读角色，子代理继承同一白名单，但至少改不到源码与基线。
+    绝不用 --dangerously-skip-permissions：EGM 明确反对拿它绕开评委的权限约束。
+    --max-turns 给 120：5 阶段 × 每阶段多名评委，一轮评审就是几十次子代理调用。
+    """
+    art = _rule_path(artifact_dir)
+    return [
+        "--allowedTools",
+        f"Read,Grep,Glob,LS,Agent,Write({art}/**),Edit({art}/**)",
+        "--append-system-prompt",
+        f"EGM artifact directory: {artifact_dir.rstrip('/')}",
+        "--add-dir",
+        artifact_dir.rstrip("/"),
+        "--add-dir",
+        get_settings().egm_plugin_dir,
+        "--max-turns",
+        "120",
+        "--plugin-dir",
+        get_settings().egm_plugin_dir,
+        "--session-id",
+        session_id,
+    ]
+
+
+def egm_job_args(session_id: str, artifact_dir: str, work_dir: str | None = None) -> list[str]:
+    """EGM 项目级任务（bootstrap / drift）。
+
+    drift 只写产物目录；bootstrap 还要在任务独占的 worktree 里落 README 树，
+    所以写权限按调用方给的 work_dir 追加。一律不给 Bash：这两个技能只用读写。
+    """
+    art = _rule_path(artifact_dir)
+    tools = ["Read", "Grep", "Glob", "LS", "Agent", f"Write({art}/**)", f"Edit({art}/**)"]
+    if work_dir:
+        wd = _rule_path(work_dir)
+        tools += [f"Write({wd}/**)", f"Edit({wd}/**)"]
+    return [
+        "--allowedTools",
+        ",".join(tools),
+        "--append-system-prompt",
+        f"EGM artifact directory: {artifact_dir.rstrip('/')}",
+        "--add-dir",
+        artifact_dir.rstrip("/"),
+        "--add-dir",
+        get_settings().egm_plugin_dir,
+        "--max-turns",
+        "200",
+        "--plugin-dir",
+        get_settings().egm_plugin_dir,
         "--session-id",
         session_id,
     ]

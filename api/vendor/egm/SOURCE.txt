@@ -1,0 +1,6 @@
+Vendored from https://github.com/google/elephant-goldfish-model
+Path in upstream: distributions/claude/
+Commit: 403d8881d62022490637d740657b33f01e321ea8
+License: Apache-2.0 (see LICENSE)
+
+Unmodified copy. Upgrade by re-vendoring from a reviewed upstream commit; do not edit files here.

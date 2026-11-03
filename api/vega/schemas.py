@@ -15,6 +15,10 @@ EffortOpt = Annotated[Effort | None, BeforeValidator(lambda v: v or None)]
 # pm / tech_lead / qa 目前只作标识与展示，不参与认领门禁
 Role = Literal["pm", "product", "tech_lead", "dev", "qa"]
 
+# 能接进方案会话的 EGM 技能；review / review-loop / bootstrap / drift 走独立任务类型，
+# 因为它们要么必须零上下文、要么是项目级产物
+EGM_SKILL = Literal["brainstorm", "draft", "resolve"]
+
 
 class LoginIn(BaseModel):
     username: str
@@ -163,6 +167,8 @@ class ProjectIn(BaseModel):
     owner_person_ids: list[int] = []
     audit_prefixes: list[str] | None = None
     auto_approve_prefixes: list[str] | None = None
+    # 建项目时一次性动作：立刻投 EGM bootstrap（不落库，所以不需要迁移）
+    run_egm_bootstrap: bool = False
 
 
 class ProjectUpd(BaseModel):
@@ -248,6 +254,45 @@ class PlanMessageIn(BaseModel):
     # 输入框里选的团队/专家；空 = 回退项目/研发组配置。每轮随请求头切换
     team_id: str | None = None
     agent_id: str | None = None
+    # EGM 设计模式：本轮由哪个技能接管（只在方案模式可用）。空 = 普通方案对话
+    egm: EGM_SKILL | None = None
+    # egm=resolve 时引用哪一份评审报告；空 = 取该需求最新一份已完成的评审
+    review_id: int | None = None
+
+
+class PlanReviewIn(BaseModel):
+    """发起 Goldfish 评审：指定被评审的方案版本；缺省用最新定稿方案。"""
+
+    plan_version_id: int | None = None
+
+
+class PlanReviewOut(BaseModel):
+    id: int
+    requirement_id: int
+    plan_version_id: int | None = None
+    status: str
+    report_md: str | None = None
+    blockers: int = 0
+    # 结构化条目：title / severity / scope / description / recommendation
+    findings: list[dict] = Field(default_factory=list)
+    created_at: str | None = None
+
+
+class EgmJobIn(BaseModel):
+    """项目级 EGM 任务：bootstrap 生成 README 树，drift 出设计-代码漂移报告。"""
+
+    kind: Literal["bootstrap", "drift"]
+
+
+class EgmReportOut(BaseModel):
+    id: int
+    project_id: int
+    kind: str
+    status: str
+    report_md: str | None = None
+    branch: str | None = None
+    mr_url: str | None = None
+    created_at: str | None = None
 
 
 class PlanClearIn(BaseModel):

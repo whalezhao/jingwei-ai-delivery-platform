@@ -17,11 +17,21 @@ import re
 import shutil
 import socket
 import subprocess
+from datetime import date
 from pathlib import Path
 
 import httpx
 
-from .claude import ClaudeError, dev_args, plan_args, review_args, run_claude
+from .claude import (
+    ClaudeError,
+    dev_args,
+    egm_job_args,
+    egm_plan_args,
+    egm_review_args,
+    plan_args,
+    review_args,
+    run_claude,
+)
 from .config import get_settings
 from .numbering import gen_session_id
 
@@ -30,6 +40,12 @@ log = logging.getLogger("vega.runner")
 HEARTBEAT_S = 30
 EVENT_FLUSH_S = 0.3
 EVENT_FLUSH_MAX = 20
+
+# EGM 产物回传上限：design_draft.md 会整份塞进 assistant 消息，太大会把 PlanMessage 撑爆
+_EGM_ARTIFACT_CAP = 200_000
+# EGM bootstrap 的硬规则：顶层子目录超过 15 个必须先问人。无头跑没法问，
+# 直接失败并让人缩小范围，不静默开跑（一次跑到半个仓库的 README 是灾难）
+EGM_BOOTSTRAP_MAX_DIRS = 15
 
 # MR 初审口径（照 hermes 从严）：默认可批准，modify 必须是硬伤；输出契约只有一个 JSON
 MR_REVIEW_RULES = (
@@ -54,6 +70,29 @@ def _parse_verdict(text: str) -> dict:
         "summary": str(d.get("summary") or "")[:2000],
         "issues": d.get("issues") or [],
     }
+
+
+# EGM 适配段。插件已用 --plugin-dir 挂上，但无头运行还有三件事调用方必须说清：
+# 跑哪套预设（不指定 Step 时技能会停下来问用户）、产物写哪（Artifact-First 要求落文件）、
+# 代码库能不能写（评委与漂移一律只读）。
+EGM_REVIEW_RULES = """[Vega 无头运行适配]
+1) 执行 preset 1（uninterrupted）：五个阶段一次跑完，全程不要向用户提问——这是无头运行，没有人能回答。
+2) 设计文档：{target}。代码库当前检出在 {repo}，需要核对实现时读它。
+3) 所有报告写到产物目录 {art}，不要写进代码库；代码库只读，不要修改、不要 commit、不要 push。
+4) 最后必须产出 consolidated_review_report.md（写在产物目录）。
+5) 任何评委读不到 persona / 标准 / 上下文时，按 EGM 规则如实报「未完成评审」，不要编造结论。"""
+
+EGM_DRIFT_RULES = """[Vega 无头运行适配]
+1) 设计文档目录：{target}。代码库当前检出在 {repo}，设计里的文件/符号都在这个目录下找。
+2) 报告写到产物目录 {art}，不要写进代码库；代码库只读，不要修改、不要 commit、不要 push。
+3) 无头运行，没有人能回答提问，也不要建议「补链接」之类的后续动作，直接把差异写进报告。
+4) 只报差异；完全一致就写 "No drift detected."。"""
+
+EGM_BOOTSTRAP_RULES = """[Vega 无头运行适配]
+1) 目标根目录：{target}（就是当前检出目录本身）。
+2) 目录清单已由平台预扫描确认未超过 15 个子目录，不会再有人回答范围问题，直接按整棵树执行。
+3) 产物就是目标目录下的 README.md 文件，直接写进当前检出；平台会把它提交成独立分支并开 MR，不要自己 commit / push。
+4) 无头运行，全程不要向用户提问。"""
 
 
 def _base() -> str:
@@ -239,6 +278,10 @@ class Runner:
                 await self._exec_dev_task(tid, task["payload"])
             elif task["type"] == "mr_review":
                 await self._exec_mr_review(tid, task["payload"])
+            elif task["type"] == "egm_review":
+                await self._exec_egm_review(tid, task["payload"])
+            elif task["type"] == "egm_job":
+                await self._exec_egm_job(tid, task["payload"])
             else:
                 await self._result(tid, "failed", f"未知任务类型 {task['type']}")
         except ClaudeError as e:
@@ -300,21 +343,105 @@ class Runner:
         d.mkdir(parents=True, exist_ok=True)
         return str(d)
 
+    # ---------- EGM 产物目录 ----------
+
+    def _egm_dir(self, payload: dict, sub: str = "") -> Path:
+        """EGM 产物目录：按需求隔离，跨轮保留（brainstorm → draft → resolve 读同一份）。
+
+        绝不能放在基线仓库里——那是多任务共享的检出，写进去会弄脏它。
+        """
+        key = f"req-{payload['requirement_id']}" if payload.get("requirement_id") else f"project-{payload.get('project_id')}"
+        d = (self.workdir or _workdir()) / "egm" / key
+        if sub:
+            d = d / sub
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    @staticmethod
+    def _read_artifact(path: Path) -> str:
+        try:
+            s = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return ""
+        return s if len(s) <= _EGM_ARTIFACT_CAP else s[:_EGM_ARTIFACT_CAP] + "\n…（截断）"
+
+    def _egm_artifacts(self, art: Path) -> dict:
+        out: dict[str, str] = {}
+        for key, name in (("concepts_brief", "concepts_brief.md"), ("design_draft", "design_draft.md")):
+            body = self._read_artifact(art / name)
+            if body:
+                out[key] = body
+        return out
+
+    def _egm_prompt(self, payload: dict, art: Path) -> str:
+        """给发起技能的那一轮拼上 /egm 指令（egm 字段只在点技能的那一轮下发）。
+
+        egm-resolve 的输入是「目标文档 + 缺陷清单」：把被评审的方案正文写成
+        design_draft.md、评审报告写成 findings-<id>.md，让技能按路径读，不在 prompt 里复制全文。
+        """
+        skill = payload.get("egm") or ""
+        if skill == "resolve":
+            findings = art / f"findings-{payload.get('egm_review_id')}.md"
+            findings.write_text(payload.get("egm_findings") or "", encoding="utf-8")
+            design = art / "design_draft.md"
+            if payload.get("egm_design_md"):
+                design.write_text(payload["egm_design_md"], encoding="utf-8")
+            cmd = f"/egm:egm-resolve TargetFile: {design}, LineRange: full file, FindingsList: {findings}"
+        elif skill == "draft":
+            cmd = "/egm:egm-draft"
+        elif skill == "brainstorm":
+            cmd = f"/egm:egm-brainstorm {payload.get('egm_target') or ''}".rstrip()
+        else:
+            return payload["prompt"]
+        return f"{cmd}\n\n{payload['prompt']}"
+
+    @staticmethod
+    def _assert_baseline_clean(cwd: str) -> None:
+        """EGM 方案轮开了一小片写权限（只给产物目录），这里是最后一道防线。
+
+        权限规则若因路径写法不匹配而失效，模型就会静默写进共享基线；弄脏后
+        后续 fetch/checkout 全被挡，比任务失败更难查。脏了立刻失败并复原已跟踪
+        文件（未跟踪文件只报告不删——可能带着我们不想毁的证据）。
+        """
+        out = _git("status", "--porcelain", cwd=cwd, check=False).strip()
+        if not out:
+            return
+        _git("checkout", "--", ".", cwd=cwd, check=False)
+        paths = ", ".join(line[3:].strip() for line in out.splitlines()[:10])
+        raise RuntimeError(f"EGM 轮次写脏了基线仓库（已复原已跟踪文件）：{paths}")
+
     async def _exec_plan_turn(self, task_id: int, payload: dict) -> None:
         payload["prompt"] = self._with_docs(payload["prompt"], await self._docs_paths(payload))
         payload["cwd"] = await self._query_dir(payload)
         resume = payload.get("resume", False)
+        egm = payload.get("egm") or ""
+        art = self._egm_dir(payload) if egm else None
+        if art:
+            payload["prompt"] = self._egm_prompt(payload, art)
+
+        def args(replay: bool) -> list[str]:
+            if art:
+                return egm_plan_args(payload["session_id"], replay, str(art))
+            return plan_args(payload["session_id"], replay)
+
         try:
-            await self._run_plan_claude(task_id, plan_args(payload["session_id"], resume), payload)
+            text = await self._run_plan_claude(task_id, args(resume), payload)
         except ClaudeError as e:
             # 会话在 claude 侧丢失（换机器/清配置会让 --resume 永远失败，需求对话被卡死）：
             # 用同一 session id 重建会话重试。resume 轮的 prompt 不带历史上下文，重建后仅缺前文
             if not resume or "No conversation found" not in str(e):
                 raise
             await self._emit(task_id, {"kind": "text", "text": "（会话已失效，重建会话后重试）"})
-            await self._run_plan_claude(task_id, plan_args(payload["session_id"], False), payload)
+            text = await self._run_plan_claude(task_id, args(False), payload)
 
-    async def _run_plan_claude(self, task_id: int, args: list[str], payload: dict) -> None:
+        data: dict = {"text": text}
+        if art:
+            data.update(self._egm_artifacts(art))
+            if payload.get("git_http_url"):
+                self._assert_baseline_clean(payload["cwd"])
+        await self._result(task_id, "done", data=data)
+
+    async def _run_plan_claude(self, task_id: int, args: list[str], payload: dict) -> str:
         chunks: list[str] = []
         final_text = ""
         async for evt in run_claude(args, payload["claude_env"], cwd=payload.get("cwd"), prompt=payload["prompt"]):
@@ -324,7 +451,7 @@ class Runner:
             elif evt["kind"] == "result":
                 final_text = evt["text"] or final_text
             await self._emit(task_id, evt)
-        await self._result(task_id, "done", data={"text": final_text or "".join(chunks)})
+        return final_text or "".join(chunks)
 
     @staticmethod
     def _repo_slug(url: str) -> str:
@@ -602,6 +729,142 @@ class Runner:
                 if wt.exists():
                     shutil.rmtree(wt, ignore_errors=True)
                 _git("--git-dir", git_dir, "worktree", "prune", check=False)
+
+
+# ---------- EGM 项目级任务 ----------
+
+    @contextlib.asynccontextmanager
+    async def _worktree_at(self, task_id: int, payload: dict, ref: str, *, tag: str, new_branch: str | None = None):
+        """在常驻仓库上开一个本任务独占的 worktree（detach 到 ref，或新建 branch），用完即删。
+
+        常驻仓库本身是只读基线：评审/README 生成都要一个稳定快照，又不能互相
+        抢 HEAD，所以一律借 worktree。锁只包 worktree 的增删，claude 在锁外跑。
+        """
+        url = payload["git_http_url"]
+        wd = self.workdir or _workdir()
+        (wd / "worktrees").mkdir(parents=True, exist_ok=True)
+        wt = wd / "worktrees" / f"{tag}-{task_id}"
+        git_dir = ""
+        async with self._repo_lock(url):
+            repo = await self._ensure_project_repo(payload)
+            git_dir = str(repo / ".git")
+            if wt.exists():  # 上次崩溃的残留
+                _git("--git-dir", git_dir, "worktree", "remove", "--force", str(wt), check=False)
+                if wt.exists():
+                    shutil.rmtree(wt, ignore_errors=True)
+            if new_branch:
+                _git("--git-dir", git_dir, "worktree", "add", "-B", new_branch, str(wt), f"refs/heads/{ref}")
+            else:
+                _git("--git-dir", git_dir, "worktree", "add", "--detach", str(wt), f"refs/heads/{ref}")
+        try:
+            yield wt, repo
+        finally:
+            async with self._repo_lock(url):
+                _git("--git-dir", git_dir, "worktree", "remove", "--force", str(wt), check=False)
+                if wt.exists():
+                    shutil.rmtree(wt, ignore_errors=True)
+                _git("--git-dir", git_dir, "worktree", "prune", check=False)
+
+    @staticmethod
+    def _newest(art: Path, pattern: str) -> str:
+        files = sorted(art.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
+        return Runner._read_artifact(files[0]) if files else ""
+
+    async def _exec_egm_review(self, task_id: int, payload: dict) -> None:
+        """Goldfish 方案评审：独立 worktree 里只读代码，报告落产物目录。
+
+        不进方案会话——评审的全部价值来自零上下文，进已有会话就没有 Goldfish 了。
+        报告文件在 = 评审跑完；不在就是 EGM 自报的「未完成评审」，按 incomplete 记，
+        绝不当成通过。
+        """
+        art = self._egm_dir(payload, f"review-{task_id}")
+        design = art / "design.md"
+        design.write_text(payload.get("design_md") or "", encoding="utf-8")
+        prompt = f"/egm:egm-review {design}\n\n" + EGM_REVIEW_RULES.format(
+            target=design, repo="当前工作目录", art=art
+        )
+
+        chunks: list[str] = []
+        final = ""
+        # 组没配仓库时退到产物目录：没有代码可读，仍能审设计文档本身
+        if payload.get("git_http_url"):
+            ctx = self._worktree_at(task_id, payload, payload["default_branch"], tag="egm-review")
+        else:
+            ctx = contextlib.nullcontext((art, None))
+        async with ctx as (cwd, _repo):
+            args = egm_review_args(gen_session_id(), str(art))
+            async for evt in run_claude(args, payload["claude_env"], cwd=str(cwd), prompt=prompt):
+                if evt["kind"] == "text" and not evt.get("parent"):
+                    chunks.append(evt["text"])
+                elif evt["kind"] == "result" and evt.get("text"):
+                    final = evt["text"]
+                await self._emit(task_id, evt)
+
+        report = self._read_artifact(art / "consolidated_review_report.md")
+        await self._result(
+            task_id,
+            "done",
+            data={
+                "status": "reviewed" if report else "incomplete",
+                "report_md": report or final or "".join(chunks),
+            },
+        )
+
+    async def _exec_egm_job(self, task_id: int, payload: dict) -> None:
+        kind = payload.get("kind")
+        art = self._egm_dir(payload, f"{kind}-{task_id}")
+        if kind == "bootstrap":
+            await self._exec_bootstrap(task_id, payload, art)
+        elif kind == "drift":
+            await self._exec_drift(task_id, payload, art)
+        else:
+            raise RuntimeError(f"未知 EGM 任务 {kind}")
+
+    async def _exec_bootstrap(self, task_id: int, payload: dict, art: Path) -> None:
+        """生成 README 树：产物写专属 worktree，平台提交后推分支（不碰默认分支）。"""
+        branch = payload.get("branch") or f"egm/bootstrap-{date.today().isoformat()}"
+        async with self._worktree_at(
+            task_id, payload, payload["default_branch"], tag="egm-bootstrap", new_branch=branch
+        ) as (wt, _repo):
+            # EGM 要求「子目录 >15 先问人」。无头跑问不了人，提前失败让人缩小范围
+            dirs = [p for p in wt.iterdir() if p.is_dir() and not p.name.startswith(".")]
+            if len(dirs) > EGM_BOOTSTRAP_MAX_DIRS:
+                raise RuntimeError(
+                    f"顶层子目录 {len(dirs)} 个，超过 EGM 上限 {EGM_BOOTSTRAP_MAX_DIRS}，请先缩小范围再跑"
+                )
+            _git("config", "user.name", "Vega Agent", cwd=str(wt))
+            _git("config", "user.email", "vega@runner.local", cwd=str(wt))
+            prompt = f"/egm:egm-bootstrap {wt}\n\n" + EGM_BOOTSTRAP_RULES.format(target=wt, repo=wt, art=art)
+            args = egm_job_args(gen_session_id(), str(art), work_dir=str(wt))
+            async for evt in run_claude(args, payload["claude_env"], cwd=str(wt), prompt=prompt):
+                await self._emit(task_id, evt)
+
+            if not _git("status", "--porcelain", cwd=str(wt)).strip():
+                raise RuntimeError("bootstrap 没有产出任何文件")
+            _git("add", "-A", cwd=str(wt))
+            _git("commit", "-qm", "docs: EGM bootstrap 生成目录 README", cwd=str(wt))
+            stat = _git("show", "--stat", "--oneline", "HEAD", cwd=str(wt))
+            authed = self._with_token(payload["git_http_url"], payload["git_token"])
+            _git("push", authed, f"HEAD:refs/heads/{branch}", "--force", cwd=str(wt))
+
+        await self._result(task_id, "done", data={"status": "pushed", "branch": branch, "report_md": stat})
+
+    async def _exec_drift(self, task_id: int, payload: dict, art: Path) -> None:
+        """设计 vs 代码漂移：定稿方案先落成临时 docs/designs（只在 worktree 内，不提交）。"""
+        async with self._worktree_at(task_id, payload, payload["default_branch"], tag="egm-drift") as (wt, _repo):
+            ddir = wt / "docs" / "designs"
+            ddir.mkdir(parents=True, exist_ok=True)
+            for d in payload.get("designs") or []:
+                name = re.sub(r"[^\w.-]+", "_", str(d.get("code") or "design"))[:80]
+                (ddir / f"{name}.md").write_text(d.get("content") or "", encoding="utf-8")
+            prompt = f"/egm:egm-drift-report {ddir}\n\n" + EGM_DRIFT_RULES.format(target=ddir, repo=wt, art=art)
+            args = egm_job_args(gen_session_id(), str(art))
+            async for evt in run_claude(args, payload["claude_env"], cwd=str(wt), prompt=prompt):
+                await self._emit(task_id, evt)
+
+        # 报告名带日期（{YYYY-MM-DD}_DRIFT_REPORT.md），取最新一份
+        report = self._newest(art, "*DRIFT_REPORT*.md")
+        await self._result(task_id, "done", data={"status": "done", "report_md": report})
 
 
 def bootstrap() -> dict[str, list[str]]:

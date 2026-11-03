@@ -16,7 +16,8 @@ from .db import engine
 from .models import RunnerTask, utcnow
 
 # PG 用 SKIP LOCKED + ->>；SQLite 用 json_extract（dev 单写锁足够）
-# 认领优先级：MR 初审有时效（MR 开着等结论）插队，方案会话次之，开发任务垫底
+# 认领优先级：MR 初审有时效（MR 开着等结论）插队，方案会话次之，
+# EGM 评审再次之，开发任务与项目级 EGM 任务（bootstrap/drift）垫底
 # :rid 赋值给 integer 列、:rid_txt 参与 JSON 文本比较——同一个参数两处用会让 PG 只能推断出一种类型
 _CLAIM_PG = """
 UPDATE runner_task SET status='claimed', runner_id=:rid, claimed_at=:now
@@ -25,7 +26,7 @@ WHERE id = (
   WHERE status='queued'
     AND (payload->>'sticky_runner_id' IS NULL
          OR payload->>'sticky_runner_id' = :rid_txt)
-  ORDER BY CASE type WHEN 'mr_review' THEN 0 WHEN 'plan_turn' THEN 1 ELSE 2 END, id LIMIT 1
+  ORDER BY CASE type WHEN 'mr_review' THEN 0 WHEN 'plan_turn' THEN 1 WHEN 'egm_review' THEN 2 ELSE 3 END, id LIMIT 1
   FOR UPDATE SKIP LOCKED
 ) RETURNING id, type, payload, secrets
 """
@@ -37,7 +38,7 @@ WHERE id = (
   WHERE status='queued'
     AND (json_extract(payload,'$.sticky_runner_id') IS NULL
          OR json_extract(payload,'$.sticky_runner_id') = :rid)
-  ORDER BY CASE type WHEN 'mr_review' THEN 0 WHEN 'plan_turn' THEN 1 ELSE 2 END, id LIMIT 1
+  ORDER BY CASE type WHEN 'mr_review' THEN 0 WHEN 'plan_turn' THEN 1 WHEN 'egm_review' THEN 2 ELSE 3 END, id LIMIT 1
 ) RETURNING id, type, payload, secrets
 """
 

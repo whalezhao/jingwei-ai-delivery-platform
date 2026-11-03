@@ -226,6 +226,30 @@ class PlanVersion(Base):
     created_at: Mapped[datetime] = mapped_column(TZDateTime, default=utcnow)
 
 
+class PlanReview(Base):
+    """EGM Goldfish 方案评审：一轮评审一行，报告留库供前端抽屉回看。
+
+    status=incomplete 是 EGM 的「评委读不到 persona/标准，自报未完成」——
+    必须与 done 分开记，否则会把一次没跑成的评审当成「通过」。
+    """
+
+    __tablename__ = "plan_review"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    requirement_id: Mapped[int] = mapped_column(ForeignKey("requirement.id"), index=True)
+    plan_version_id: Mapped[int | None] = mapped_column(ForeignKey("plan_version.id"))
+    runner_task_id: Mapped[int | None] = mapped_column(ForeignKey("runner_task.id"), index=True)
+    status: Mapped[str] = mapped_column(String(16), default="running")  # running/done/incomplete/failed
+    report_md: Mapped[str | None] = mapped_column(Text)
+    findings: Mapped[list | None] = mapped_column(JSON)  # 报告里能解析出 JSON 条目时填，否则空
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(TZDateTime, default=utcnow, onupdate=utcnow)
+
+    @property
+    def blocker_count(self) -> int:
+        return sum(1 for f in (self.findings or []) if (f or {}).get("severity") == "Blocker")
+
+
 class DevTask(Base):
     __tablename__ = "dev_task"
 
@@ -361,6 +385,27 @@ class MrReview(Base):
     commented: Mapped[bool] = mapped_column(Boolean, default=False)
     flow_state: Mapped[str] = mapped_column(String(24), default="")  # "" / merged / conflict_notified / hold_not_mergeable
     error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(TZDateTime, default=utcnow, onupdate=utcnow)
+
+
+class EgmReport(Base):
+    """项目级 EGM 产物：bootstrap（README 树）与 drift（设计-代码漂移）。
+
+    bootstrap 会写大量文件，只落在独立 worktree 并推 branch 开 MR，branch 记在这里
+    让人知道去哪看；drift 只读，branch 为空。
+    """
+
+    __tablename__ = "egm_report"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("dev_project.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(16))  # bootstrap / drift
+    runner_task_id: Mapped[int | None] = mapped_column(ForeignKey("runner_task.id"), index=True)
+    status: Mapped[str] = mapped_column(String(16), default="running")  # running/done/failed
+    report_md: Mapped[str | None] = mapped_column(Text)
+    branch: Mapped[str | None] = mapped_column(String(256))
+    mr_url: Mapped[str | None] = mapped_column(String(512))
     created_at: Mapped[datetime] = mapped_column(TZDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(TZDateTime, default=utcnow, onupdate=utcnow)
 

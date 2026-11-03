@@ -26,9 +26,11 @@ from ..models import (
     DevGroup,
     DevTask,
     DevTaskEvent,
+    EgmReport,
     MrReview,
     Person,
     PlanEvent,
+    PlanReview,
     Project,
     Requirement,
     RequirementDoc,
@@ -217,6 +219,9 @@ async def post_events(
         if kind == "text" and not evt.get("parent"):
             # plan 直播气泡只吃主会话文本；子 agent 输出走 dev_raw 泳道
             _pub(task.requirement_id, {"type": "plan_text", "text": evt.get("text", ""), "mode": plan_mode})
+        elif kind == "text" and not task.dev_task_id:
+            # 子 agent 正文不并进主气泡，交给前端挂到派发它的 Agent 节点里
+            _pub(task.requirement_id, {"type": "plan_raw", "event": evt, "mode": plan_mode})
         elif kind == "raw":
             # 原始流事件：开发任务走 live 频道；plan 任务（thinking_tokens 计量、
             # task_progress 子代理进度）走 plan 频道，前端渲染思考块+子代理进展
@@ -227,8 +232,9 @@ async def post_events(
         elif kind != "result" and task.dev_task_id:
             # thinking / tool_use / tool_result：开发任务的过程细节也走 live 频道
             _pub(task.requirement_id, {"type": "dev_raw", "task_id": task_id, "event": evt})
-        elif kind in ("thinking", "tool_use", "tool_result") and not evt.get("parent"):
-            # plan 会话的主会话过程（思考/工具链）也直播，前端渲染思考块+思考链
+        elif kind in ("thinking", "tool_use", "tool_result"):
+            # plan 会话过程（含子 agent，事件自带 parent）直播；前端按 parent 分包，
+            # 主链只留一个 Agent 节点，子事件嵌在里面
             _pub(task.requirement_id, {"type": "plan_raw", "event": evt, "mode": plan_mode})
     return {"ok": True}
 
@@ -267,6 +273,10 @@ async def post_result(
         await _finish_dev_task(db, task, body)
     elif task.type == "mr_review":
         await _finish_mr_review(db, task, body)
+    elif task.type == "egm_review":
+        await _finish_egm_review(db, task, body)
+    elif task.type == "egm_job":
+        await _finish_egm_job(db, task, body)
     await db.commit()
     return {"ok": True}
 
@@ -291,6 +301,11 @@ async def _finish_plan_turn(db: AsyncSession, task: RunnerTask, body: TaskResult
     mode = (task.payload or {}).get("mode", "plan")
     if body.status == "done":
         text = body.data.get("text", "")
+        draft = (body.data.get("design_draft") or "").strip()
+        if draft and "<!-- vega:plan:begin -->" not in text:
+            # EGM 把方案写在 design_draft.md 里；平台包成方案块，「采用此方案」流程不变
+            block = f"<!-- vega:plan:begin -->\n{draft}\n<!-- vega:plan:end -->"
+            text = f"{text}\n\n{block}" if text.strip() else block
         msg = PlanMessage(requirement_id=req.id, role="assistant", content=text, mode=mode)
         db.add(msg)
         # 不自动成版：AI 只在交出方案时用标记包住正文，人点「采用此方案」才建 PlanVersion
@@ -317,6 +332,167 @@ async def _finish_plan_turn(db: AsyncSession, task: RunnerTask, body: TaskResult
                 "type": "plan_done",
                 "message": {"id": msg.id, "role": "assistant", "content": text, "mode": mode, "events": events},
             },
+        )
+
+
+def _review_payload(review: PlanReview) -> dict:
+    return {
+        "id": review.id,
+        "requirement_id": review.requirement_id,
+        "plan_version_id": review.plan_version_id,
+        "status": review.status,
+        "report_md": review.report_md,
+        "blockers": review.blocker_count,
+        "findings": review.findings or [],
+        "created_at": str(review.created_at) if review.created_at else None,
+    }
+
+
+# EGM 合并报告模板：`### [Issue Name] - Severity: [Blocker | Major | Nit]`
+_FINDING_RE = re.compile(
+    r"^#{2,6}\s*(?P<title>.+?)\s*[-–—]\s*\**Severity\**\s*:\s*\[?\s*\**\s*(?P<sev>Blocker|Major|Nit)\b",
+    re.MULTILINE | re.IGNORECASE,
+)
+# 报告没按模板出标题时，退化成按严重度标记计数（🔴 Blocker / 🟡 Major / 🟢 Nit）
+_MARK_RE = re.compile(r"(?:🔴|🟡|🟢)\s*\**\s*(Blocker|Major|Nit)\b", re.IGNORECASE)
+# 条目下的字段：`* **Affected Scope:** ...`，值可能跨行，到下一个带标签的 bullet 为止
+_FIELD_TPL = (
+    r"^[*-]\s*\**\s*%s\s*\**\s*:\s*\**\s*(?P<v>.*?)"
+    r"(?=\n\s*[*-]\s*\**\s*[A-Za-z][^\n:*]{0,40}\**\s*:|\Z)"
+)
+
+
+def _field(block: str, label: str) -> str:
+    hit = re.search(
+        _FIELD_TPL % re.escape(label), block, re.MULTILINE | re.DOTALL | re.IGNORECASE
+    )
+    return " ".join(hit.group("v").split()) if hit else ""
+
+
+def parse_findings(report: str | None) -> list[dict]:
+    """从 Goldfish 报告里抽条目：标题/严重度/影响范围/描述/建议；没有标题时按严重度标记兜底。"""
+    text = report or ""
+    matches = list(_FINDING_RE.finditer(text))
+    rows = []
+    for i, m in enumerate(matches):
+        block = text[m.end() : matches[i + 1].start() if i + 1 < len(matches) else len(text)]
+        rows.append(
+            {
+                "title": m.group("title").strip(" *#"),
+                "severity": m.group("sev").capitalize(),
+                "scope": _field(block, "Affected Scope"),
+                "description": _field(block, "Discrepancy Description"),
+                "recommendation": _field(block, "Rationale & Recommendation"),
+            }
+        )
+    if not rows:
+        rows = [{"title": "", "severity": m.group(1).capitalize()} for m in _MARK_RE.finditer(text)]
+    return rows
+
+
+async def _finish_egm_review(db: AsyncSession, task: RunnerTask, body: TaskResultIn) -> None:
+    """Goldfish 评审收尾：report 在 = done；不在 = incomplete（EGM 自报未完成），绝不算通过。"""
+    review_id = (task.payload or {}).get("egm_review_id")
+    review = await db.get(PlanReview, review_id) if review_id else None
+    if not review:
+        return
+    if body.status == "done":
+        review.status = "done" if body.data.get("status") == "reviewed" else "incomplete"
+        review.report_md = body.data.get("report_md") or ""
+        review.findings = parse_findings(review.report_md) or None
+    else:
+        review.status = "failed"
+        review.report_md = scrub_token(body.error or "执行失败")
+    if review.status in ("incomplete", "failed"):
+        head = "⚠️ Goldfish 评审未完成" if review.status == "incomplete" else "❌ Goldfish 评审失败"
+        detail = ((review.report_md or "").strip()[:200] or "（无输出）") + "\n可重新发起评审。"
+        await _notify_review(db, task, reason=f"egm_review_{review.status}", head=head, detail=detail)
+    elif review.blocker_count:
+        blockers = [f for f in (review.findings or []) if f.get("severity") == "Blocker"]
+        titles = "\n".join(f"- {f['title']}" for f in blockers[:3] if f.get("title"))
+        await _notify_review(
+            db,
+            task,
+            reason="egm_review_blockers",
+            head=f"🔴 Goldfish 评审发现 {review.blocker_count} 个阻塞项",
+            detail=(titles + "\n" if titles else "") + "在「评审报告」里查看，并按结论修订方案。",
+        )
+    if task.requirement_id:
+        _pub(
+            task.requirement_id,
+            {"type": "plan_review_done", "mode": "plan", "review": _review_payload(review)},
+        )
+
+
+async def _notify_review(db: AsyncSession, task: RunnerTask, *, reason: str, head: str, detail: str) -> None:
+    """评审结果要有人接：@ 认领人和项目负责人，避免自动跑完没人看。"""
+    req = await db.get(Requirement, task.requirement_id) if task.requirement_id else None
+    project = await db.get(Project, req.project_id) if req else None
+    group = await db.get(DevGroup, project.group_id) if project else None
+    if not (req and project and group):
+        return
+    claimant = await db.get(Person, req.claimant_id) if req.claimant_id else None
+    await notify(
+        db,
+        group,
+        f"{head}：{req.code} {req.title}\n{detail}",
+        reason=reason,
+        mention=merge_mentions(claimant, *(await project_owners(db, project.id))),
+    )
+
+
+async def _finish_egm_job(db: AsyncSession, task: RunnerTask, body: TaskResultIn) -> None:
+    p = task.payload or {}
+    rep = await db.get(EgmReport, p.get("egm_job_id")) if p.get("egm_job_id") else None
+    if not rep:
+        return
+    project = await db.get(Project, rep.project_id)
+    group = await db.get(DevGroup, project.group_id) if project else None
+    owners = await project_owners(db, project.id) if project else []
+
+    if body.status != "done":
+        rep.status = "failed"
+        rep.report_md = scrub_token(body.error or "执行失败")
+        if group:
+            await notify(
+                db,
+                group,
+                f"❌ EGM {rep.kind} 执行失败：{rep.report_md[:200]}",
+                reason="egm_job_failed",
+                mention=merge_mentions(*owners),
+            )
+        return
+
+    rep.status = "done"
+    rep.report_md = body.data.get("report_md") or ""
+    rep.branch = body.data.get("branch")
+
+    # bootstrap 的分支由 runner 推上来，服务端确定性建 MR（与开发任务同一套 GitLab 客户端）
+    if rep.kind == "bootstrap" and rep.branch and group and project:
+        gl = _gitlab(group)
+        if gl:
+            reviewers = [x.gitlab_username for x in owners if x.gitlab_username]
+            try:
+                async with client_ctx() as client:
+                    mr = await gl.create_mr(
+                        client,
+                        project.gitlab_project_id,
+                        source=rep.branch,
+                        target=project.default_branch,
+                        title=f"docs: EGM bootstrap 生成目录 README（{project.path}）",
+                        description="由 Vega 的 EGM bootstrap 生成，审阅后合入。\n\n🤖 Generated with Vega",
+                        assignee_usernames=reviewers,
+                    )
+                rep.mr_url = mr.get("web_url")
+            except Exception as e:  # noqa: BLE001 MR 失败不推翻已推的分支
+                log.warning("egm bootstrap MR failed for %s", project.path, exc_info=True)
+                rep.report_md += f"\n\nMR 创建失败：{e}"
+        await notify(
+            db,
+            group,
+            f"📚 EGM bootstrap 完成：{project.path}\n分支 {rep.branch} → {project.default_branch}\n{rep.mr_url or ''}",
+            reason="egm_bootstrap",
+            mention=merge_mentions(*owners),
         )
 
 
