@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button, Input, Space, Tabs, Tag, Tooltip, Typography, message } from "antd";
+import { useTranslation } from "react-i18next";
 import ResizableTable from "../ResizableTable";
 import { api } from "../api";
+import type { MsgKey } from "../i18n";
 import Page from "../Page";
 
 interface Paged<T> {
@@ -11,17 +13,17 @@ interface Paged<T> {
 
 const PAGE_SIZE = 20;
 
-const VERDICT: Record<string, [string, string]> = {
-  pending: ["blue", "评审中"],
-  approve: ["green", "✅ 可批准"],
-  modify: ["orange", "⚠️ 需修改"],
-  failed: ["red", "失败"],
+const VERDICT: Record<string, [string, MsgKey]> = {
+  pending: ["blue", "integrations.verdict.pending"],
+  approve: ["green", "integrations.verdict.approve"],
+  modify: ["orange", "integrations.verdict.modify"],
+  failed: ["red", "integrations.verdict.failed"],
 };
 
-const FLOW: Record<string, [string, string]> = {
-  merged: ["green", "已自动合并"],
-  conflict_notified: ["red", "冲突已@人"],
-  hold_not_mergeable: ["orange", "待重试"],
+const FLOW: Record<string, [string, MsgKey]> = {
+  merged: ["green", "integrations.flow.merged"],
+  conflict_notified: ["red", "integrations.flow.conflict_notified"],
+  hold_not_mergeable: ["orange", "integrations.flow.hold_not_mergeable"],
 };
 
 /** 分页表格的公共拉取：三个日志 Tab 结构一致，抽一个 hook 少写三遍。
@@ -68,6 +70,7 @@ function LogSearch({ onChange, placeholder }: { onChange: (v: string) => void; p
 }
 
 function Credentials() {
+  const { t } = useTranslation();
   const [sum, setSum] = useState<any>(null);
   const [octo, setOcto] = useState<any>(null);
   const [tok, setTok] = useState("");
@@ -92,7 +95,7 @@ function Credentials() {
       // 保存即验证：能拉到群列表才算真的连上 octo
       const g = await api<{ items: any[]; error: string | null }>("/api/integrations/octo-groups");
       if (g.error) message.warning(g.error);
-      else message.success(`已连接 octo：bot 在 ${g.items.length} 个群里`);
+      else message.success(t("integrations.octoConnected", { n: g.items.length }));
     } catch (e: any) {
       message.error(e.message);
     } finally {
@@ -104,11 +107,13 @@ function Credentials() {
   return (
     <div>
       <p>
-        octo 全局 bot（拉群列表、发群通知都用它；研发组选群不必再有本组 token）：
+        {t("integrations.octoIntro")}
         {octo?.has_token ? (
-          <Tag color="green">已配置{octo.source === "env" ? " · 来自 .env" : ""}</Tag>
+          <Tag color="green">
+            {octo.source === "env" ? t("integrations.configuredEnv") : t("integrations.configured")}
+          </Tag>
         ) : (
-          <Tag color="red">未配置</Tag>
+          <Tag color="red">{t("integrations.notConfigured")}</Tag>
         )}
         <Typography.Text type="secondary">API {octo?.api_url}</Typography.Text>
       </p>
@@ -116,14 +121,16 @@ function Credentials() {
         <Input.Password
           value={tok}
           onChange={(e) => setTok(e.target.value)}
-          placeholder={octo?.has_token ? "已配置；输入新 token 覆盖，留空保存 = 清除" : "粘贴 bot token"}
+          placeholder={
+            octo?.has_token ? t("integrations.tokenPlaceholderSet") : t("integrations.tokenPlaceholderNew")
+          }
         />
         <Button type="primary" loading={busy} onClick={saveOcto}>
-          保存并连接
+          {t("integrations.saveConnect")}
         </Button>
       </Space.Compact>
       <p>
-        全局 Webhook 地址（GitLab 项目统一配这一个 URL，靠各组 Secret 识别归属）：
+        {t("integrations.webhookIntro")}
         <br />
         <Typography.Text copyable code>{sum.webhook_url}</Typography.Text>
       </p>
@@ -133,23 +140,23 @@ function Credentials() {
         pagination={false}
         dataSource={sum.groups}
         columns={[
-          { title: "研发组", dataIndex: "name" },
+          { title: t("integrations.colGroup"), dataIndex: "name" },
           {
-            title: "Webhook Secret",
+            title: t("integrations.colSecret"),
             dataIndex: "webhook_secret",
             render: (v) => (v ? <Typography.Text copyable code>{v}</Typography.Text> : "—"),
           },
           {
-            title: "octo bot",
+            title: t("integrations.colOctoBot"),
             dataIndex: "has_octo_bot_token",
             render: (v) =>
               v ? (
-                <Tooltip title="本组用自己的 bot token 发群通知；在「研发组」页编辑里配置">
-                  <Tag color="green">独立 bot</Tag>
+                <Tooltip title={t("integrations.ownBotTip")}>
+                  <Tag color="green">{t("integrations.ownBot")}</Tag>
                 </Tooltip>
               ) : (
-                <Tooltip title="未配置本组 token，发通知用全局 bot；可在「研发组」页编辑里填本组 token">
-                  <Tag>全局 bot</Tag>
+                <Tooltip title={t("integrations.globalBotTip")}>
+                  <Tag>{t("integrations.globalBot")}</Tag>
                 </Tooltip>
               ),
           },
@@ -160,11 +167,12 @@ function Credentials() {
 }
 
 function GitlabEvents() {
+  const { t } = useTranslation();
   const [q, setQ] = useState("");
   const { data, page, setPage, loading } = usePaged<any>("/api/integrations/events", q);
   return (
     <>
-      <LogSearch onChange={setQ} placeholder="事件类型，如 push / merge_request" />
+      <LogSearch onChange={setQ} placeholder={t("integrations.eventsPlaceholder")} />
       <ResizableTable<any>
         rowKey="id"
         size="small"
@@ -178,16 +186,16 @@ function GitlabEvents() {
         }}
         columns={[
           { title: "ID", dataIndex: "id", width: 70 },
-          { title: "事件", dataIndex: "event_type", render: (v) => <Tag>{v}</Tag> },
-          { title: "组", dataIndex: "group_id", width: 70 },
+          { title: t("integrations.colEvent"), dataIndex: "event_type", render: (v) => <Tag>{v}</Tag> },
+          { title: t("integrations.colGroupShort"), dataIndex: "group_id", width: 70 },
           {
-            title: "摘要",
+            title: t("integrations.colSummary"),
             render: (_, r) => {
               const a = r.payload?.object_attributes || {};
               return a.title || a.ref || (r.payload?.project && r.payload.project.name) || "—";
             },
           },
-          { title: "处理时间", dataIndex: "handled_at", render: (v) => (v ? v.slice(0, 19) : "未处理") },
+          { title: t("integrations.colHandled"), dataIndex: "handled_at", render: (v) => (v ? v.slice(0, 19) : t("integrations.unhandled")) },
         ]}
       />
     </>
@@ -195,11 +203,12 @@ function GitlabEvents() {
 }
 
 function NotifyLogs() {
+  const { t } = useTranslation();
   const [q, setQ] = useState("");
   const { data, page, setPage, loading } = usePaged<any>("/api/integrations/notify-logs", q);
   return (
     <>
-      <LogSearch onChange={setQ} placeholder="通知内容 / 原因" />
+      <LogSearch onChange={setQ} placeholder={t("integrations.notifyPlaceholder")} />
       <ResizableTable<any>
         rowKey="id"
         size="small"
@@ -208,20 +217,20 @@ function NotifyLogs() {
         pagination={{ current: page, pageSize: PAGE_SIZE, total: data.total, onChange: setPage }}
         columns={[
           { title: "ID", dataIndex: "id", width: 70 },
-          { title: "原因", dataIndex: "reason", render: (v) => <Tag>{v}</Tag> },
+          { title: t("integrations.colReason"), dataIndex: "reason", render: (v) => <Tag>{v}</Tag> },
           {
-            title: "结果",
+            title: t("integrations.colResult"),
             dataIndex: "ok",
-            render: (v) => (v ? <Tag color="green">已送达</Tag> : <Tag color="red">失败</Tag>),
+            render: (v) => (v ? <Tag color="green">{t("integrations.delivered")}</Tag> : <Tag color="red">{t("integrations.verdict.failed")}</Tag>),
           },
           {
-            title: "内容",
+            title: t("integrations.colContent"),
             dataIndex: "content",
             ellipsis: true,
             render: (v) => <span style={{ whiteSpace: "pre-wrap" }}>{v}</span>,
           },
           { title: "@", dataIndex: "mentioned_uids", width: 90, render: (v: any[]) => (v?.length ? v.length : "—") },
-          { title: "时间", dataIndex: "created_at", width: 160, render: (v) => v?.slice(0, 19) },
+          { title: t("integrations.colTime"), dataIndex: "created_at", width: 160, render: (v) => v?.slice(0, 19) },
         ]}
       />
     </>
@@ -229,11 +238,12 @@ function NotifyLogs() {
 }
 
 function MrReviews() {
+  const { t } = useTranslation();
   const [q, setQ] = useState("");
   const { data, page, setPage, loading } = usePaged<any>("/api/integrations/mr-reviews", q);
   return (
     <>
-      <LogSearch onChange={setQ} placeholder="MR 标题 / 项目路径" />
+      <LogSearch onChange={setQ} placeholder={t("integrations.mrPlaceholder")} />
       <ResizableTable<any>
         rowKey="id"
         size="small"
@@ -242,34 +252,34 @@ function MrReviews() {
         pagination={{ current: page, pageSize: PAGE_SIZE, total: data.total, onChange: setPage }}
         columns={[
         { title: "MR", width: 110, render: (_, r) => <span className="mono">{r.project_path} !{r.mr_iid}</span> },
-        { title: "标题", dataIndex: "title", ellipsis: true },
+        { title: t("integrations.colTitle"), dataIndex: "title", ellipsis: true },
         {
-          title: "初审",
+          title: t("integrations.colVerdict"),
           dataIndex: "verdict",
           width: 100,
           render: (v, r) => {
-            const t = VERDICT[v] || ["default", v];
+            const pair = VERDICT[v];
             return (
-              <Tag color={t[0]}>
-                {t[1]}
+              <Tag color={pair?.[0] ?? "default"}>
+                {pair ? t(pair[1]) : v}
                 {r.gate ? `（CI ${r.gate.replace("ci:", "")}）` : ""}
               </Tag>
             );
           },
         },
         {
-          title: "放行",
+          title: t("integrations.colRelease"),
           dataIndex: "flow_state",
           width: 110,
           render: (v) => {
-            if (!v) return <Tag>待处理</Tag>;
-            const t = FLOW[v] || ["default", v];
-            return <Tag color={t[0]}>{t[1]}</Tag>;
+            if (!v) return <Tag>{t("integrations.pending")}</Tag>;
+            const pair = FLOW[v];
+            return <Tag color={pair?.[0] ?? "default"}>{pair ? t(pair[1]) : v}</Tag>;
           },
         },
-        { title: "改动", dataIndex: "changed_files", width: 70, render: (v: any[]) => v?.length ?? 0 },
-        { title: "摘要", dataIndex: "summary", ellipsis: true },
-        { title: "提交", dataIndex: "head_sha", width: 100, render: (v) => <span className="mono">{v?.slice(0, 8)}</span> },
+        { title: t("integrations.colChanged"), dataIndex: "changed_files", width: 70, render: (v: any[]) => v?.length ?? 0 },
+        { title: t("integrations.colSummary"), dataIndex: "summary", ellipsis: true },
+        { title: t("integrations.colCommit"), dataIndex: "head_sha", width: 100, render: (v) => <span className="mono">{v?.slice(0, 8)}</span> },
         ]}
       />
     </>
@@ -277,15 +287,16 @@ function MrReviews() {
 }
 
 export default function Integrations() {
+  const { t } = useTranslation();
   return (
-    <Page title="集成中心" desc="Webhook 凭证 · 事件与通知历史 · MR 评审记录">
+    <Page title={t("nav.integrations")} desc={t("integrations.desc")}>
       <div className="page-card">
         <Tabs
           items={[
-            { key: "cred", label: "凭证", children: <Credentials /> },
-            { key: "events", label: "GitLab 事件", children: <GitlabEvents /> },
-            { key: "notify", label: "通知记录", children: <NotifyLogs /> },
-            { key: "mr", label: "MR 评审", children: <MrReviews /> },
+            { key: "cred", label: t("integrations.tabCred"), children: <Credentials /> },
+            { key: "events", label: t("integrations.tabEvents"), children: <GitlabEvents /> },
+            { key: "notify", label: t("integrations.tabNotify"), children: <NotifyLogs /> },
+            { key: "mr", label: t("integrations.tabMr"), children: <MrReviews /> },
           ]}
         />
       </div>

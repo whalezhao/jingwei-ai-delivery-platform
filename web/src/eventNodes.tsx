@@ -19,6 +19,7 @@ import {
   ToolOutlined,
   WarningOutlined,
 } from "@ant-design/icons";
+import i18n from "./i18n";
 
 /**
  * claude stream-json 原始事件 → 思考链节点。
@@ -35,47 +36,93 @@ export type ChainNode = ThoughtChainItemType & {
 };
 
 const pre = (s: unknown, max = 2000) => (
-  <pre className="tc-body">{String(s ?? "").slice(0, max) || "（无输出）"}</pre>
+  <pre className="tc-body">{String(s ?? "").slice(0, max) || i18n.t("events.noOutput")}</pre>
 );
 
 /** 一行即可说明、没有后续内容的事件：直接给标题 + 描述，不带正文。 */
 const PLAIN: Record<string, [React.ReactNode, (ev: any) => string, string?]> = {
   status: [
     <CompressOutlined />,
-    (ev) => (ev.status === "compacting" ? "正在压缩上下文" : ev.status === "requesting" ? "正在请求模型" : "会话状态变化"),
+    (ev) =>
+      i18n.t(
+        ev.status === "compacting"
+          ? "events.statusCompacting"
+          : ev.status === "requesting"
+            ? "events.statusRequesting"
+            : "events.statusChanged",
+      ),
     "loading",
   ],
   api_retry: [
     <SyncOutlined />,
-    (ev) => `接口重试 ${ev.attempt ?? "?"}/${ev.max_retries ?? "?"}${ev.error ? ` · ${ev.error}` : ""}`,
+    (ev) =>
+      i18n.t("events.apiRetry", { attempt: ev.attempt ?? "?", max: ev.max_retries ?? "?" }) +
+      (ev.error ? ` · ${ev.error}` : ""),
     "loading",
   ],
   control_request_progress: [
     <ClockCircleOutlined />,
-    (ev) => `请求进行中 · ${ev.status ?? ""}${ev.attempt ? `（第 ${ev.attempt} 次）` : ""}`,
+    (ev) =>
+      i18n.t("events.progress", { status: ev.status ?? "" }) +
+      (ev.attempt ? " " + i18n.t("events.attemptNth", { n: ev.attempt }) : ""),
     "loading",
   ],
-  permission_denied: [(<LockOutlined />), (ev) => `权限被拒 · ${ev.tool_name ?? ""}`, "error"],
+  permission_denied: [(<LockOutlined />), (ev) => i18n.t("events.permissionDenied", { tool: ev.tool_name ?? "" }), "error"],
   notification: [(<NotificationOutlined />), (ev) => String(ev.text ?? "").slice(0, 200)],
   informational: [(<InfoOutlined />), (ev) => String(ev.content ?? "").slice(0, 200)],
-  local_command_output: [(<ToolOutlined />), () => "本地命令输出"],
-  mirror_error: [(<WarningOutlined />), (ev) => `镜像错误 · ${String(ev.error ?? "").slice(0, 160)}`, "error"],
-  worker_shutting_down: [(<StopOutlined />), (ev) => `执行器退出 · ${ev.reason ?? ""}`, "abort"],
-  session_state_changed: [(<ApiOutlined />), (ev) => `会话状态 · ${ev.state ?? ""}`],
-  prompt_suggestion: [(<BulbOutlined />), (ev) => `提示建议 · ${String(ev.suggestion ?? "").slice(0, 120)}`],
-  conversation_reset: [(<SyncOutlined />), () => "会话已重置"],
-  active_goal: [(<CheckOutlined />), (ev) => `持续目标 · ${ev.value?.condition ?? "已清除"}`],
-  rate_limit_event: [(<ClockCircleOutlined />), (ev) => `限流提示 · ${ev.rate_limit_info?.status ?? ""}`],
-  auth_status: [(<LockOutlined />), (ev) => `认证状态 · ${ev.error ? String(ev.error).slice(0, 120) : "进行中"}`],
-  tool_progress: [(<ClockCircleOutlined />), (ev) => `工具运行中 · ${ev.tool_name ?? ""}`, "loading"],
-  tool_use_summary: [(<BulbOutlined />), (ev) => `工具摘要 · ${String(ev.summary ?? "").slice(0, 200)}`],
-  commands_changed: [(<ToolOutlined />), (ev) => `命令清单更新 · ${Array.isArray(ev.commands) ? ev.commands.length : 0} 条`],
+  local_command_output: [(<ToolOutlined />), () => i18n.t("events.localCommandOutput")],
+  mirror_error: [
+    <WarningOutlined />,
+    (ev) => i18n.t("events.mirrorError", { error: String(ev.error ?? "").slice(0, 160) }),
+    "error",
+  ],
+  worker_shutting_down: [
+    <StopOutlined />,
+    (ev) => i18n.t("events.workerShuttingDown", { reason: ev.reason ?? "" }),
+    "abort",
+  ],
+  session_state_changed: [(<ApiOutlined />), (ev) => i18n.t("events.sessionState", { state: ev.state ?? "" })],
+  prompt_suggestion: [
+    <BulbOutlined />,
+    (ev) => i18n.t("events.promptSuggestion", { suggestion: String(ev.suggestion ?? "").slice(0, 120) }),
+  ],
+  conversation_reset: [(<SyncOutlined />), () => i18n.t("events.conversationReset")],
+  active_goal: [
+    <CheckOutlined />,
+    (ev) => i18n.t("events.activeGoal", { condition: ev.value?.condition ?? i18n.t("events.cleared") }),
+  ],
+  rate_limit_event: [
+    <ClockCircleOutlined />,
+    (ev) => i18n.t("events.rateLimit", { status: ev.rate_limit_info?.status ?? "" }),
+  ],
+  auth_status: [
+    <LockOutlined />,
+    (ev) =>
+      i18n.t("events.authStatus", {
+        status: ev.error ? String(ev.error).slice(0, 120) : i18n.t("events.authOngoing"),
+      }),
+  ],
+  tool_progress: [(<ClockCircleOutlined />), (ev) => i18n.t("events.toolProgress", { tool: ev.tool_name ?? "" }), "loading"],
+  tool_use_summary: [
+    <BulbOutlined />,
+    (ev) => i18n.t("events.toolSummary", { summary: String(ev.summary ?? "").slice(0, 200) }),
+  ],
+  commands_changed: [
+    <ToolOutlined />,
+    (ev) => i18n.t("events.commandsChanged", { n: Array.isArray(ev.commands) ? ev.commands.length : 0 }),
+  ],
   background_tasks_changed: [
     (<RobotOutlined />),
-    (ev) => `后台任务 · ${Array.isArray(ev.tasks) ? ev.tasks.length : 0} 个`,
+    (ev) => i18n.t("events.backgroundTasks", { n: Array.isArray(ev.tasks) ? ev.tasks.length : 0 }),
   ],
-  plugin_install: [(<ThunderboltOutlined />), (ev) => `插件 ${ev.name ?? ""} · ${ev.status ?? ""}`],
-  elicitation_complete: [(<CheckOutlined />), (ev) => `交互完成 · ${ev.mcp_server_name ?? ""}`],
+  plugin_install: [
+    <ThunderboltOutlined />,
+    (ev) => i18n.t("events.pluginInstall", { name: ev.name ?? "", status: ev.status ?? "" }),
+  ],
+  elicitation_complete: [
+    <CheckOutlined />,
+    (ev) => i18n.t("events.elicitationComplete", { server: ev.mcp_server_name ?? "" }),
+  ],
 };
 
 /** 只有描述、没有正文（或正文默认折叠）的几类，单独写，字段名各不相同。 */
@@ -100,7 +147,7 @@ function detailNode(ev: any, key: string): ChainNode | null {
         kind: "raw",
         key,
         icon: <CheckOutlined />,
-        title: ev.kind === "commit" ? "提交代码" : "Git 状态变化",
+        title: ev.kind === "commit" ? i18n.t("events.vcsCommit") : i18n.t("events.vcsChanged"),
         description: ev.branch,
       };
 
@@ -109,10 +156,13 @@ function detailNode(ev: any, key: string): ChainNode | null {
         kind: "raw",
         key,
         icon: <RobotOutlined />,
-        title: "子代理进展",
+        title: i18n.t("events.subagentProgress"),
         description: ev.description,
         footer: ev.usage
-          ? `${ev.usage.tool_uses ?? 0} 工具 · ${((ev.usage.total_tokens ?? 0) / 1000).toFixed(1)}k tokens`
+          ? i18n.t("events.usage", {
+              tools: ev.usage.tool_uses ?? 0,
+              tokens: ((ev.usage.total_tokens ?? 0) / 1000).toFixed(1),
+            })
           : undefined,
       };
 
@@ -121,7 +171,7 @@ function detailNode(ev: any, key: string): ChainNode | null {
         kind: "raw",
         key,
         icon: <BulbOutlined />,
-        title: "本轮总结",
+        title: i18n.t("events.turnSummary"),
         collapsible: true,
         content: pre(String(ev.status_detail || ""), 4000),
       };
@@ -131,7 +181,7 @@ function detailNode(ev: any, key: string): ChainNode | null {
         kind: "raw",
         key,
         icon: <RobotOutlined />,
-        title: `子任务开始 · ${ev.subagent_type || "agent"}`,
+        title: i18n.t("events.taskStarted", { type: ev.subagent_type || "agent" }),
         description: ev.description,
         status: ev.is_backgrounded ? undefined : "loading",
         footer: ev.task_id ? `task ${String(ev.task_id).slice(-8)}` : undefined,
@@ -143,7 +193,7 @@ function detailNode(ev: any, key: string): ChainNode | null {
         kind: "raw",
         key,
         icon: <RobotOutlined />,
-        title: "子任务状态变更",
+        title: i18n.t("events.taskUpdated"),
         description: ev.patch?.description || st,
         status: st === "failed" ? "error" : st === "completed" ? "success" : undefined,
         collapsible: !!ev.patch?.error,
@@ -157,11 +207,14 @@ function detailNode(ev: any, key: string): ChainNode | null {
         kind: "raw",
         key,
         icon: ok ? <CheckOutlined /> : <CloseOutlined />,
-        title: `子任务${ok ? "完成" : ev.status === "failed" ? "失败" : "停止"}`,
+        title: i18n.t(ok ? "events.taskDone" : ev.status === "failed" ? "events.taskFailed" : "events.taskStopped"),
         description: ev.summary,
         status: ok ? "success" : ev.status === "failed" ? "error" : "abort",
         footer: ev.usage
-          ? `${ev.usage.tool_uses ?? 0} 工具 · ${((ev.usage.total_tokens ?? 0) / 1000).toFixed(1)}k tokens`
+          ? i18n.t("events.usage", {
+              tools: ev.usage.tool_uses ?? 0,
+              tokens: ((ev.usage.total_tokens ?? 0) / 1000).toFixed(1),
+            })
           : undefined,
       };
     }
@@ -171,7 +224,7 @@ function detailNode(ev: any, key: string): ChainNode | null {
         kind: "raw",
         key,
         icon: <ThunderboltOutlined />,
-        title: `钩子 · ${ev.hook_name || ev.hook_event || ""}`,
+        title: i18n.t("events.hook", { name: ev.hook_name || ev.hook_event || "" }),
         description: ev.hook_event,
         status: "loading",
       };
@@ -182,8 +235,8 @@ function detailNode(ev: any, key: string): ChainNode | null {
         kind: "raw",
         key,
         icon: <ThunderboltOutlined />,
-        title: `钩子 · ${ev.hook_name || ev.hook_event || ""}`,
-        description: outcome ? `结束 · ${outcome}` : undefined,
+        title: i18n.t("events.hook", { name: ev.hook_name || ev.hook_event || "" }),
+        description: outcome ? i18n.t("events.ended", { outcome }) : undefined,
         status: outcome === "success" ? "success" : outcome === "error" ? "error" : "abort",
         collapsible: !!(ev.stdout || ev.stderr || ev.output),
         content: pre(ev.output || ev.stderr || ev.stdout),
@@ -198,8 +251,8 @@ function detailNode(ev: any, key: string): ChainNode | null {
         kind: "raw",
         key,
         icon: waiting ? <ClockCircleOutlined /> : <CheckOutlined />,
-        title: waiting ? "等待权限确认" : "权限确认结束",
-        description: ev.agent_id ? "子代理内调用" : undefined,
+        title: waiting ? i18n.t("events.permWaiting") : i18n.t("events.permDone"),
+        description: ev.agent_id ? i18n.t("events.insideSubagent") : undefined,
         status: waiting ? "loading" : undefined,
       };
     }
@@ -212,7 +265,9 @@ function detailNode(ev: any, key: string): ChainNode | null {
         kind: "raw",
         key,
         icon: <CompressOutlined />,
-        title: `上下文压缩 · ${m.trigger === "manual" ? "手动" : "自动"}`,
+        title: i18n.t("events.compact", {
+          mode: m.trigger === "manual" ? i18n.t("events.manual") : i18n.t("events.auto"),
+        }),
         description: `${from}${to} tokens`,
       };
     }
@@ -224,7 +279,9 @@ function detailNode(ev: any, key: string): ChainNode | null {
         kind: "raw",
         key,
         icon: <FileDoneOutlined />,
-        title: `文件已保存 · ${files.length} 个${failed.length ? ` · ${failed.length} 个失败` : ""}`,
+        title:
+          i18n.t("events.filesSaved", { n: files.length }) +
+          (failed.length ? i18n.t("events.filesFailed", { n: failed.length }) : ""),
         collapsible: failed.length > 0,
         content: failed.length ? pre(failed.map((f) => `${f.filename}: ${f.error}`).join("\n")) : undefined,
         description: files.length ? (
@@ -245,7 +302,7 @@ function detailNode(ev: any, key: string): ChainNode | null {
         kind: "raw",
         key,
         icon: <BulbOutlined />,
-        title: `记忆召回 · ${memories.length} 条`,
+        title: i18n.t("events.memoryRecall", { n: memories.length }),
         description: memories.length ? (
           <Sources
             inline
@@ -260,12 +317,20 @@ function detailNode(ev: any, key: string): ChainNode | null {
     }
 
     case "model_refusal_fallback": {
-      const dir = ev.direction === "revert" ? "回退" : ev.direction === "sticky" ? "粘性切换" : "重试";
+      const dir =
+        ev.direction === "revert"
+          ? i18n.t("events.refusalRevert")
+          : ev.direction === "sticky"
+            ? i18n.t("events.refusalSticky")
+            : i18n.t("events.refusalRetry");
       return {
         kind: "raw",
         key,
         icon: <WarningOutlined />,
-        title: `模型拒答，${dir}到 ${ev.fallback_model || "备用模型"}`,
+        title: i18n.t("events.refusalFallback", {
+          dir,
+          model: ev.fallback_model || i18n.t("events.fallbackModel"),
+        }),
         description: `${ev.original_model || ""}${ev.api_refusal_category ? ` · ${ev.api_refusal_category}` : ""}`,
         collapsible: !!ev.content,
         content: pre(ev.content),
@@ -277,7 +342,7 @@ function detailNode(ev: any, key: string): ChainNode | null {
         kind: "raw",
         key,
         icon: <ExclamationCircleOutlined />,
-        title: "模型拒答（无备用模型）",
+        title: i18n.t("events.refusalNoFallback"),
         description: ev.api_refusal_category || ev.original_model,
         status: "error",
         collapsible: !!ev.content,
@@ -302,7 +367,7 @@ function detailNode(ev: any, key: string): ChainNode | null {
         kind: "raw",
         key,
         icon: <InfoOutlined />,
-        title: `未识别事件 · ${sub || "?"}`,
+        title: i18n.t("events.unknown", { sub: sub || "?" }),
         collapsible: true,
         content: <pre className="tc-body">{JSON.stringify(ev).slice(0, 2000)}</pre>,
       };

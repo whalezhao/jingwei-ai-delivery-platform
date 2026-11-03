@@ -1219,6 +1219,7 @@ a.wb-chip:hover {
 }
 .rc-sender-foot-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 .rc-ask-label {
@@ -1388,6 +1389,7 @@ a.wb-chip:hover {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 8px 12px;
   border-bottom: 1px solid var(--line);
@@ -1409,6 +1411,17 @@ a.wb-chip:hover {
   min-height: 0;
   overflow: auto;
   padding: 12px 14px;
+}
+.rc-anno-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.02);
+  font-size: 12px;
 }
 .rc-preview-empty {
   flex: 1;
@@ -1622,6 +1635,187 @@ a.wb-chip.live:hover {
 .tc-err {
   color: #cf1322;
 }
+/* 子代理会话：嵌在 Agent 节点里，不再套一层卡片，靠左竖线表示层级 */
+.rc-subchain {
+  margin: 2px 0 4px;
+  padding-left: 10px;
+  border-left: 2px solid rgba(0, 0, 0, 0.08);
+}
+.rc-subchain .ant-thought-chain {
+  padding: 2px 0 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+/* 子代理正文：只出现在嵌套链里，样式比主消息轻 */
+.tc-sub-text {
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: rgba(0, 0, 0, 0.62);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+/* Agent 状态板：一轮内的主/子代理总览，点行就地看该代理的实时记录 */
+.rc-agents {
+  flex: none;
+  margin-bottom: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.78);
+  overflow: hidden;
+}
+.rc-agents-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 10px;
+  border: 0;
+  background: transparent;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.rc-agents-head b {
+  font-weight: 600;
+  color: rgba(0, 0, 0, 0.78);
+}
+.rc-agents-sum {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: rgba(0, 0, 0, 0.45);
+}
+.rc-agents-fold {
+  flex: none;
+  font-size: 11px;
+  color: #1677ff;
+}
+.rc-agents-list {
+  position: relative;
+  max-height: 232px;
+  overflow-y: auto;
+  border-top: 1px solid rgba(0, 0, 0, 0.05);
+}
+/* 展开记录时列表让位，记录本身在列表外单独滚，不会被裁成半截 */
+.rc-agents-list.compact {
+  max-height: 122px;
+}
+.rc-ag {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 10px;
+  border: 0;
+  background: transparent;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.rc-ag:hover {
+  background: rgba(22, 119, 255, 0.05);
+}
+.rc-ag.on {
+  background: rgba(22, 119, 255, 0.08);
+}
+.rc-ag-state {
+  flex: none;
+  display: inline-flex;
+  font-size: 12px;
+}
+.rc-ag-state.work { color: #1677ff; }
+.rc-ag-state.wait { color: #d48806; }
+.rc-ag-state.block,
+.rc-ag-state.error { color: #cf1322; }
+.rc-ag-state.done { color: #389e0d; }
+.rc-ag-name {
+  flex: none;
+  max-width: 132px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: rgba(0, 0, 0, 0.78);
+}
+.rc-ag-tag {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 8px;
+  font-size: 11px;
+  line-height: 16px;
+}
+.rc-ag-tag.work { color: #1677ff; background: #e6f4ff; }
+.rc-ag-tag.wait { color: #d48806; background: #fffbe6; }
+.rc-ag-tag.block,
+.rc-ag-tag.error { color: #cf1322; background: #fff1f0; }
+.rc-ag-tag.done { color: #389e0d; background: #f6ffed; }
+.rc-ag-act {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: rgba(0, 0, 0, 0.45);
+}
+.rc-ag-more {
+  flex: none;
+  font-size: 11px;
+  color: #1677ff;
+}
+/* 等人拍板的代理：选项直接在行下铺开，点了作为下一轮发言 */
+.rc-ag-ask {
+  padding: 0 10px 6px 24px;
+}
+.rc-ag-ask .rc-ask-opt {
+  margin-top: 4px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+}
+.rc-ag-ask .rc-ask-opt:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+.rc-ag-view-wrap {
+  border-top: 1px solid rgba(0, 0, 0, 0.05);
+  background: rgba(22, 119, 255, 0.03);
+}
+.rc-ag-view-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 10px 2px;
+  font-size: 11.5px;
+  color: rgba(0, 0, 0, 0.55);
+}
+.rc-ag-view-head button {
+  border: 0;
+  background: transparent;
+  font-size: 11px;
+  color: #1677ff;
+  cursor: pointer;
+}
+.rc-ag-view {
+  max-height: 180px;
+  overflow-y: auto;
+  padding: 0 10px 6px 28px;
+}
+.rc-ag-view .rc-subchain {
+  margin: 0;
+  padding-left: 8px;
+}
+.rc-ag-view .ant-thought-chain {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
 
 /* ===== 任务详情：Claude 式会话树（主会话可折叠 + L 形连线子会话） ===== */
 .sess-tree {
@@ -1807,12 +2001,18 @@ a.wb-chip.live:hover {
 .rc-dock-head {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
+  row-gap: 6px;
   padding: 10px 12px;
   font-size: 13px;
   font-weight: 600;
   border-bottom: 1px solid rgba(5, 5, 5, 0.06);
   flex-shrink: 0;
+}
+/* 英文标题比中文长，窄栏下别被挤成两行 */
+.rc-dock-head > span:first-child {
+  white-space: nowrap;
 }
 .rc-dock-toggle {
   margin-left: auto;

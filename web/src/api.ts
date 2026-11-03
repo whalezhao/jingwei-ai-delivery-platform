@@ -1,5 +1,7 @@
 /** API 客户端：token 存 localStorage，401 一律踢回登录页。 */
 
+import i18n from "./i18n";
+
 const KEY = "vega_token";
 
 export const token = {
@@ -33,7 +35,7 @@ export async function api<T = any>(path: string, opts: RequestInit = {}): Promis
   if (r.status === 401 && !path.startsWith("/api/auth/login")) {
     token.clear();
     goLogin();
-    throw new ApiError(401, "未登录");
+    throw new ApiError(401, i18n.t("errors.notLoggedIn"));
   }
   if (!r.ok) {
     let msg = `HTTP ${r.status}`;

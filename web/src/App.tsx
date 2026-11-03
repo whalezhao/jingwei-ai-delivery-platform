@@ -12,7 +12,9 @@ import {
 } from "@ant-design/icons";
 import { ProLayout } from "@ant-design/pro-components";
 import { Dropdown, Select } from "antd";
+import { useTranslation } from "react-i18next";
 import Logo from "./components/Logo";
+import LangSwitch from "./components/LangSwitch";
 import ProfileModal, { Me } from "./components/ProfileModal";
 import { avatarSrc } from "./components/PersonAvatar";
 import { GroupProvider, useGroup } from "./group";
@@ -31,19 +33,20 @@ import Integrations from "./pages/Integrations";
 
 /** 菜单序：工作台总览 → 业务流（需求→任务）→ 配置（项目→组→人员）→ 系统（节点→集成） */
 const MENU = [
-  { path: "/workbench", name: "工作台", icon: <DashboardOutlined /> },
-  { path: "/reqs", name: "需求池", icon: <ProjectOutlined /> },
-  { path: "/tasks", name: "开发任务", icon: <CodeOutlined /> },
-  { path: "/projects", name: "项目", icon: <ClusterOutlined /> },
-  { path: "/groups", name: "研发组", icon: <ApartmentOutlined /> },
-  { path: "/people", name: "人员", icon: <TeamOutlined /> },
-  { path: "/nodes", name: "Runner 节点", icon: <LaptopOutlined /> },
-  { path: "/integrations", name: "集成中心", icon: <ApiOutlined /> },
-];
+  { path: "/workbench", key: "nav.workbench", icon: <DashboardOutlined /> },
+  { path: "/reqs", key: "nav.requirements", icon: <ProjectOutlined /> },
+  { path: "/tasks", key: "nav.tasks", icon: <CodeOutlined /> },
+  { path: "/projects", key: "nav.projects", icon: <ClusterOutlined /> },
+  { path: "/groups", key: "nav.groups", icon: <ApartmentOutlined /> },
+  { path: "/people", key: "nav.people", icon: <TeamOutlined /> },
+  { path: "/nodes", key: "nav.nodes", icon: <LaptopOutlined /> },
+  { path: "/integrations", key: "nav.integrations", icon: <ApiOutlined /> },
+] as const;
 
 function Shell() {
   const loc = useLocation();
-  const items = useMemo(() => MENU.map((m) => ({ path: m.path, name: m.name, icon: m.icon })), []);
+  const { t } = useTranslation();
+  const items = useMemo(() => MENU.map((m) => ({ path: m.path, name: t(m.key), icon: m.icon })), [t]);
   const { groups, groupId, setGroupId } = useGroup();
   const [myAvatar, setMyAvatar] = useState<string | null>(null);
   const [meRecord, setMeRecord] = useState<Me | null>(null);
@@ -70,7 +73,7 @@ function Shell() {
       logo={
         <span className="app-brand">
           <Logo size={26} />
-          <span className="app-brand-name">研发过程AI管理平台</span>
+          <span className="app-brand-name">{t("app.name")}</span>
         </span>
       }
       layout="mix"
@@ -95,28 +98,29 @@ function Shell() {
         header: { colorBgHeader: "#ffffff" },
       }}
       actionsRender={() => [
+        <LangSwitch key="lang-switch" />,
         <Select
           key="group-switch"
           style={{ width: 180 }}
           allowClear
           showSearch
           optionFilterProp="label"
-          placeholder="全部研发组"
+          placeholder={t("app.allGroups")}
           value={groupId ?? undefined}
           onChange={(v) => setGroupId(v ?? null)}
           options={groups.map((g) => ({ value: g.id, label: g.name }))}
         />,
       ]}
       avatarProps={{
-        title: localStorage.getItem("vega_user") || "账号",
+        title: localStorage.getItem("vega_user") || t("app.account"),
         src: avatarSrc(myAvatar),
         render: (_p, dom) => (
           <Dropdown
             menu={{
               items: [
-                { key: "profile", label: "个人设置" },
+                { key: "profile", label: t("app.profile") },
                 { type: "divider" },
-                { key: "logout", label: "退出登录" },
+                { key: "logout", label: t("app.logout") },
               ],
               onClick: ({ key }) => {
                 if (key === "profile") {

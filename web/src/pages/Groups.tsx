@@ -18,8 +18,10 @@ import {
   message,
 } from "antd";
 import { PlusOutlined } from "@ant-design/icons";
+import { useTranslation } from "react-i18next";
 import ResizableTable from "../ResizableTable";
 import { api, isAdmin } from "../api";
+import type { MsgKey } from "../i18n";
 import AmSelect from "../components/AmSelect";
 import Page from "../Page";
 import { PAGE } from "../table";
@@ -63,13 +65,13 @@ const optionTip = (label: string) => (
 );
 
 // 绑定来源只区分两种：系统对配出来的，和人工调整的（pending 只是 AI 建议、尚未绑定）
-const STATUS_TAG: Record<string, [string, string]> = {
-  auto_exact: ["green", "系统匹配"],
-  auto_ai: ["green", "系统匹配"],
-  auto: ["green", "系统匹配"],
-  manual: ["purple", "人工调整"],
-  pending: ["default", "未匹配"],
-  unmatched: ["default", "未匹配"],
+const STATUS_TAG: Record<string, [string, MsgKey]> = {
+  auto_exact: ["green", "groups.status.matched"],
+  auto_ai: ["green", "groups.status.matched"],
+  auto: ["green", "groups.status.matched"],
+  manual: ["purple", "groups.status.manual"],
+  pending: ["default", "groups.status.unmatched"],
+  unmatched: ["default", "groups.status.unmatched"],
 };
 
 const empty: any = {
@@ -89,6 +91,7 @@ const empty: any = {
 };
 
 export default function Groups() {
+  const { t } = useTranslation();
   const nav = useNavigate();
   const [rows, setRows] = useState<Group[]>([]);
   const [keyword, setKeyword] = useState("");
@@ -118,7 +121,7 @@ export default function Groups() {
 
   const loadNames = async (list: Group[]) => {
     api<any[]>("/api/am/teams")
-      .then((teams) => setTeamNames(Object.fromEntries(teams.map((t) => [t.id, t.name]))))
+      .then((teams) => setTeamNames(Object.fromEntries(teams.map((tm) => [tm.id, tm.name]))))
       .catch(() => {});
     for (const g of list) {
       if (!g.octo_group_no) continue;
@@ -157,7 +160,7 @@ export default function Groups() {
     try {
       if (editing.id) await api(`/api/groups/${editing.id}`, { method: "PUT", body: JSON.stringify(body) });
       else await api("/api/groups", { method: "POST", body: JSON.stringify(body) });
-      message.success("已保存（配置变化已在后台自动触发扫描/同步）");
+      message.success(t("groups.saved"));
       setEditing(null);
       load();
     } catch (e: any) {
@@ -168,8 +171,9 @@ export default function Groups() {
   const testBot = async (g: Group) => {
     try {
       const d = await api<any>(`/api/groups/${g.id}/octo-test`, { method: "POST" });
-      if (d.ok) message.success(`测试消息已送达${d.dedicated ? "（本组独立 bot）" : "（全局 bot）"}，请到群里确认`);
-      else message.error("发送失败：octo 未配置或 bot token 无效（已留痕，可在集成中心查看）");
+      if (d.ok)
+        message.success(t("groups.testOk", { via: d.dedicated ? t("groups.viaOwn") : t("groups.viaGlobal") }));
+      else message.error(t("groups.testFail"));
     } catch (e: any) {
       message.error(e.message);
     }
@@ -178,7 +182,11 @@ export default function Groups() {
   const runScan = async (g: Group) => {
     try {
       const d = await api<any>(`/api/groups/${g.id}/scan`, { method: "POST" });
-      message.success(`扫描完成：新增项目 ${d.projects_added}，补配 webhook ${d.webhooks_added}${d.error ? `（${d.error}）` : ""}`);
+      message.success(
+        `${t("groups.scanDone", { projects: d.projects_added, webhooks: d.webhooks_added })}${
+          d.error ? `（${d.error}）` : ""
+        }`,
+      );
       nav("/projects");
     } catch (e: any) {
       message.error(e.message);
@@ -225,7 +233,7 @@ export default function Groups() {
       glLoaded.current = true;
       setGlUsers(d.items || []);
       setGlErr(null);
-      message.success(`GitLab 名单已刷新：${d.items?.length ?? 0} 人`);
+      message.success(t("groups.refreshDone", { n: d.items?.length ?? 0 }));
     } catch (e: any) {
       message.error(e.message);
     } finally {
@@ -242,8 +250,10 @@ export default function Groups() {
       });
       message.success(
         username
-          ? `已绑定 GitLab 账号 ${username}${d.released ? `，原绑定「${d.released}」已自动解绑` : ""}`
-          : "已解绑 GitLab 账号",
+          ? d.released
+            ? t("groups.boundGitlabReleased", { username, released: d.released })
+            : t("groups.boundGitlab", { username })
+          : t("groups.unboundGitlab"),
       );
       setMembers(await api<Member[]>(`/api/groups/${mgroup.id}/members`));
     } catch (e: any) {
@@ -275,7 +285,15 @@ export default function Groups() {
       const d = await api<any>(`/api/groups/${mgroup.id}/match/run`, { method: "POST" });
       const s = d.stats || {};
       message.success(
-        `对配完成：GitLab 建档 ${s.gitlab_created ?? 0} · 同人合并 ${s.gitlab_merged ?? 0} · octo 建档 ${s.octo_created ?? 0} · 规则 ${s.auto_exact ?? 0} / AI ${s.auto_ai ?? 0} / 待确认 ${s.pending ?? 0} / 保留人工 ${s.kept_manual ?? 0}${s.error ? `（${s.error}）` : ""}`,
+        `${t("groups.matchDone", {
+          gitlabCreated: s.gitlab_created ?? 0,
+          gitlabMerged: s.gitlab_merged ?? 0,
+          octoCreated: s.octo_created ?? 0,
+          autoExact: s.auto_exact ?? 0,
+          autoAi: s.auto_ai ?? 0,
+          pending: s.pending ?? 0,
+          keptManual: s.kept_manual ?? 0,
+        })}${s.error ? `（${s.error}）` : ""}`,
       );
       setMembers(await api<Member[]>(`/api/groups/${mgroup.id}/members`));
     } catch (e: any) {
@@ -291,7 +309,11 @@ export default function Groups() {
         body: JSON.stringify({ octo_uid: uid }),
       });
       message.success(
-        uid ? `已绑定群成员${d.released ? `，原绑定「${d.released}」已自动解绑` : ""}` : "已解绑群成员",
+        uid
+          ? d.released
+            ? t("groups.boundOctoReleased", { released: d.released })
+            : t("groups.boundOcto")
+          : t("groups.unboundOcto"),
       );
       setMembers(await api<Member[]>(`/api/groups/${mgroup.id}/members`));
     } catch (e: any) {
@@ -319,12 +341,12 @@ export default function Groups() {
 
   return (
     <Page
-      title="研发组"
-      desc="GitLab 绑定 · octo 群对配 · 组 LLM 兜底 · 定时扫描"
+      title={t("nav.groups")}
+      desc={t("groups.desc")}
       actions={
         isAdmin() && (
           <Button type="primary" icon={<PlusOutlined />} onClick={() => open()}>
-            新建研发组
+            {t("groups.new")}
           </Button>
         )
       }
@@ -333,7 +355,7 @@ export default function Groups() {
         <Input.Search
           style={{ width: 280, marginBottom: 12 }}
           allowClear
-          placeholder="研发组 / GitLab 地址"
+          placeholder={t("groups.searchPlaceholder")}
           onSearch={(v) => setKeyword(v.trim())}
           onChange={(e) => !e.target.value && setKeyword("")}
         />
@@ -342,19 +364,19 @@ export default function Groups() {
           dataSource={grpShown}
           pagination={PAGE}
           columns={[
-            { title: "研发组", dataIndex: "name" },
+            { title: t("groups.colGroup"), dataIndex: "name" },
             {
-              title: "GitLab",
+              title: t("groups.colGitlab"),
               dataIndex: "gitlab_base_url",
               render: (v, r) => (
                 <>
                   <span className="mono">{v}</span>{" "}
-                  {r.has_gitlab_token ? <Tag color="green">token ✓</Tag> : <Tag color="red">无 token</Tag>}
+                  {r.has_gitlab_token ? <Tag color="green">token ✓</Tag> : <Tag color="red">{t("groups.noToken")}</Tag>}
                 </>
               ),
             },
             {
-              title: "octo 群",
+              title: t("groups.colOcto"),
               dataIndex: "octo_group_no",
               render: (v, r) => (
                 <>
@@ -365,41 +387,41 @@ export default function Groups() {
                   )}{" "}
                   {v &&
                     (r.has_octo_bot_token ? (
-                      <Tooltip title="本组用自己的 bot token 发群通知（本页「编辑」里配置）">
-                        <Tag color="green">独立 bot</Tag>
+                      <Tooltip title={t("groups.ownBotTip")}>
+                        <Tag color="green">{t("integrations.ownBot")}</Tag>
                       </Tooltip>
                     ) : (
-                      <Tooltip title="未配置本组 token，用全局 bot 发通知；可在本页「编辑」里填本组 token">
-                        <Tag>全局 bot</Tag>
+                      <Tooltip title={t("groups.globalBotTip")}>
+                        <Tag>{t("integrations.globalBot")}</Tag>
                       </Tooltip>
                     ))}
                 </>
               ),
             },
             {
-              title: "am team",
+              title: t("groups.colAmTeam"),
               dataIndex: "am_team_id",
               render: (v) =>
                 v ? teamNames[v] ? <span title={v}>{teamNames[v]}</span> : <span className="mono">{v}</span> : "—",
             },
-            { title: "组 LLM", render: (_, r) => (r.has_llm_key ? r.llm_model || "默认" : "—") },
+            { title: t("groups.colLlm"), render: (_, r) => (r.has_llm_key ? r.llm_model || t("groups.defaultLlm") : "—") },
             {
-              title: "扫描",
+              title: t("groups.colScan"),
               dataIndex: "scan_enabled",
-              render: (v) => (v ? <Tag color="green">开</Tag> : <Tag>关</Tag>),
+              render: (v) => (v ? <Tag color="green">{t("groups.on")}</Tag> : <Tag>{t("groups.off")}</Tag>),
             },
             {
-              title: "操作",
+              title: t("common.actions"),
               width: 300,
               render: (_, r) => (
                 <Space size={0} split={<Divider type="vertical" />} wrap>
-                  <a onClick={() => openMembers(r)}>成员对配</a>
-                  <a onClick={() => open(r)}>编辑</a>
-                  <a onClick={() => runScan(r)}>扫描项目</a>
-                  <a onClick={() => testBot(r)}>测试 bot</a>
+                  <a onClick={() => openMembers(r)}>{t("groups.members")}</a>
+                  <a onClick={() => open(r)}>{t("common.edit")}</a>
+                  <a onClick={() => runScan(r)}>{t("groups.scanProjects")}</a>
+                  <a onClick={() => testBot(r)}>{t("groups.testBot")}</a>
                   {isAdmin() && (
                     <Popconfirm
-                      title="删除该研发组？"
+                      title={t("groups.deleteConfirm")}
                       onConfirm={async () => {
                         try {
                           await api(`/api/groups/${r.id}`, { method: "DELETE" });
@@ -409,7 +431,7 @@ export default function Groups() {
                         }
                       }}
                     >
-                      <a className="danger-link">删除</a>
+                      <a className="danger-link">{t("common.delete")}</a>
                     </Popconfirm>
                   )}
                 </Space>
@@ -421,93 +443,97 @@ export default function Groups() {
 
       <Modal
         open={!!editing}
-        title={editing?.id ? "编辑研发组" : "新建研发组"}
+        title={editing?.id ? t("groups.editTitle") : t("groups.createTitle")}
         onCancel={() => setEditing(null)}
         onOk={() => form.submit()}
         destroyOnHidden
       >
         <Form form={form} layout="vertical" initialValues={editing || empty} onFinish={save}>
-          <Form.Item name="name" label="组名" rules={[{ required: true }]}>
+          <Form.Item name="name" label={t("groups.name")} rules={[{ required: true }]}>
             <Input />
           </Form.Item>
-          <Form.Item name="gitlab_base_url" label="GitLab 地址">
+          <Form.Item name="gitlab_base_url" label={t("groups.gitlabUrl")}>
             <Input placeholder="https://git.example.com" />
           </Form.Item>
-          <Form.Item name="gitlab_token" label="GitLab 管理员 Token（只写不回显）">
-            <Input.Password placeholder={editing?.has_gitlab_token ? "已配置，留空不改" : ""} />
+          <Form.Item name="gitlab_token" label={t("groups.gitlabToken")}>
+            <Input.Password placeholder={editing?.has_gitlab_token ? t("groups.configuredKeep") : ""} />
           </Form.Item>
           <Form.Item
             name="octo_group_no"
-            label="octo 群（从 bot 所在群中选择）"
-            tooltip="群号是 32 位 ID 不是群名；列表来自 bot token（本组未单独填则用集成中心配的全局 bot），展开时实时拉取"
+            label={t("groups.octoGroup")}
+            tooltip={t("groups.octoGroupTooltip")}
           >
             <Select
               showSearch
               allowClear
               optionFilterProp="label"
-              placeholder="展开选择群"
+              placeholder={t("groups.octoGroupPlaceholder")}
               onOpenChange={(o) => o && loadOctoGroups()}
-              notFoundContent={octoGroupsErr || "该 bot 不在任何群里"}
+              notFoundContent={octoGroupsErr || t("groups.octoNoGroups")}
               options={octoGroups.map((g) => ({
                 value: g.group_no,
-                label: `${g.name}（${g.group_no.slice(0, 8)}…）`,
+                label: t("groups.octoGroupLabel", { name: g.name, id: g.group_no.slice(0, 8) }),
               }))}
             />
           </Form.Item>
-          <Form.Item name="octo_bot_token" label="本组 octo bot Token（可选，只写不回显）">
-            <Input.Password placeholder={editing?.has_octo_bot_token ? "已配置，留空不改" : "留空即用集成中心配的全局 bot token"} />
+          <Form.Item name="octo_bot_token" label={t("groups.octoBotToken")}>
+            <Input.Password
+              placeholder={
+                editing?.has_octo_bot_token ? t("groups.configuredKeep") : t("groups.octoBotTokenPlaceholder")
+              }
+            />
           </Form.Item>
           <Form.Item
             name="tech_lead_person_ids"
-            label="技术负责人（代码日报 @）"
-            tooltip="代码日报/周报/月报在群里 @ 他们；项目未配技术负责人时也兜底走他们"
+            label={t("groups.techLead")}
+            tooltip={t("groups.techLeadTooltip")}
           >
             <Select
               mode="multiple"
               allowClear
               showSearch
               optionFilterProp="label"
-              placeholder="可多选"
+              placeholder={t("groups.multiPlaceholder")}
               options={people.map((p) => ({ value: p.id, label: p.name }))}
             />
           </Form.Item>
-          <Form.Item name="am_team_id" label="agent-memory 团队（展开实时拉取）">
-            <AmSelect kind="team" placeholder="选择团队，留空则不绑定" />
+          <Form.Item name="am_team_id" label={t("groups.amTeam")}>
+            <AmSelect kind="team" placeholder={t("groups.amTeamPlaceholder")} />
           </Form.Item>
-          <Form.Item name="llm_base_url" label="组 LLM Base URL（成员无个人 LLM 时兜底）">
+          <Form.Item name="llm_base_url" label={t("groups.llmBaseUrl")}>
             <Input placeholder="https://…/v1" />
           </Form.Item>
-          <Form.Item name="llm_api_key" label="组 LLM API Key（只写不回显）">
-            <Input.Password placeholder={editing?.has_llm_key ? "已配置，留空不改" : ""} />
+          <Form.Item name="llm_api_key" label={t("groups.llmApiKey")}>
+            <Input.Password placeholder={editing?.has_llm_key ? t("groups.configuredKeep") : ""} />
           </Form.Item>
-          <Form.Item name="llm_model" label="组 LLM Model">
+          <Form.Item name="llm_model" label={t("groups.llmModel")}>
             <Input />
           </Form.Item>
-          <Form.Item name="llm_effort" label="组思考等级" tooltip="透传 claude --effort；默认 Qwen 上游只认 xhigh/medium/low，high/max 适合 claude 系或自定义上游">
+          <Form.Item name="llm_effort" label={t("groups.llmEffort")} tooltip={t("groups.llmEffortTooltip")}>
             <Select
               showSearch
               optionFilterProp="label"
               options={[
-                { value: "", label: "未设置（兜底 xhigh）" },
-                { value: "low", label: "低（low）" },
-                { value: "medium", label: "中（medium）" },
-                { value: "high", label: "高（high · claude 默认）" },
-                { value: "xhigh", label: "特高（xhigh · Qwen 最高档）" },
-                { value: "max", label: "最高（max）" },
+                { value: "", label: t("groups.effortUnset") },
+                { value: "low", label: t("people.effortLow") },
+                { value: "medium", label: t("people.effortMedium") },
+                { value: "high", label: t("people.effortHigh") },
+                { value: "xhigh", label: t("people.effortXhigh") },
+                { value: "max", label: t("people.effortMax") },
               ]}
             />
           </Form.Item>
-          <Form.Item name="scan_enabled" label="定时扫描项目" valuePropName="checked">
+          <Form.Item name="scan_enabled" label={t("groups.scanEnabled")} valuePropName="checked">
             <Switch />
           </Form.Item>
-          <Form.Item name="auto_webhook" label="自动补配 webhook" valuePropName="checked">
+          <Form.Item name="auto_webhook" label={t("groups.autoWebhook")} valuePropName="checked">
             <Switch />
           </Form.Item>
         </Form>
       </Modal>
 
       <Drawer
-        title={`成员与对配 · ${mgroup?.name || ""}`}
+        title={t("groups.membersDrawer", { name: mgroup?.name || "" })}
         width={1100}
         open={!!mgroup}
         onClose={() => {
@@ -517,34 +543,34 @@ export default function Groups() {
       >
         <Space style={{ marginBottom: 12 }}>
           <Button onClick={runMatch} disabled={!isAdmin()}>
-            运行自动对配（规则 + AI）
+            {t("groups.runMatch")}
           </Button>
           <Button onClick={() => setAddOpen(true)} disabled={!isAdmin()}>
-            添加成员
+            {t("groups.addMember")}
           </Button>
           <Button onClick={refreshGlUsers} disabled={!isAdmin()} loading={glBusy}>
-            刷新 GitLab 名单
+            {t("groups.refreshGl")}
           </Button>
         {octoErr ? (
           <Alert
             style={{ marginBottom: 12 }}
             type="warning"
             showIcon
-            message={`群成员拉不到：${octoErr}`}
+            message={t("groups.octoErr", { error: octoErr })}
           />
         ) : (
-          <Typography.Text type="secondary">octo 群成员 {octoList.length} 人</Typography.Text>
+          <Typography.Text type="secondary">{t("groups.octoMembersCount", { n: octoList.length })}</Typography.Text>
         )}        </Space>
         <Alert
           style={{ marginBottom: 12 }}
           type="info"
           showIcon
-          message="三方对配：Vega 用户 ↔ GitLab 账号 ↔ octo 群成员。运行自动对配会先从本组 GitLab 项目拉成员自动建档，再按 规则精确 → AI（置信度 ≥ 0.8 生效）→ 人工调整（锁定后永不被覆盖）绑定 octo 身份"
+          message={t("groups.matchIntro")}
         />
         <Input.Search
           style={{ width: 280, marginBottom: 12 }}
           allowClear
-          placeholder="成员 / GitLab / octo 昵称"
+          placeholder={t("groups.memberPlaceholder")}
           onSearch={(v) => setMkeyword(v.trim())}
           onChange={(e) => !e.target.value && setMkeyword("")}
         />
@@ -556,9 +582,9 @@ export default function Groups() {
           size="small"
           tableLayout="fixed"
           columns={[
-            { title: "成员", dataIndex: "person_name", width: 160, ellipsis: true },
+            { title: t("groups.colMember"), dataIndex: "person_name", width: 160, ellipsis: true },
             {
-              title: "GitLab 账号",
+              title: t("groups.colGitlabAccount"),
               width: 190,
               render: (_, m) => (
                 <Select
@@ -567,7 +593,7 @@ export default function Groups() {
                   showSearch
                   allowClear
                   optionFilterProp="label"
-                  placeholder="选择/搜索绑定"
+                  placeholder={t("groups.selectBind")}
                   popupMatchSelectWidth={320}
                   optionRender={(o) => optionTip(String(o.label ?? ""))}
                   labelRender={({ label, value }) => optionTip(String(label ?? value ?? ""))}
@@ -575,7 +601,7 @@ export default function Groups() {
                   onOpenChange={(o) => o && loadGlUsers()}
                   onClear={() => bindGitlab(m, null)}
                   onChange={(u) => bindGitlab(m, u)}
-                  notFoundContent={glErr || "暂无 GitLab 成员"}
+                  notFoundContent={glErr || t("groups.noGlMembers")}
                   options={glUsers.map((u) => ({
                     value: u.username,
                     label: u.name ? `${u.username} · ${u.name}` : u.username,
@@ -586,7 +612,7 @@ export default function Groups() {
             },
             {
               // 绑定与调整合成一列：下拉显示当前绑定的群成员，改动即人工调整
-              title: "octo 绑定",
+              title: t("groups.colOctoBind"),
               width: 230,
               render: (_, m) => (
                 <Select
@@ -595,7 +621,7 @@ export default function Groups() {
                   showSearch
                   allowClear
                   optionFilterProp="label"
-                  placeholder="选择/搜索群成员"
+                  placeholder={t("groups.selectOcto")}
                   popupMatchSelectWidth={320}
                   optionRender={(o) => optionTip(String(o.label ?? ""))}
                   labelRender={({ label, value }) => optionTip(String(label ?? value ?? ""))}
@@ -609,21 +635,23 @@ export default function Groups() {
               ),
             },
             {
-              title: "对配状态",
+              title: t("groups.colMatchStatus"),
               width: 110,
               render: (_, m) => {
-                const t = STATUS_TAG[m.match_status] || ["default", m.match_status];
-                return <Tag color={t[0]}>{t[1]}</Tag>;
+                const pair = STATUS_TAG[m.match_status];
+                return (
+                  <Tag color={pair?.[0] ?? "default"}>{pair ? t(pair[1]) : m.match_status}</Tag>
+                );
               },
             },
-            { title: "依据", dataIndex: "match_reason", width: 160, ellipsis: true, render: (v) => v || "—" },
+            { title: t("groups.colReason"), dataIndex: "match_reason", width: 160, ellipsis: true, render: (v) => v || "—" },
             {
-              title: "操作",
+              title: t("common.actions"),
               width: 190,
               render: (_, m) => (
                 <Space size={12}>
-                  {m.gitlab_username && <a onClick={() => bindGitlab(m, null)}>解绑 GitLab</a>}
-                  {m.octo_uid && <a onClick={() => manualBind(m, null)}>解绑 octo</a>}
+                  {m.gitlab_username && <a onClick={() => bindGitlab(m, null)}>{t("groups.unbindGitlab")}</a>}
+                  {m.octo_uid && <a onClick={() => manualBind(m, null)}>{t("groups.unbindOcto")}</a>}
                   <a
                     style={{ color: "#cf1322" }}
                     onClick={async () => {
@@ -631,7 +659,7 @@ export default function Groups() {
                       setMembers(await api<Member[]>(`/api/groups/${mgroup!.id}/members`));
                     }}
                   >
-                    移除
+                    {t("groups.remove")}
                   </a>
                 </Space>
               ),
@@ -640,7 +668,7 @@ export default function Groups() {
         />
         <Modal
           open={addOpen}
-          title="添加成员"
+          title={t("groups.addMember")}
           onCancel={() => setAddOpen(false)}
           onOk={async () => {
             if (!addPid) return;
@@ -659,12 +687,15 @@ export default function Groups() {
         >
           <Select
             style={{ width: "100%" }}
-            placeholder="选择人员"
+            placeholder={t("groups.selectPerson")}
             showSearch
             optionFilterProp="label"
             value={addPid}
             onChange={setAddPid}
-            options={people.map((p) => ({ value: p.id, label: `${p.name}（${p.gitlab_username || ""}）` }))}
+            options={people.map((p) => ({
+              value: p.id,
+              label: t("groups.personLabel", { name: p.name, username: p.gitlab_username || "" }),
+            }))}
           />
         </Modal>
       </Drawer>

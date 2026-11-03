@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { Input, Select, message } from "antd";
+import { useTranslation } from "react-i18next";
 import { api } from "../api";
 
 interface AmItem {
@@ -32,6 +33,7 @@ export default function AmSelect({
   style?: CSSProperties;
   prefix?: ReactNode;
 }) {
+  const { t } = useTranslation();
   const [options, setOptions] = useState<AmItem[]>([]);
   const [fallback, setFallback] = useState(false);
 
@@ -39,7 +41,7 @@ export default function AmSelect({
     async (open: boolean) => {
       if (!open) return;
       if (kind === "agent" && !teamId) {
-        message.info("请先选择团队，专家列表随团队加载");
+        message.info(t("amSelect.chooseTeamFirst"));
         return;
       }
       try {
@@ -49,11 +51,11 @@ export default function AmSelect({
         // 上一次失败降级成手输框后，重新展开还能回到下拉（hub 恢复后自愈）
         setFallback(false);
       } catch (e: any) {
-        message.error(`agent-memory 列表获取失败：${e.message}，可手动输入`);
+        message.error(t("amSelect.loadFailed", { error: e.message }));
         setFallback(true);
       }
     },
-    [kind, teamId],
+    [kind, teamId, t],
   );
 
   // 已存 id 在重开弹窗时要解析回名字：antd Select 找不到匹配 option 会直接显示原始 id

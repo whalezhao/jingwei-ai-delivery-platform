@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Input, Select, Tag, Typography, message } from "antd";
+import { useTranslation } from "react-i18next";
 import ResizableTable from "../ResizableTable";
 import { api } from "../api";
+import i18n, { type MsgKey } from "../i18n";
 import { useGroup } from "../group";
 import Page from "../Page";
 import { PAGE } from "../table";
@@ -38,19 +40,17 @@ export interface TaskEvent {
   id?: string;
 }
 
-export const STATUS: Record<string, [string, string]> = {
-  pending: ["default", "待派发"],
-  queued: ["processing", "排队中"],
-  running: ["processing", "执行中"],
-  pushed: ["processing", "已推送"],
-  mr_created: ["success", "待审核"],
-  reviewing: ["success", "审核中"],
-  cicd: ["processing", "CICD"],
-  done: ["green", "完成"],
-  failed: ["error", "失败"],
+export const STATUS: Record<string, [string, MsgKey]> = {
+  pending: ["default", "tasks.status.pending"],
+  queued: ["processing", "tasks.status.queued"],
+  running: ["processing", "tasks.status.running"],
+  pushed: ["processing", "tasks.status.pushed"],
+  mr_created: ["success", "tasks.status.mr_created"],
+  reviewing: ["success", "tasks.status.reviewing"],
+  cicd: ["processing", "tasks.status.cicd"],
+  done: ["green", "tasks.status.done"],
+  failed: ["error", "tasks.status.failed"],
 };
-
-const DENIED = "该需求已被他人认领，仅认领人可打开";
 
 /** 任务详情 / 需求详情都含需求文档与方案正文：can_open=false 时不给入口，点也不跳 */
 function openOrTell(r: Task, to: string, label: string, className?: string) {
@@ -59,13 +59,18 @@ function openOrTell(r: Task, to: string, label: string, className?: string) {
       {label}
     </Link>
   ) : (
-    <span className={className} style={{ color: "var(--muted)", cursor: "help" }} onClick={() => message.info(DENIED)}>
+    <span
+      className={className}
+      style={{ color: "var(--muted)", cursor: "help" }}
+      onClick={() => message.info(i18n.t("errors.denied"))}
+    >
       {label}
     </span>
   );
 }
 
 export default function Tasks() {
+  const { t } = useTranslation();
   const { groupId } = useGroup();
   const [rows, setRows] = useState<Task[]>([]);
   const [projects, setProjects] = useState<any[]>([]);
@@ -83,8 +88,8 @@ export default function Tasks() {
   };
   useEffect(() => {
     load();
-    const t = setInterval(load, 5000); // 状态自动刷新
-    return () => clearInterval(t);
+    const timer = setInterval(load, 5000); // 状态自动刷新
+    return () => clearInterval(timer);
   }, [groupId, projectId, status, keyword]);
 
   useEffect(() => {
@@ -93,7 +98,7 @@ export default function Tasks() {
   }, [groupId]);
 
   return (
-    <Page title="开发任务" desc="任务池 · 所有 runner 抢单执行 · 状态 5 秒自动刷新">
+    <Page title={t("nav.tasks")} desc={t("tasks.desc")}>
       <div className="page-card">
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
           <Select
@@ -101,7 +106,7 @@ export default function Tasks() {
             allowClear
             showSearch
             optionFilterProp="label"
-            placeholder="按项目筛选"
+            placeholder={t("tasks.filterProject")}
             value={projectId}
             onChange={setProjectId}
             options={projects.map((p) => ({ value: p.id, label: `${p.path}（${p.name}）` }))}
@@ -111,15 +116,15 @@ export default function Tasks() {
             allowClear
             showSearch
             optionFilterProp="label"
-            placeholder="按状态筛选"
+            placeholder={t("tasks.filterStatus")}
             value={status}
             onChange={setStatus}
-            options={Object.entries(STATUS).map(([k, v]) => ({ value: k, label: v[1] }))}
+            options={Object.entries(STATUS).map(([k, v]) => ({ value: k, label: t(v[1]) }))}
           />
           <Input.Search
             style={{ width: 260 }}
             allowClear
-            placeholder="任务号 / 标题"
+            placeholder={t("tasks.searchPlaceholder")}
             onSearch={(v) => setKeyword(v.trim())}
             onChange={(e) => !e.target.value && setKeyword("")}
           />
@@ -130,13 +135,13 @@ export default function Tasks() {
           pagination={PAGE}
           columns={[
             {
-              title: "任务号",
+              title: t("tasks.colCode"),
               dataIndex: "code",
               width: 250,
               render: (v, r) => openOrTell(r, `/tasks/${r.id}`, v, "mono"),
             },
             {
-              title: "任务标题",
+              title: t("tasks.colTitle"),
               dataIndex: "title",
               ellipsis: true,
               render: (v, r) => (
@@ -144,28 +149,28 @@ export default function Tasks() {
               ),
             },
             {
-              title: "需求",
+              title: t("tasks.colRequirement"),
               dataIndex: "requirement_id",
-              render: (v, r) => openOrTell(r, `/reqs/${v}`, "查看需求"),
+              render: (v, r) => openOrTell(r, `/reqs/${v}`, t("tasks.viewRequirement")),
               width: 100,
             },
             {
-              title: "执行节点",
+              title: t("tasks.colRunner"),
               dataIndex: "runner_name",
               width: 110,
               render: (v) => v || "—",
             },
             {
-              title: "状态",
+              title: t("common.status"),
               dataIndex: "status",
               width: 110,
               render: (v) => {
-                const t = STATUS[v] || ["default", v];
-                return <Tag color={t[0]}>{t[1]}</Tag>;
+                const pair = STATUS[v];
+                return <Tag color={pair?.[0] ?? "default"}>{pair ? t(pair[1]) : v}</Tag>;
               },
             },
             {
-              title: "分支",
+              title: t("tasks.colBranch"),
               dataIndex: "branch",
               render: (v) => (v ? <span className="mono">{v}</span> : "—"),
             },
@@ -187,21 +192,21 @@ export default function Tasks() {
               width: 80,
             },
             {
-              title: "错误",
+              title: t("tasks.colError"),
               dataIndex: "error",
               ellipsis: true,
               render: (v) =>
                 v ? <Typography.Text type="danger" style={{ fontSize: 12 }}>{v}</Typography.Text> : "—",
             },
             {
-              title: "创建时间",
+              title: t("tasks.colCreated"),
               dataIndex: "created_at",
               render: (v) => (v ? <span className="mono">{v.slice(0, 19)}</span> : "—"),
               width: 170,
             },
             {
-              title: "操作",
-              render: (_, r) => openOrTell(r, `/tasks/${r.id}`, "详情"),
+              title: t("common.actions"),
+              render: (_, r) => openOrTell(r, `/tasks/${r.id}`, t("tasks.detail")),
               width: 80,
             },
           ]}

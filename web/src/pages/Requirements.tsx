@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button, Divider, Empty, Form, Input, Modal, Popconfirm, Select, Space, Tag, Typography, message } from "antd";
+import { useTranslation } from "react-i18next";
 import ResizableTable from "../ResizableTable";
 import { CheckCircleFilled, CheckCircleOutlined, PlusOutlined } from "@ant-design/icons";
 import { api, isAdmin } from "../api";
 import { useGroup } from "../group";
 import Page from "../Page";
 import { PAGE } from "../table";
+import type { MsgKey } from "../i18n";
 
 interface Req {
   id: number;
@@ -30,25 +32,25 @@ interface Req {
   can_open: boolean;
 }
 
-const STATUS: Record<string, [string, string]> = {
-  pool: ["default", "池中"],
-  claimed: ["processing", "方案讨论中"],
-  confirmed: ["success", "已定稿"],
-  archived: ["default", "已归档"],
-  online: ["cyan", "已上线"],
+const STATUS: Record<string, [string, MsgKey]> = {
+  pool: ["default", "requirements.status.pool"],
+  claimed: ["processing", "requirements.status.claimed"],
+  confirmed: ["success", "requirements.status.confirmed"],
+  archived: ["default", "requirements.status.archived"],
+  online: ["cyan", "requirements.status.online"],
 };
 
-const ITER: Record<string, [string, string]> = {
-  iterating: ["blue", "迭代中"],
-  formal: ["green", "正式"],
+const ITER: Record<string, [string, MsgKey]> = {
+  iterating: ["blue", "requirements.iter.iterating"],
+  formal: ["green", "requirements.iter.formal"],
 };
 
-const SETUP_ITEMS: [keyof Setup, string, string][] = [
-  ["gitlab", "研发组接入 GitLab", "/groups"],
-  ["project", "项目已导入", "/projects"],
-  ["people", "人员 GitLab 账号已录", "/people"],
-  ["am", "agent-memory 已绑定", "/projects"],
-  ["runner", "Runner 节点在线", "/nodes"],
+const SETUP_ITEMS: [keyof Setup, MsgKey, string][] = [
+  ["gitlab", "requirements.setupGitlab", "/groups"],
+  ["project", "requirements.setupProject", "/projects"],
+  ["people", "requirements.setupPeople", "/people"],
+  ["am", "requirements.setupAm", "/projects"],
+  ["runner", "requirements.setupRunner", "/nodes"],
 ];
 
 interface Setup {
@@ -60,6 +62,7 @@ interface Setup {
 }
 
 export default function Requirements() {
+  const { t } = useTranslation();
   const nav = useNavigate();
   const { groupId } = useGroup();
   const [rows, setRows] = useState<Req[]>([]);
@@ -115,7 +118,7 @@ export default function Requirements() {
   const remove = async (r: Req) => {
     try {
       await api(`/api/requirements/${r.id}`, { method: "DELETE" });
-      message.success(`已删除 ${r.code}`);
+      message.success(t("requirements.deleted", { code: r.code }));
       setRows((prev) => prev.filter((x) => x.id !== r.id));
     } catch (e: any) {
       message.error(e.message);
@@ -125,7 +128,7 @@ export default function Requirements() {
   const claim = async (r: Req) => {
     try {
       await api(`/api/requirements/${r.id}/claim`, { method: "POST" });
-      message.success("已认领，进入对话制定方案");
+      message.success(t("requirements.claimed"));
       nav(`/reqs/${r.id}`);
     } catch (e: any) {
       message.error(e.message);
@@ -148,8 +151,8 @@ export default function Requirements() {
 
   return (
     <Page
-      title="需求池"
-      desc="上传需求 → 认领 → AI 对话定方案 → 建任务派发"
+      title={t("nav.requirements")}
+      desc={t("requirements.desc")}
       actions={
         <Button
           type="primary"
@@ -160,13 +163,13 @@ export default function Requirements() {
             form.resetFields();
           }}
         >
-          新建需求
+          {t("requirements.new")}
         </Button>
       }
     >
       {setup && Object.values(setup).some((v) => !v) && (
         <div className="setup-card">
-          <div className="setup-head">初始化进度 · 全部完成前，需求→开发的全流程跑不通</div>
+          <div className="setup-head">{t("requirements.setupHead")}</div>
           <div className="setup-items">
             {SETUP_ITEMS.map(([k, label, to]) => (
               <a key={k} className={"setup-item" + (setup[k] ? " done" : "")} onClick={() => nav(to)}>
@@ -175,7 +178,7 @@ export default function Requirements() {
                 ) : (
                   <CheckCircleOutlined style={{ color: "rgba(0,0,0,0.25)" }} />
                 )}
-                {label}
+                {t(label)}
               </a>
             ))}
           </div>
@@ -186,7 +189,7 @@ export default function Requirements() {
           <Input.Search
             style={{ width: 240 }}
             allowClear
-            placeholder="编号 / 标题 / 描述 / 认领人"
+            placeholder={t("requirements.searchPlaceholder")}
             onSearch={(v) => setKeyword(v)}
             onChange={(e) => !e.target.value && setKeyword("")}
           />
@@ -195,7 +198,7 @@ export default function Requirements() {
             allowClear
             showSearch
             optionFilterProp="label"
-            placeholder="按项目筛选（项目下才有需求池）"
+            placeholder={t("requirements.filterProject")}
             value={projFilter}
             onChange={setProjFilter}
             options={projects.map((p) => ({ value: p.id, label: `${p.path}（${p.code_prefix}）` }))}
@@ -205,30 +208,30 @@ export default function Requirements() {
             allowClear
             showSearch
             optionFilterProp="label"
-            placeholder="按状态筛选"
+            placeholder={t("requirements.filterStatus")}
             value={statusFilter}
             onChange={setStatusFilter}
-            options={Object.entries(STATUS).map(([v, t]) => ({ value: v, label: t[1] }))}
+            options={Object.entries(STATUS).map(([v, pair]) => ({ value: v, label: t(pair[1]) }))}
           />
           <Select
             style={{ width: 150 }}
             allowClear
             showSearch
             optionFilterProp="label"
-            placeholder="按迭代状态筛选"
+            placeholder={t("requirements.filterIter")}
             value={iterFilter}
             onChange={setIterFilter}
-            options={Object.entries(ITER).map(([v, t]) => ({ value: v, label: t[1] }))}
+            options={Object.entries(ITER).map(([v, pair]) => ({ value: v, label: t(pair[1]) }))}
           />
           <Select
             style={{ width: 170 }}
             allowClear
             showSearch
             optionFilterProp="label"
-            placeholder="按迭代版本筛选"
+            placeholder={t("requirements.filterTag")}
             value={tagFilter}
             onChange={setTagFilter}
-            options={tagOptions.map((t) => ({ value: t, label: t }))}
+            options={tagOptions.map((tag) => ({ value: tag, label: tag }))}
           />
         </div>
         <ResizableTable<Req>
@@ -237,30 +240,28 @@ export default function Requirements() {
           pagination={PAGE}
           rowClassName={() => "row-click"}
           onRow={(r) => ({
-            onClick: () => (r.can_open ? nav(`/reqs/${r.id}`) : message.info("该需求已被他人认领，仅认领人可打开")),
+            onClick: () => (r.can_open ? nav(`/reqs/${r.id}`) : message.info(t("requirements.cannotOpen"))),
           })}
           locale={{
             emptyText: (
               <Empty
-                description={filtering ? "没有符合筛选条件的需求" : "需求池还是空的"}
+                description={filtering ? t("requirements.emptyFiltered") : t("requirements.empty")}
                 image={Empty.PRESENTED_IMAGE_SIMPLE}
                 style={{ padding: "32px 0" }}
               >
-                <Typography.Text type="secondary">
-                  先由管理员建好项目，然后在这里录入第一个需求
-                </Typography.Text>
+                <Typography.Text type="secondary">{t("requirements.emptyHint")}</Typography.Text>
               </Empty>
             ),
           }}
           columns={[
             {
-              title: "编号",
+              title: t("requirements.colCode"),
               dataIndex: "code",
               width: 235,
               render: (v) => <span className="mono">{v}</span>,
             },
             {
-              title: "标题",
+              title: t("requirements.colTitle"),
               dataIndex: "title",
               ellipsis: true,
               render: (v, r) =>
@@ -278,32 +279,32 @@ export default function Requirements() {
                 ),
             },
             {
-              title: "项目",
+              title: t("requirements.colProject"),
               dataIndex: "project_name",
               width: 130,
               ellipsis: true,
               render: (v) => v || "—",
             },
             {
-              title: "状态",
+              title: t("requirements.colStatus"),
               dataIndex: "status",
               width: 110,
               render: (v) => {
-                const t = STATUS[v] || ["default", v];
-                return <Tag color={t[0]}>{t[1]}</Tag>;
+                const pair = STATUS[v];
+                return <Tag color={pair?.[0] ?? "default"}>{pair ? t(pair[1]) : v}</Tag>;
               },
             },
             {
-              title: "迭代状态",
+              title: t("requirements.colIter"),
               dataIndex: "iteration_status",
               width: 100,
               render: (v) => {
-                const t = ITER[v] || ["default", v];
-                return <Tag color={t[0]}>{t[1]}</Tag>;
+                const pair = ITER[v];
+                return <Tag color={pair?.[0] ?? "default"}>{pair ? t(pair[1]) : v}</Tag>;
               },
             },
             {
-              title: "迭代版本",
+              title: t("requirements.colTag"),
               dataIndex: "tags",
               width: 150,
               render: (v: string[] | undefined, r) =>
@@ -317,7 +318,7 @@ export default function Requirements() {
                       size="small"
                       variant="borderless"
                       style={{ width: "100%" }}
-                      placeholder="加迭代版本标签"
+                      placeholder={t("requirements.tagPlaceholder")}
                       value={v || []}
                       tokenSeparators={[",", "，"]}
                       onChange={(tags: string[]) => saveTags(r, tags)}
@@ -326,7 +327,7 @@ export default function Requirements() {
                 ),
             },
             {
-              title: "认领人",
+              title: t("requirements.colClaimant"),
               dataIndex: "claimant_name",
               width: 110,
               render: (v, r) =>
@@ -334,13 +335,13 @@ export default function Requirements() {
                   v
                 ) : r.proposer_name ? (
                   // 定稿后认领权已交还开发，产品留痕为提出人
-                  <span className="muted">待开发认领 · {r.proposer_name} 提出</span>
+                  <span className="muted">{t("requirements.proposedBy", { name: r.proposer_name })}</span>
                 ) : (
                   "—"
                 ),
             },
             {
-              title: "操作",
+              title: t("requirements.colActions"),
               width: 150,
               render: (_, r) => (
                 <Space size={0} split={<Divider type="vertical" />}>
@@ -351,7 +352,7 @@ export default function Requirements() {
                         claim(r);
                       }}
                     >
-                      认领
+                      {t("requirements.claim")}
                     </a>
                   ) : r.can_open ? (
                     <a
@@ -360,7 +361,7 @@ export default function Requirements() {
                         nav(`/reqs/${r.id}`);
                       }}
                     >
-                      {r.status === "claimed" ? "继续讨论" : "查看"}
+                      {r.status === "claimed" ? t("requirements.continueDiscuss") : t("requirements.view")}
                     </a>
                   ) : null}
                   {r.can_open &&
@@ -373,18 +374,18 @@ export default function Requirements() {
                           openEdit(r);
                         }}
                       >
-                        编辑
+                        {t("requirements.edit")}
                       </a>
                     )}
                   {(isAdmin() || r.claimant_id === Number(localStorage.getItem("vega_me"))) && (
                     <Popconfirm
-                      title="删除该需求？"
-                      description="需求文档、方案、对话记录和未开发的任务会一起删除，不可恢复。"
+                      title={t("requirements.deleteConfirm")}
+                      description={t("requirements.deleteDesc")}
                       okButtonProps={{ danger: true }}
                       onConfirm={() => remove(r)}
                     >
                       <a className="danger-link" onClick={(e) => e.stopPropagation()}>
-                        删除
+                        {t("requirements.delete")}
                       </a>
                     </Popconfirm>
                   )}
@@ -396,7 +397,7 @@ export default function Requirements() {
       </div>
       <Modal
         open={open}
-        title={editing ? "编辑需求" : "新建需求"}
+        title={editing ? t("requirements.editTitle") : t("requirements.createTitle")}
         onCancel={() => {
           setOpen(false);
           setEditing(null);
@@ -418,13 +419,13 @@ export default function Requirements() {
                     description: v.description ?? null,
                   }),
                 });
-                message.success("已保存");
+                message.success(t("requirements.saved"));
                 setOpen(false);
                 setEditing(null);
                 load();
               } else {
                 const r = await api<Req>("/api/requirements", { method: "POST", body: JSON.stringify(v) });
-                message.success(`已创建 ${r.code}，可上传需求文档`);
+                message.success(t("requirements.created", { code: r.code }));
                 setOpen(false);
                 nav(`/reqs/${r.id}`);
               }
@@ -433,7 +434,12 @@ export default function Requirements() {
             }
           }}
         >
-          <Form.Item name="project_id" label="项目" rules={[{ required: true }]} tooltip="项目创建后不可修改">
+          <Form.Item
+            name="project_id"
+            label={t("requirements.projectLabel")}
+            rules={[{ required: true }]}
+            tooltip={t("requirements.projectTooltip")}
+          >
             <Select
               disabled={!!editing}
               showSearch
@@ -444,10 +450,10 @@ export default function Requirements() {
               }))}
             />
           </Form.Item>
-          <Form.Item name="title" label="标题" rules={[{ required: true }]}>
+          <Form.Item name="title" label={t("requirements.titleLabel")} rules={[{ required: true }]}>
             <Input />
           </Form.Item>
-          <Form.Item name="description" label="描述">
+          <Form.Item name="description" label={t("requirements.descLabel")}>
             <Input.TextArea rows={4} />
           </Form.Item>
         </Form>

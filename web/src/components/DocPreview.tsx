@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import Markdown from "react-markdown";
 import { Spin } from "antd";
 import { api } from "../api";
+import i18n from "../i18n";
 
 /**
  * 需求文档预览：md 渲染 / txt 原文 / docx 前端转 html（mammoth）。
@@ -30,24 +31,24 @@ export default function DocPreview({ reqId, doc }: { reqId: number; doc: DocMeta
       try {
         if (/\.(md|markdown)$/i.test(doc.filename)) {
           const c = await api<{ content: string }>(`/api/requirements/${reqId}/docs/${doc.id}`);
-          if (alive) setMd(c.content || "（空文件）");
+          if (alive) setMd(c.content || i18n.t("docPreview.emptyFile"));
         } else if (/\.txt$/i.test(doc.filename)) {
           const c = await api<{ content: string }>(`/api/requirements/${reqId}/docs/${doc.id}`);
-          if (alive) setText(c.content || "（空文件）");
+          if (alive) setText(c.content || i18n.t("docPreview.emptyFile"));
         } else {
           // docx：取原始字节 → mammoth 转 html
           const token = localStorage.getItem("vega_token") || "";
           const r = await fetch(`/api/requirements/${reqId}/docs/${doc.id}/download`, {
             headers: { Authorization: `Bearer ${token}` },
           });
-          if (!r.ok) throw new Error(`下载失败（${r.status}）`);
+          if (!r.ok) throw new Error(i18n.t("docPreview.downloadFailed", { status: r.status }));
           const buf = await r.arrayBuffer();
           const mammoth = await import("mammoth/mammoth.browser");
           const out = await mammoth.convertToHtml({ arrayBuffer: buf });
-          if (alive) setHtml(out.value || "（docx 无文本内容）");
+          if (alive) setHtml(out.value || i18n.t("docPreview.docxNoText"));
         }
       } catch (e: any) {
-        if (alive) setErr(e.message || "预览失败");
+        if (alive) setErr(e.message || i18n.t("docPreview.previewFailed"));
       }
     })();
     return () => {

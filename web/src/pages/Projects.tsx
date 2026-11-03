@@ -1,12 +1,21 @@
 import { useEffect, useState } from "react";
-import { Button, Divider, Form, Input, Modal, Popconfirm, Select, Space, Tag, message } from "antd";
+import { Button, Checkbox, Divider, Drawer, Empty, Form, Input, Modal, Popconfirm, Select, Space, Tag, message } from "antd";
+import { useTranslation } from "react-i18next";
+import Markdown from "react-markdown";
 import ResizableTable from "../ResizableTable";
 import { PlusOutlined } from "@ant-design/icons";
 import { api, isAdmin } from "../api";
+import type { MsgKey } from "../i18n";
 import { useGroup } from "../group";
 import AmSelect from "../components/AmSelect";
 import Page from "../Page";
 import { PAGE } from "../table";
+
+const EGM_ST: Record<string, { color: string; text: MsgKey }> = {
+  running: { color: "processing", text: "projects.egm.running" },
+  done: { color: "success", text: "projects.egm.done" },
+  failed: { color: "error", text: "projects.egm.failed" },
+};
 
 interface Project {
   id: number;
@@ -37,12 +46,17 @@ const prefixToDb = (s: string | null | undefined) =>
     .map((x) => (x === "*" ? "" : x));
 
 export default function Projects() {
+  const { t } = useTranslation();
   const { groupId } = useGroup();
   const [rows, setRows] = useState<Project[]>([]);
   const [groups, setGroups] = useState<any[]>([]);
   const [people, setPeople] = useState<any[]>([]);
   const [editing, setEditing] = useState<any>(null);
   const [keyword, setKeyword] = useState("");
+  // EGM 项目级任务：bootstrap 生成 README 树，drift 出设计-代码漂移报告
+  const [egmFor, setEgmFor] = useState<Project | null>(null);
+  const [egmReports, setEgmReports] = useState<any[]>([]);
+  const [egmBusy, setEgmBusy] = useState(false);
   const [form] = Form.useForm();
   // 专家列表随团队：项目团队 → 未选回退研发组团队
   const watchTeam: string | undefined = Form.useWatch("am_team_id", form);
@@ -80,6 +94,7 @@ export default function Projects() {
             auto_approve_prefixes: "",
             am_team_id: "",
             am_agent_id: "",
+            run_egm_bootstrap: false,
           },
     );
     form.resetFields();
@@ -94,11 +109,31 @@ export default function Projects() {
     try {
       if (editing.id) await api(`/api/projects/${editing.id}`, { method: "PUT", body: JSON.stringify(body) });
       else await api("/api/projects", { method: "POST", body: JSON.stringify(body) });
-      message.success("已保存");
+      message.success(
+        !editing.id && v.run_egm_bootstrap ? t("projects.savedEgm") : t("common.saved"),
+      );
       setEditing(null);
       load();
     } catch (e: any) {
       message.error(e.message);
+    }
+  };
+
+  const openEgm = async (p: Project) => {
+    setEgmFor(p);
+    setEgmReports(await api<any[]>(`/api/projects/${p.id}/egm-reports`).catch(() => []));
+  };
+
+  const runEgm = async (p: Project, kind: "bootstrap" | "drift") => {
+    setEgmBusy(true);
+    try {
+      await api(`/api/projects/${p.id}/egm-jobs`, { method: "POST", body: JSON.stringify({ kind }) });
+      message.success(t(kind === "bootstrap" ? "projects.submittedBootstrap" : "projects.submittedDrift"));
+      await openEgm(p);
+    } catch (e: any) {
+      message.error(e.message);
+    } finally {
+      setEgmBusy(false);
     }
   };
 
@@ -114,12 +149,12 @@ export default function Projects() {
 
   return (
     <Page
-      title="项目"
-      desc="需求编号前缀 · 默认/MR 目标分支 · 技术负责人（日报接收 / 卡 MR 升级对象）/ 项目负责人"
+      title={t("nav.projects")}
+      desc={t("projects.desc")}
       actions={
         isAdmin() && (
           <Button type="primary" icon={<PlusOutlined />} onClick={() => open()}>
-            新建项目
+            {t("projects.new")}
           </Button>
         )
       }
@@ -128,7 +163,7 @@ export default function Projects() {
         <Input.Search
           style={{ width: 280, marginBottom: 12 }}
           allowClear
-          placeholder="项目路径 / 名称 / 编号前缀 / 研发组"
+          placeholder={t("projects.searchPlaceholder")}
           onSearch={(v) => setKeyword(v)}
           onChange={(e) => !e.target.value && setKeyword("")}
         />
@@ -138,44 +173,53 @@ export default function Projects() {
           pagination={PAGE}
           columns={[
             {
-              title: "项目",
+              title: t("projects.colProject"),
               dataIndex: "path",
               render: (v) => <span className="mono">{v}</span>,
             },
-            { title: "研发组", render: (_, r) => gname(r.group_id) },
+            { title: t("projects.colGroup"), render: (_, r) => gname(r.group_id) },
             {
               title: "GitLab ID",
               dataIndex: "gitlab_project_id",
               render: (v) => <span className="mono">{v}</span>,
             },
-            { title: "编号前缀", dataIndex: "code_prefix", render: (v) => <Tag color="blue">{v}</Tag> },
-            { title: "默认分支", dataIndex: "default_branch", render: (v) => <span className="mono">{v}</span> },
+            { title: t("projects.colPrefix"), dataIndex: "code_prefix", render: (v) => <Tag color="blue">{v}</Tag> },
+            { title: t("projects.colDefaultBranch"), dataIndex: "default_branch", render: (v) => <span className="mono">{v}</span> },
             {
-              title: "MR 目标分支",
+              title: t("projects.colMrTarget"),
               dataIndex: "mr_target_branch",
               render: (v) => <span className="mono">{v}</span>,
             },
             {
-              title: "技术负责人",
+              title: t("projects.colTechLead"),
               render: (_, r) =>
-                r.tech_lead_person_ids.length ? r.tech_lead_person_ids.map(pname).join("、") : "—",
+                r.tech_lead_person_ids.length
+                  ? r.tech_lead_person_ids.map(pname).join(t("projects.listSep"))
+                  : "—",
             },
             {
-              title: "项目负责人",
-              render: (_, r) => (r.owner_person_ids.length ? r.owner_person_ids.map(pname).join("、") : "—"),
+              title: t("projects.colOwner"),
+              render: (_, r) =>
+                r.owner_person_ids.length
+                  ? r.owner_person_ids.map(pname).join(t("projects.listSep"))
+                  : "—",
             },
             {
-              title: "审计/放行前缀",
+              title: t("projects.colPrefixes"),
               render: (_, r) => (
                 <>
                   {r.audit_prefixes?.length ? (
                     <Tag color="geekblue">
-                      审 {r.audit_prefixes.includes("") ? "全部" : r.audit_prefixes.length}
+                      {r.audit_prefixes.includes("")
+                        ? t("projects.auditAll")
+                        : t("projects.auditCount", { n: r.audit_prefixes.length })}
                     </Tag>
                   ) : null}
                   {r.auto_approve_prefixes?.length ? (
                     <Tag color="green">
-                      放 {r.auto_approve_prefixes.includes("") ? "全部" : r.auto_approve_prefixes.length}
+                      {r.auto_approve_prefixes.includes("")
+                        ? t("projects.releaseAll")
+                        : t("projects.releaseCount", { n: r.auto_approve_prefixes.length })}
                     </Tag>
                   ) : null}
                   {!r.audit_prefixes?.length && !r.auto_approve_prefixes?.length ? "—" : null}
@@ -183,13 +227,16 @@ export default function Projects() {
               ),
             },
             {
-              title: "操作",
+              title: t("common.actions"),
               render: (_, r) => (
                 <Space size={0} split={<Divider type="vertical" />} wrap>
-                  <a onClick={() => open(r)}>编辑</a>
+                  <a onClick={() => open(r)}>{t("common.edit")}</a>
+                  <a onClick={() => openEgm(r)}>{t("projects.egmReports")}</a>
+                  <a onClick={() => !egmBusy && runEgm(r, "bootstrap")}>{t("projects.docTree")}</a>
+                  <a onClick={() => !egmBusy && runEgm(r, "drift")}>{t("projects.driftCheck")}</a>
                   {isAdmin() && (
                     <Popconfirm
-                      title="删除该项目？"
+                      title={t("projects.deleteConfirm")}
                       onConfirm={async () => {
                         try {
                           await api(`/api/projects/${r.id}`, { method: "DELETE" });
@@ -199,7 +246,7 @@ export default function Projects() {
                         }
                       }}
                     >
-                      <a className="danger-link">删除</a>
+                      <a className="danger-link">{t("common.delete")}</a>
                     </Popconfirm>
                   )}
                 </Space>
@@ -210,14 +257,14 @@ export default function Projects() {
       </div>
       <Modal
         open={!!editing}
-        title={editing?.id ? "编辑项目" : "新建项目"}
+        title={editing?.id ? t("projects.editTitle") : t("projects.createTitle")}
         onCancel={() => setEditing(null)}
         onOk={() => form.submit()}
         width={720}
         destroyOnHidden
       >
         <Form form={form} layout="vertical" initialValues={editing || {}} onFinish={save}>
-          <Form.Item name="group_id" label="研发组" rules={[{ required: true }]}>
+          <Form.Item name="group_id" label={t("projects.group")} rules={[{ required: true }]}>
             <Select
               disabled={!!editing?.id}
               showSearch
@@ -225,25 +272,35 @@ export default function Projects() {
               options={groups.map((g) => ({ value: g.id, label: g.name }))}
             />
           </Form.Item>
-          <Form.Item name="gitlab_project_id" label="GitLab 项目 ID" rules={[{ required: true }]}>
+          <Form.Item name="gitlab_project_id" label={t("projects.gitlabId")} rules={[{ required: true }]}>
             <Input disabled={!!editing?.id} />
           </Form.Item>
-          <Form.Item name="path" label="仓库路径（group/repo）" rules={[{ required: true }]}>
+          <Form.Item name="path" label={t("projects.repoPath")} rules={[{ required: true }]}>
             <Input />
           </Form.Item>
-          <Form.Item name="name" label="项目名" rules={[{ required: true }]}>
+          <Form.Item name="name" label={t("projects.projectName")} rules={[{ required: true }]}>
             <Input />
           </Form.Item>
-          <Form.Item name="code_prefix" label="需求编号前缀" rules={[{ required: true }]}>
-            <Input maxLength={12} placeholder="如 FUS" />
+          <Form.Item name="code_prefix" label={t("projects.codePrefix")} rules={[{ required: true }]}>
+            <Input maxLength={12} placeholder={t("projects.codePrefixPlaceholder")} />
           </Form.Item>
-          <Form.Item name="default_branch" label="默认分支">
+          <Form.Item name="default_branch" label={t("projects.defaultBranch")}>
             <Input />
           </Form.Item>
-          <Form.Item name="mr_target_branch" label="MR 目标分支" tooltip="AI 开发完成后向该分支提交 MR">
+          <Form.Item name="mr_target_branch" label={t("projects.mrTarget")} tooltip={t("projects.mrTargetTooltip")}>
             <Input />
           </Form.Item>
-          <Form.Item name="tech_lead_person_ids" label="技术负责人（日报接收 / 卡 MR 升级对象）">
+          {!editing?.id && (
+            <Form.Item
+              name="run_egm_bootstrap"
+              valuePropName="checked"
+              label={t("projects.runBootstrap")}
+              tooltip={t("projects.runBootstrapTooltip")}
+            >
+              <Checkbox>{t("projects.bootstrapNow")}</Checkbox>
+            </Form.Item>
+          )}
+          <Form.Item name="tech_lead_person_ids" label={t("projects.techLead")}>
             <Select
               mode="multiple"
               showSearch
@@ -251,7 +308,7 @@ export default function Projects() {
               options={people.map((p) => ({ value: p.id, label: p.name }))}
             />
           </Form.Item>
-          <Form.Item name="owner_person_ids" label="项目负责人">
+          <Form.Item name="owner_person_ids" label={t("projects.owners")}>
             <Select
               mode="multiple"
               showSearch
@@ -261,30 +318,77 @@ export default function Projects() {
           </Form.Item>
           <Form.Item
             name="audit_prefixes"
-            label="AI 审计前缀（MR 改动命中才触发 CRG 初审；留空 = 不审）"
-            tooltip="前缀匹配规则：多个前缀用分号隔开，如 api/; src/core/；* = 匹配全部文件"
+            label={t("projects.auditPrefixes")}
+            tooltip={t("projects.auditPrefixesTooltip")}
           >
-            <Input placeholder="api/; src/core/ 或 *" />
+            <Input placeholder={t("projects.auditPlaceholder")} />
           </Form.Item>
           <Form.Item
             name="auto_approve_prefixes"
-            label="自动放行前缀（初审可批准 + CI 绿 + 全部改动命中才自动合并；留空 = 不放行）"
-            tooltip="前缀匹配规则：多个前缀用分号隔开；fail-closed，改动文件只要有一个不命中就不会自动合并；* = 全部文件"
+            label={t("projects.autoApprove")}
+            tooltip={t("projects.autoApproveTooltip")}
           >
             <Input placeholder="docs/; src/" />
           </Form.Item>
           <Form.Item
             name="am_team_id"
-            label="agent-memory 团队（项目级绑定，随 AI 调用直选注入团队资产）"
-            tooltip="展开实时拉取团队列表；留空回退研发组配置"
+            label={t("projects.amTeam")}
+            tooltip={t("projects.amTeamTooltip")}
           >
-            <AmSelect kind="team" placeholder="留空回退研发组配置" />
+            <AmSelect kind="team" placeholder={t("projects.amTeamPlaceholder")} />
           </Form.Item>
-          <Form.Item name="am_agent_id" label="agent-memory 专家（可选，指定团队内某专家）" tooltip="专家列表随上面的团队加载">
-            <AmSelect kind="agent" teamId={effTeam} placeholder="留空用团队默认专家" />
+          <Form.Item name="am_agent_id" label={t("projects.amAgent")} tooltip={t("projects.amAgentTooltip")}>
+            <AmSelect kind="agent" teamId={effTeam} placeholder={t("projects.amAgentPlaceholder")} />
           </Form.Item>
         </Form>
       </Modal>
+      <Drawer
+        title={`${t("projects.egmTitle")}${egmFor ? ` · ${egmFor.path}` : ""}`}
+        width={760}
+        open={!!egmFor}
+        onClose={() => setEgmFor(null)}
+        extra={
+          egmFor && (
+            <Button size="small" onClick={() => openEgm(egmFor)}>
+              {t("projects.refresh")}
+            </Button>
+          )
+        }
+      >
+        {egmReports.length === 0 ? (
+          <Empty description={t("projects.noEgm")} />
+        ) : (
+          egmReports.map((r) => {
+            const st = EGM_ST[r.status];
+            return (
+            <div key={r.id} style={{ marginBottom: 20 }}>
+              <Space wrap>
+                <Tag color={r.kind === "bootstrap" ? "geekblue" : "purple"}>
+                  {r.kind === "bootstrap" ? t("projects.docTree") : t("projects.driftCheck")}
+                </Tag>
+                <Tag color={st?.color ?? "default"}>{st ? t(st.text) : r.status}</Tag>
+                <span style={{ fontSize: 12, opacity: 0.6 }}>{r.created_at}</span>
+                {r.branch && <span className="mono" style={{ fontSize: 12 }}>{r.branch}</span>}
+                {r.mr_url && (
+                  <a href={r.mr_url} target="_blank" rel="noreferrer">
+                    MR
+                  </a>
+                )}
+              </Space>
+              {r.report_md ? (
+                <div className="md-body" style={{ marginTop: 8 }}>
+                  <Markdown>{r.report_md}</Markdown>
+                </div>
+              ) : (
+                <div style={{ fontSize: 12, opacity: 0.6, marginTop: 8 }}>
+                  {r.status === "running" ? t("projects.inProgress") : t("projects.noContent")}
+                </div>
+              )}
+            </div>
+          );
+          })
+        )}
+      </Drawer>
     </Page>
   );
 }

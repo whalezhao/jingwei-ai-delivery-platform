@@ -1,17 +1,20 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button, Form, Input, message } from "antd";
+import { useTranslation } from "react-i18next";
 import { login } from "../api";
 import Logo from "../components/Logo";
+import LangSwitch from "../components/LangSwitch";
 
 const FLOW = [
-  ["01", "上传需求文档，认领进池"],
-  ["02", "与 AI 多轮对话，确认执行方案"],
-  ["03", "任务派发 runner，MR 待人审核"],
-];
+  ["01", "login.flow1"],
+  ["02", "login.flow2"],
+  ["03", "login.flow3"],
+] as const;
 
 export default function Login() {
   const nav = useNavigate();
+  const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
 
   return (
@@ -25,24 +28,27 @@ export default function Login() {
           <div className="brand-lockup">
             <Logo size={46} />
           </div>
-          <p className="tagline">研发过程AI管理平台</p>
+          <p className="tagline">{t("app.name")}</p>
         </div>
         <ul className="login-flow">
-          {FLOW.map(([n, t]) => (
+          {FLOW.map(([n, text]) => (
             <li key={n}>
               <span className="n">{n}</span>
-              {t}
+              {t(text)}
             </li>
           ))}
         </ul>
       </div>
       <div className="login-panel">
         <div className="login-form">
+          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+            <LangSwitch />
+          </div>
           <div className="mobile-brand">
             <Logo size={30} />
           </div>
-          <h2>登录</h2>
-          <p className="sub">使用 GitLab 账号（用户名 + 平台密码）</p>
+          <h2>{t("login.title")}</h2>
+          <p className="sub">{t("login.subtitle")}</p>
           <Form
             layout="vertical"
             onFinish={async (v) => {
@@ -51,20 +57,28 @@ export default function Login() {
                 await login(v.username, v.password);
                 nav("/reqs");
               } catch (e: any) {
-                message.error(e.message || "登录失败");
+                message.error(e.message || t("login.failed"));
               } finally {
                 setBusy(false);
               }
             }}
           >
-            <Form.Item name="username" label="账号" rules={[{ required: true, message: "请输入用户名" }]}>
+            <Form.Item
+              name="username"
+              label={t("login.username")}
+              rules={[{ required: true, message: t("login.usernameRequired") }]}
+            >
               <Input autoFocus size="large" />
             </Form.Item>
-            <Form.Item name="password" label="密码" rules={[{ required: true, message: "请输入密码" }]}>
+            <Form.Item
+              name="password"
+              label={t("login.password")}
+              rules={[{ required: true, message: t("login.passwordRequired") }]}
+            >
               <Input.Password size="large" />
             </Form.Item>
             <Button type="primary" htmlType="submit" block size="large" loading={busy}>
-              登录
+              {t("login.submit")}
             </Button>
           </Form>
         </div>

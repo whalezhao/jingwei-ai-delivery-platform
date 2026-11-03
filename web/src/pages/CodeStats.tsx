@@ -1,5 +1,6 @@
 import { ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Empty, Segmented, Select, Tooltip, message } from "antd";
+import { useTranslation } from "react-i18next";
 import ResizableTable from "../ResizableTable";
 import { api, isAdmin } from "../api";
 import { PAGE } from "../table";
@@ -62,6 +63,7 @@ function fillDays(start: string, end: string, daily: Day[]): Day[] {
 
 /** 趋势线：一条序列一个色，10% 面积衬底 + 2px 线；悬停出十字线和数值。 */
 function TrendChart({ days }: { days: Day[] }) {
+  const { t } = useTranslation();
   const ref = useRef<HTMLDivElement>(null);
   const [w, setW] = useState(880);
   const [hover, setHover] = useState<number | null>(null);
@@ -75,11 +77,11 @@ function TrendChart({ days }: { days: Day[] }) {
     const ro = new ResizeObserver(sync);
     ro.observe(el);
     const raf = requestAnimationFrame(sync);
-    const t = setTimeout(sync, 300);
+    const timer = setTimeout(sync, 300);
     return () => {
       ro.disconnect();
       cancelAnimationFrame(raf);
-      clearTimeout(t);
+      clearTimeout(timer);
     };
   }, []);
 
@@ -104,7 +106,7 @@ function TrendChart({ days }: { days: Day[] }) {
     // 容器必须常驻：数据没到时若整块换成 Empty，ref 挂不上，测量用的 effect 再也不会跑
     <div className="cs-trend" ref={ref}>
       {!days.length ? (
-        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="该区间没有数据" />
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t("codeStats.emptyRange")} />
       ) : (
         <>
       <svg
@@ -117,11 +119,11 @@ function TrendChart({ days }: { days: Day[] }) {
         }}
         onMouseLeave={() => setHover(null)}
       >
-        {ticks.map((t, i) => (
+        {ticks.map((v, i) => (
           <g key={i}>
-            <line className="cs-grid-line" x1={L} x2={L + iw} y1={y(t)} y2={y(t)} />
-            <text className="cs-axis" x={L - 8} y={y(t) + 4} textAnchor="end">
-              {t}
+            <line className="cs-grid-line" x1={L} x2={L + iw} y1={y(v)} y2={y(v)} />
+            <text className="cs-axis" x={L - 8} y={y(v) + 4} textAnchor="end">
+              {v}
             </text>
           </g>
         ))}
@@ -158,7 +160,7 @@ function TrendChart({ days }: { days: Day[] }) {
             transform: y(hd.commits) > 76 ? undefined : "translate(-50%, 0)",
           }}
         >
-          <b>{hd.commits} 次提交</b>
+          <b>{t("codeStats.commitsCount", { n: hd.commits })}</b>
           <span>
             {hd.date} · +{hd.additions}/-{hd.deletions}
           </span>
@@ -176,7 +178,7 @@ const MEDAL = ["🥇", "🥈", "🥉"];
 function RankBars({
   items,
   emptyText,
-  unit = "次提交",
+  unit,
   fmt,
   wide,
   medal,
@@ -188,6 +190,8 @@ function RankBars({
   wide?: boolean;
   medal?: boolean;
 }) {
+  const { t } = useTranslation();
+  const unitText = unit ?? t("codeStats.unitCommits");
   if (!items.length) {
     return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={emptyText} style={{ padding: "20px 0" }} />;
   }
@@ -204,10 +208,16 @@ function RankBars({
               </span>
             </Tooltip>
           </span>
-          <span className="cs-bar-track" title={`${it.label}：${it.value} ${unit}`}>
+          <span
+            className="cs-bar-track"
+            title={t("codeStats.barTip", { label: it.label, value: it.value, unit: unitText })}
+          >
             <i className="cs-bar-fill" style={{ width: `${(it.value / max) * 100}%` }} />
           </span>
-          <span className="cs-bar-val" title={`${it.label}：${it.value} ${unit}`}>
+          <span
+            className="cs-bar-val"
+            title={t("codeStats.barTip", { label: it.label, value: it.value, unit: unitText })}
+          >
             {fmt ? fmt(it.value) : it.value}
           </span>
         </div>
@@ -228,14 +238,15 @@ function Section({ title, hint, children }: { title: string; hint?: ReactNode; c
   );
 }
 
-const num = (title: string, key: keyof Row) => ({
-  title,
-  dataIndex: key,
-  align: "right" as const,
-  render: (n: number) => n.toLocaleString(),
-});
-
 export default function CodeStats({ groupId, projectId }: { groupId?: number; projectId?: number }) {
+  const { t, i18n } = useTranslation();
+  const loc = i18n.resolvedLanguage?.startsWith("zh") ? "zh-CN" : "en-US";
+  const num = (title: string, key: keyof Row) => ({
+    title,
+    dataIndex: key,
+    align: "right" as const,
+    render: (n: number) => n.toLocaleString(loc),
+  });
   const [kind, setKind] = useState("today");
   const [personId, setPersonId] = useState<number | undefined>();
   const [people, setPeople] = useState<any[]>([]);
@@ -269,7 +280,7 @@ export default function CodeStats({ groupId, projectId }: { groupId?: number; pr
 
   const pull = async () => {
     if (!groupId) {
-      message.warning("先在上方选择研发组");
+      message.warning(t("codeStats.chooseGroupFirst"));
       return;
     }
     const [start, end] = range(kind);
@@ -278,7 +289,7 @@ export default function CodeStats({ groupId, projectId }: { groupId?: number; pr
     setPulling(true);
     try {
       const d = await api<any>(`/api/code-stats/collect?${p}`, { method: "POST" });
-      message.success(`已采集 ${d.days} 天：${d.rows} 条人员记录、${d.files} 个文件`);
+      message.success(t("codeStats.collected", { days: d.days, rows: d.rows, files: d.files }));
       setTick((t) => t + 1);
     } catch (e: any) {
       message.error(e.message);
@@ -287,7 +298,7 @@ export default function CodeStats({ groupId, projectId }: { groupId?: number; pr
     }
   };
 
-  const t = data?.totals;
+  const totals = data?.totals;
   const days = useMemo(
     () => (data ? fillDays(data.start, data.end, data.daily) : []),
     [data]
@@ -300,17 +311,17 @@ export default function CodeStats({ groupId, projectId }: { groupId?: number; pr
 
   const cards: [string, string, string][] = personId
     ? [
-        ["提交", t ? t.commits.toLocaleString() : "-", "live"],
-        ["新增行", t ? `+${t.additions.toLocaleString()}` : "-", "ok"],
-        ["删除行", t ? `-${t.deletions.toLocaleString()}` : "-", "bad"],
-        ["参与项目", t ? String(t.projects) : "-", ""],
+        [t("codeStats.kpiCommits"), totals ? totals.commits.toLocaleString(loc) : "-", "live"],
+        [t("codeStats.kpiAdditions"), totals ? `+${totals.additions.toLocaleString(loc)}` : "-", "ok"],
+        [t("codeStats.kpiDeletions"), totals ? `-${totals.deletions.toLocaleString(loc)}` : "-", "bad"],
+        [t("codeStats.kpiProjects"), totals ? String(totals.projects) : "-", ""],
       ]
     : [
-        ["提交", t ? t.commits.toLocaleString() : "-", "live"],
-        ["新增行", t ? `+${t.additions.toLocaleString()}` : "-", "ok"],
-        ["删除行", t ? `-${t.deletions.toLocaleString()}` : "-", "bad"],
-        ["参与人数", t ? String(t.people) : "-", ""],
-        ["项目数", t ? String(t.projects) : "-", ""],
+        [t("codeStats.kpiCommits"), totals ? totals.commits.toLocaleString(loc) : "-", "live"],
+        [t("codeStats.kpiAdditions"), totals ? `+${totals.additions.toLocaleString(loc)}` : "-", "ok"],
+        [t("codeStats.kpiDeletions"), totals ? `-${totals.deletions.toLocaleString(loc)}` : "-", "bad"],
+        [t("codeStats.kpiPeople"), totals ? String(totals.people) : "-", ""],
+        [t("codeStats.kpiProjectCount"), totals ? String(totals.projects) : "-", ""],
       ];
 
   return (
@@ -320,10 +331,10 @@ export default function CodeStats({ groupId, projectId }: { groupId?: number; pr
           value={kind}
           onChange={(v) => setKind(v as string)}
           options={[
-            { value: "today", label: "今天" },
-            { value: "yesterday", label: "昨天" },
-            { value: "week", label: "最近一周" },
-            { value: "month", label: "最近一月" },
+            { value: "today", label: t("codeStats.rangeToday") },
+            { value: "yesterday", label: t("codeStats.rangeYesterday") },
+            { value: "week", label: t("codeStats.rangeWeek") },
+            { value: "month", label: t("codeStats.rangeMonth") },
           ]}
         />
         <Select
@@ -331,20 +342,20 @@ export default function CodeStats({ groupId, projectId }: { groupId?: number; pr
           allowClear
           showSearch
           optionFilterProp="label"
-          placeholder="视角：团队汇总"
+          placeholder={t("codeStats.personPlaceholder")}
           value={personId}
           onChange={setPersonId}
           options={people.map((p) => ({ value: p.id, label: p.name }))}
         />
         {isAdmin() && (
           <Button loading={pulling} onClick={pull}>
-            拉取数据
+            {t("codeStats.pull")}
           </Button>
         )}
         {data && (
           <span style={{ color: "var(--muted)", fontSize: 12 }}>
             {data.start} ~ {data.end}
-            {data.totals.commits === 0 && " · 该区间暂无数据，可选组后点「拉取数据」"}
+            {data.totals.commits === 0 && t("codeStats.noDataHint")}
           </span>
         )}
       </div>
@@ -358,49 +369,64 @@ export default function CodeStats({ groupId, projectId }: { groupId?: number; pr
         ))}
       </div>
 
-      <Section title="📈 提交趋势" hint={`${data?.start || ""} ~ ${data?.end || ""} · 单日峰值 ${peak}`}>
+      <Section
+        title={t("codeStats.trend")}
+        hint={t("codeStats.trendHint", { start: data?.start || "", end: data?.end || "", peak })}
+      >
         <TrendChart days={days} />
       </Section>
 
       {personId ? (
-        <Section title="📦 参与项目" hint={`${data?.projects.length || 0} 个`}>
+        <Section
+          title={t("codeStats.personProjects")}
+          hint={t("codeStats.projectCountHint", { n: data?.projects.length || 0 })}
+        >
           <RankBars
             wide
-            emptyText="该区间没有提交"
+            emptyText={t("codeStats.noCommits")}
             items={(data?.projects || []).map((p) => ({ label: p.path, value: p.commits }))}
           />
         </Section>
       ) : (
         <>
           <div className="cs-grid2">
-            <Section title="🏆 提交排行" hint="按提交次数">
+            <Section title={t("codeStats.rank")} hint={t("codeStats.rankHint")}>
               <RankBars
                 medal
-                emptyText="该区间没有提交"
+                emptyText={t("codeStats.noCommits")}
                 items={(data?.people || [])
                   .slice(0, 10)
-                  .map((p) => ({ label: p.matched ? p.name : `${p.name}（未匹配）`, value: p.commits }))}
+                  .map((p) => ({
+                    label: p.matched ? p.name : t("codeStats.unmatched", { name: p.name }),
+                    value: p.commits,
+                  }))}
               />
             </Section>
-            <Section title="➕ 新增行排行" hint="按新增代码行数">
+            <Section title={t("codeStats.addedRank")} hint={t("codeStats.addedRankHint")}>
               <RankBars
                 medal
-                emptyText="该区间没有提交"
-                unit="行新增"
-                fmt={(v) => `+${v.toLocaleString()}`}
+                emptyText={t("codeStats.noCommits")}
+                unit={t("codeStats.unitLines")}
+                fmt={(v) => `+${v.toLocaleString(loc)}`}
                 items={(data?.people || [])
                   .slice()
                   .sort((a, b) => b.additions - a.additions)
                   .slice(0, 10)
-                  .map((p) => ({ label: p.matched ? p.name : `${p.name}（未匹配）`, value: p.additions }))}
+                  .map((p) => ({
+                    label: p.matched ? p.name : t("codeStats.unmatched", { name: p.name }),
+                    value: p.additions,
+                  }))}
               />
             </Section>
           </div>
-          <Section title="📦 项目分布" hint={`${data?.projects.length || 0} 个项目`}>
+          <Section
+            title={t("codeStats.distribution")}
+            hint={t("codeStats.distributionHint", { n: data?.projects.length || 0 })}
+          >
             <RankBars
               wide
               medal
-              emptyText="该区间没有提交"
+              emptyText={t("codeStats.noCommits")}
               items={(data?.projects || []).map((p) => ({ label: p.path, value: p.commits }))}
             />
           </Section>
@@ -408,7 +434,7 @@ export default function CodeStats({ groupId, projectId }: { groupId?: number; pr
       )}
 
       {!personId && (
-        <Section title="🔥 热点文件" hint="区间内改动次数最多的文件">
+        <Section title={t("codeStats.hotFiles")} hint={t("codeStats.hotFilesHint")}>
           <ResizableTable
             size="small"
             rowKey={(r) => `${r.project_id}:${r.path}`}
@@ -417,7 +443,7 @@ export default function CodeStats({ groupId, projectId }: { groupId?: number; pr
             dataSource={data?.hot_files || []}
             columns={[
               {
-                title: "文件",
+                title: t("codeStats.colFile"),
                 dataIndex: "path",
                 ellipsis: { showTitle: false },
                 render: (v: string) => (
@@ -427,7 +453,7 @@ export default function CodeStats({ groupId, projectId }: { groupId?: number; pr
                 ),
               },
               {
-                title: "项目",
+                title: t("codeStats.colProject"),
                 dataIndex: "project",
                 ellipsis: { showTitle: false },
                 render: (v: string) => (
@@ -437,7 +463,7 @@ export default function CodeStats({ groupId, projectId }: { groupId?: number; pr
                 ),
               },
               {
-                title: "改动次数",
+                title: t("codeStats.colChanges"),
                 dataIndex: "commits",
                 width: 150,
                 render: (n: number) => (
@@ -449,14 +475,14 @@ export default function CodeStats({ groupId, projectId }: { groupId?: number; pr
                   </span>
                 ),
               },
-              num("新增", "additions"),
-              num("删除", "deletions"),
+              num(t("codeStats.colAdditions"), "additions"),
+              num(t("codeStats.colDeletions"), "deletions"),
             ]}
           />
         </Section>
       )}
 
-      <Section title="📅 按日明细" hint="图上的每个点都在这张表里">
+      <Section title={t("codeStats.dailyDetail")} hint={t("codeStats.dailyHint")}>
         <ResizableTable
           size="small"
           rowKey="date"
@@ -464,10 +490,10 @@ export default function CodeStats({ groupId, projectId }: { groupId?: number; pr
           pagination={PAGE}
           dataSource={data?.daily || []}
           columns={[
-            { title: "日期", dataIndex: "date" },
-            num("提交", "commits"),
-            num("新增", "additions"),
-            num("删除", "deletions"),
+            { title: t("codeStats.colDate"), dataIndex: "date" },
+            num(t("codeStats.colCommits"), "commits"),
+            num(t("codeStats.colAdditions"), "additions"),
+            num(t("codeStats.colDeletions"), "deletions"),
           ]}
         />
       </Section>

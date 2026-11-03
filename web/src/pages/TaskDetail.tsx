@@ -2,11 +2,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Button, Empty, Spin, Tag, Typography } from "antd";
 import { BulbOutlined, CheckOutlined, CloseOutlined, RightOutlined } from "@ant-design/icons";
+import { useTranslation } from "react-i18next";
 import Markdown from "react-markdown";
 import ThoughtChain from "@ant-design/x/es/thought-chain";
 import type { ThoughtChainItemType } from "@ant-design/x/es/thought-chain";
 import { rawNode } from "../eventNodes";
 import { api } from "../api";
+import i18n, { type MsgKey } from "../i18n";
 import Page from "../Page";
 import DocPreview from "../components/DocPreview";
 import { STATUS, type TaskEvent } from "./Tasks";
@@ -39,9 +41,9 @@ interface Detail {
   runner_task_ids: number[];
 }
 
-const KIND_TITLE: Record<string, string> = {
-  text: "输出",
-  result: "完成",
+const KIND_TITLE: Record<string, MsgKey> = {
+  text: "taskDetail.kindOutput",
+  result: "taskDetail.kindResult",
 };
 
 function evtBody(e: TaskEvent & { parent?: string }): string {
@@ -67,7 +69,7 @@ function laneItems(
         kind: "think",
         key: `k${e.seq}`,
         icon: <BulbOutlined />,
-        title: "深度思考",
+        title: i18n.t("taskDetail.thinking"),
         collapsible: true,
         content: thinkBlock(e.text || ""),
       });
@@ -95,9 +97,9 @@ function laneItems(
             {actionRow(m.icon, it.arg || "…")}
             {actionRow(
               e.is_error ? <CloseOutlined /> : <CheckOutlined />,
-              line || "（无输出）",
+              line || i18n.t("events.noOutput"),
               e.is_error ? "err" : "ok",
-              e.is_error ? "执行出错" : "完成",
+              e.is_error ? i18n.t("taskDetail.execError") : i18n.t("taskDetail.done"),
             )}
             {e.is_error && <pre className="tc-body tc-err">{e.content}</pre>}
           </>
@@ -106,7 +108,7 @@ function laneItems(
         items.push({
           kind: "tool",
           key: `k${e.seq}`,
-          title: "工具结果",
+          title: i18n.t("taskDetail.toolResult"),
           status: e.is_error ? "error" : "success",
           collapsible: true,
           content: <pre className={`tc-body${e.is_error ? " tc-err" : ""}`}>{e.content}</pre>,
@@ -121,7 +123,7 @@ function laneItems(
       items.push({
         kind: "tool",
         key: `k${e.seq}`,
-        title: KIND_TITLE[e.kind] || e.kind,
+        title: KIND_TITLE[e.kind] ? i18n.t(KIND_TITLE[e.kind]) : e.kind,
         status: e.is_error ? "error" : "success",
         collapsible: !!body,
         content: body ? <pre className="tc-body">{body.slice(0, 4000)}</pre> : undefined,
@@ -157,6 +159,7 @@ function LaneChain({ items, live }: { items: ThoughtChainItemType[]; live: boole
 }
 
 export default function TaskDetail() {
+  const { t } = useTranslation();
   const { id } = useParams();
   const taskId = Number(id);
   const [d, setD] = useState<Detail | null>(null);
@@ -184,8 +187,8 @@ export default function TaskDetail() {
   useEffect(() => {
     if (denied) return; // 403 已经定论，别再每 5 秒锤一次
     reload().catch(() => {});
-    const t = setInterval(() => reload().catch(() => {}), 5000);
-    return () => clearInterval(t);
+    const timer = setInterval(() => reload().catch(() => {}), 5000);
+    return () => clearInterval(timer);
   }, [taskId, denied]);
 
   useEffect(() => {
@@ -196,8 +199,8 @@ export default function TaskDetail() {
       setEvents(rows);
     };
     load();
-    const t = setInterval(load, 3000);
-    return () => clearInterval(t);
+    const timer = setInterval(load, 3000);
+    return () => clearInterval(timer);
   }, [taskId, denied]);
 
   // SSE：需求级实时流里过滤本任务的过程事件（dev_raw.task_id = RunnerTask 号）
@@ -253,31 +256,31 @@ export default function TaskDetail() {
     }
     const subLanes = [...subs.entries()].map(([parent, evts]) => ({
       key: parent,
-      label: labels.get(parent) || `子 Agent ${parent.slice(-6)}`,
+      label: labels.get(parent) || i18n.t("taskDetail.subAgentLabel", { id: parent.slice(-6) }),
       evts,
     }));
     return { main, subLanes };
-  }, [events]);
+  }, [events, i18n.language]);
 
   if (denied)
     return (
-      <Page title="任务详情" desc="被认领的需求，任务详情只有认领人本人能打开">
+      <Page title={t("taskDetail.pageTitle")} desc={t("taskDetail.descDenied")}>
         <div className="page-card" style={{ padding: 48, textAlign: "center" }}>
           <Typography.Title level={5} style={{ marginBottom: 8 }}>
             {denied}
           </Typography.Title>
           <Typography.Text type="secondary">
-            任务本身在任务池里公开可见；详情会带出需求文档与方案正文，所以只对需求认领人开放。
+            {t("taskDetail.deniedBody")}
           </Typography.Text>
           <div style={{ marginTop: 16 }}>
-            <Link to="/tasks">返回任务池</Link>
+            <Link to="/tasks">{t("taskDetail.backToTasks")}</Link>
           </div>
         </div>
       </Page>
     );
-  if (!d) return <Page title="任务详情" desc="加载中…" />;
+  if (!d) return <Page title={t("taskDetail.pageTitle")} desc={t("taskDetail.loading")} />;
   const { task, requirement: req, final_doc, final_plan } = d;
-  const st = STATUS[task.status] || ["default", task.status];
+  const st = STATUS[task.status];
   const live = LIVE_STATUSES.includes(task.status);
 
   // 会话当前是否活跃：任务进行中，且该泳道的末事件正是全局末事件（同一对象引用）
@@ -289,13 +292,13 @@ export default function TaskDetail() {
     <div className="td-lane">
       <div className="td-lane-head">
         {title}
-        <span className="td-lane-count">{evts.length} 事件</span>
+        <span className="td-lane-count">{t("taskDetail.eventsCount", { n: evts.length })}</span>
       </div>
       {evts.length ? (
         <LaneChain items={laneItems(evts, laneLive, task.status === "failed")} live={laneLive} />
       ) : (
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          暂无事件
+          {t("taskDetail.noEvents")}
         </Typography.Text>
       )}
     </div>
@@ -303,10 +306,10 @@ export default function TaskDetail() {
 
   return (
     <Page
-      title={`任务详情 · ${task.code}`}
+      title={t("taskDetail.titleWithCode", { code: task.code })}
       desc={
         <span>
-          <Link to="/tasks">← 返回任务池</Link> · 需求{" "}
+          <Link to="/tasks">← {t("taskDetail.backToTasks")}</Link> · {t("taskDetail.requirement")}{" "}
           <Link to={`/reqs/${req.id}`}>{req.code}</Link>《{req.title}》
         </span>
       }
@@ -315,11 +318,11 @@ export default function TaskDetail() {
       <div className="td-main">
       <div className="page-card">
         <div className="td-head">
-          <Tag color={st[0]}>{st[1]}</Tag>
+          <Tag color={st?.[0] ?? "default"}>{st ? t(st[1]) : task.status}</Tag>
           <span className="td-title">{task.title || task.code}</span>
           {task.runner_name && <Tag color="blue">⚡ {task.runner_name}</Tag>}
           {lanes.subLanes.length > 0 && (
-            <Tag color="purple">🤖 主 + {lanes.subLanes.length} 子 Agent</Tag>
+            <Tag color="purple">{t("taskDetail.mainAndSubs", { n: lanes.subLanes.length })}</Tag>
           )}
           {task.mr_url ? (
             <a href={task.mr_url} target="_blank" rel="noreferrer" className="mono">
@@ -328,27 +331,27 @@ export default function TaskDetail() {
           ) : task.mr_iid ? (
             <span className="mono">MR !{task.mr_iid}</span>
           ) : null}
-          <Link to={`/reqs/${req.id}`}>需求对话</Link>
+          <Link to={`/reqs/${req.id}`}>{t("taskDetail.requirement")}</Link>
           {!progOpen && (
             <Button size="small" onClick={() => setProgOpen(true)}>
-              🤖 AI 进展
+              {t("taskDetail.aiProgress")}
             </Button>
           )}
         </div>
         <div className="td-meta">
-          {task.branch && <span className="mono">分支 {task.branch}</span>}
-          <span>项目 {d.project?.name || `#${req.project_id}`}</span>
-          <span>创建 {(task.created_at || "").slice(0, 19)}</span>
+          {task.branch && <span className="mono">{t("taskDetail.branch", { branch: task.branch })}</span>}
+          <span>{t("taskDetail.project", { name: d.project?.name || `#${req.project_id}` })}</span>
+          <span>{t("taskDetail.created", { time: (task.created_at || "").slice(0, 19) })}</span>
         </div>
         {task.scope && (
           <div className="td-scope">
-            <b>本任务范围：</b>
+            <b>{t("taskDetail.scope")}</b>
             {task.scope}
           </div>
         )}
         {task.error && (
           <div className="td-scope" style={{ background: "#fff2f0", color: "#cf1322" }}>
-            <b>错误：</b>
+            <b>{t("taskDetail.error")}</b>
             {task.error}
           </div>
         )}
@@ -357,19 +360,20 @@ export default function TaskDetail() {
       <div className="td-docs">
         <div className="page-card td-doc">
           <h4>
-            定稿方案{final_plan && final_plan.version > 0 ? `（v${final_plan.version}）` : ""}
+            {t("taskDetail.finalPlan")}
+            {final_plan && final_plan.version > 0 ? t("taskDetail.version", { version: final_plan.version }) : ""}
           </h4>
           {final_plan ? (
             <div className="md-body td-evt-wrap">
               <Markdown>{final_plan.content}</Markdown>
             </div>
           ) : (
-            <Empty description="该需求尚未定稿方案" style={{ padding: "24px 0" }} />
+            <Empty description={t("taskDetail.noPlan")} style={{ padding: "24px 0" }} />
           )}
         </div>
 
         <div className="page-card td-doc">
-          <h4>定稿需求</h4>
+          <h4>{t("taskDetail.finalDoc")}</h4>
           {final_doc ? (
             <>
               <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 6 }}>
@@ -382,10 +386,10 @@ export default function TaskDetail() {
           ) : (
             <>
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                无定稿文档，以下为需求描述：
+                {t("taskDetail.noDoc")}
               </Typography.Text>
               <div className="md-body td-evt-wrap" style={{ marginTop: 6 }}>
-                {req.description || "（无描述）"}
+                {req.description || t("taskDetail.noDescription")}
               </div>
             </>
           )}
@@ -393,23 +397,23 @@ export default function TaskDetail() {
 
         {d.tasks.length > 1 && (
           <div className="page-card td-full">
-            <h4>同需求任务（{d.tasks.length} 个）</h4>
-            {d.tasks.map((t) => (
-              <div key={t.id} className={`td-pill${t.id === task.id ? " self" : ""}`} title={t.scope || undefined}>
-                {t.id === task.id && <span>📍</span>}
-                <span className="mono">{t.code}</span>
+            <h4>{t("taskDetail.siblingTasks", { n: d.tasks.length })}</h4>
+            {d.tasks.map((tk) => {
+              const sib = STATUS[tk.status];
+              return (
+              <div key={tk.id} className={`td-pill${tk.id === task.id ? " self" : ""}`} title={tk.scope || undefined}>
+                {tk.id === task.id && <span>📍</span>}
+                <span className="mono">{tk.code}</span>
                 <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {t.title || "—"}
+                  {tk.title || "—"}
                 </span>
-                <Tag
-                  color={(STATUS[t.status] || ["default", t.status])[0]}
-                  style={{ marginInlineEnd: 0 }}
-                >
-                  {(STATUS[t.status] || ["default", t.status])[1]}
+                <Tag color={sib?.[0] ?? "default"} style={{ marginInlineEnd: 0 }}>
+                  {sib ? t(sib[1]) : tk.status}
                 </Tag>
-                {t.id !== task.id && <Link to={`/tasks/${t.id}`}>详情</Link>}
+                {tk.id !== task.id && <Link to={`/tasks/${tk.id}`}>{t("taskDetail.detail")}</Link>}
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
@@ -419,12 +423,15 @@ export default function TaskDetail() {
       {progOpen && (
         <aside className="rc-dock">
           <div className="rc-dock-head">
-            <span>🤖 AI 工作进展{live && "（实时）"}</span>
+            <span>
+              {t("taskDetail.progressTitle")}
+              {live && t("taskDetail.liveSuffix")}
+            </span>
             {live && <i className="sess-live" />}
             <button
               className="rc-dock-toggle"
               onClick={() => setProgOpen(false)}
-              title="收起进展栏"
+              title={t("taskDetail.collapseProgress")}
             >
               »
             </button>
@@ -448,7 +455,7 @@ export default function TaskDetail() {
                   </span>
                   <span className="sess-ico">🤖</span>
                   <span className="sess-name" title={task.title || task.code}>
-                    {task.title || "主会话"}
+                    {task.title || t("taskDetail.mainSession")}
                   </span>
                   <span className="sess-count">{lanes.main.length}</span>
                   {laneActive(lanes.main) && <i className="sess-live" />}
@@ -473,7 +480,7 @@ export default function TaskDetail() {
               {sel === "main"
                 ? laneBlock(
                     <span>
-                      🤖 <b>主 Agent</b>
+                      🤖 <b>{t("taskDetail.mainAgent")}</b>
                     </span>,
                     lanes.main,
                     live
@@ -481,7 +488,7 @@ export default function TaskDetail() {
                 : laneBlock(
                     <span>
                       🧩 <b>{lanes.subLanes.find((s) => s.key === sel)?.label}</b>{" "}
-                      <Tag style={{ marginInlineStart: 4 }}>子 Agent</Tag>
+                      <Tag style={{ marginInlineStart: 4 }}>{t("taskDetail.subAgent")}</Tag>
                     </span>,
                     lanes.subLanes.find((s) => s.key === sel)?.evts || [],
                     live
@@ -492,10 +499,10 @@ export default function TaskDetail() {
               description={
                 live ? (
                   <span>
-                    <Spin size="small" /> 等待 runner 认领/回传过程…
+                    <Spin size="small" /> {t("taskDetail.waiting")}
                   </span>
                 ) : (
-                  "暂无过程留痕（任务未执行或 runner 未回传）"
+                  t("taskDetail.noTrace")
                 )
               }
               style={{ padding: "32px 0" }}

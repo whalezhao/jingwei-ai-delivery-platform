@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Button, Divider, Form, Input, Modal, Select, message } from "antd";
+import { useTranslation } from "react-i18next";
 import AvatarPicker from "./AvatarPicker";
 import { api } from "../api";
 
@@ -30,6 +31,7 @@ export default function ProfileModal({
   me: Me | null;
   onClose: () => void;
 }) {
+  const { t } = useTranslation();
   const [form] = Form.useForm();
   const [pwForm] = Form.useForm();
   const [saving, setSaving] = useState(false);
@@ -64,7 +66,7 @@ export default function ProfileModal({
     setSaving(true);
     try {
       await api(`/api/people/${me.id}`, { method: "PUT", body: JSON.stringify(body) });
-      message.success("已保存");
+      message.success(t("profileModal.saved"));
       window.dispatchEvent(new Event("vega-me-updated"));
       onClose();
     } catch (e: any) {
@@ -76,12 +78,12 @@ export default function ProfileModal({
 
   const changePw = async (v: any) => {
     if (v.new !== v.confirm) {
-      message.error("两次输入的新密码不一致");
+      message.error(t("profileModal.pwMismatch"));
       return;
     }
     try {
       await api("/api/auth/password", { method: "POST", body: JSON.stringify({ old: v.old, new: v.new }) });
-      message.success("密码已修改");
+      message.success(t("profileModal.pwChanged"));
       pwForm.resetFields();
     } catch (e: any) {
       message.error(e.message);
@@ -91,77 +93,84 @@ export default function ProfileModal({
   return (
     <Modal
       open={open}
-      title="个人设置"
+      title={t("profileModal.title")}
       width={560}
       onCancel={onClose}
       onOk={() => form.submit()}
-      okText="保存"
+      okText={t("profileModal.save")}
       confirmLoading={saving}
       destroyOnHidden
     >
       {me && (
         <>
           <Form form={form} layout="vertical" onFinish={save}>
-            <Form.Item name="avatar" label="头像">
+            <Form.Item name="avatar" label={t("people.avatar")}>
               <AvatarPicker />
             </Form.Item>
-            <Form.Item name="name" label="姓名" rules={[{ required: true, message: "请输入姓名" }]}>
+            <Form.Item name="name" label={t("people.name")} rules={[{ required: true, message: t("profileModal.nameRequired") }]}>
               <Input />
             </Form.Item>
-            <Form.Item name="gitlab_email" label="GitLab 邮箱">
-              <Input placeholder="用于推送/MR 事件按邮箱对回本人" />
+            <Form.Item name="gitlab_email" label={t("people.gitlabEmail")}>
+              <Input placeholder={t("profileModal.emailPlaceholder")} />
             </Form.Item>
-            <Form.Item label="登录名 / octo 绑定">
-              <Input value={`${me.gitlab_username || "—"} · octo: ${me.octo_uid || "未绑定（管理员维护）"}`} disabled />
+            <Form.Item label={t("profileModal.loginLabel")}>
+              <Input
+                value={`${me.gitlab_username || "—"} · octo: ${me.octo_uid || t("profileModal.octoUnbound")}`}
+                disabled
+              />
             </Form.Item>
-            <Form.Item label="角色（管理员维护）">
-              <Input value={(me.roles || []).join("、") || "未设置"} disabled />
+            <Form.Item label={t("profileModal.rolesLabel")}>
+              <Input value={(me.roles || []).join(t("profileModal.roleSep")) || t("people.notSet")} disabled />
             </Form.Item>
             <Divider plain style={{ fontSize: 12, margin: "8px 0" }}>
-              个人 LLM 配置（留空继承研发组/兜底）
+              {t("profileModal.llmSection")}
             </Divider>
             <Form.Item name="llm_base_url" label="LLM Base URL">
               <Input placeholder="https://…/v1" />
             </Form.Item>
-            <Form.Item name="llm_api_key" label="LLM API Key（只写不回显）">
-              <Input.Password placeholder={me.has_llm_key ? "已配置，留空不改" : ""} />
+            <Form.Item name="llm_api_key" label={t("profileModal.apiKeyLabel")}>
+              <Input.Password placeholder={me.has_llm_key ? t("profileModal.configuredKeep") : ""} />
             </Form.Item>
             <Form.Item name="llm_model" label="LLM Model">
               <Input />
             </Form.Item>
-            <Form.Item name="llm_effort" label="思考等级" tooltip="透传 claude --effort；默认 Qwen 上游只认 xhigh/medium/low，high/max 适合 claude 系或自定义上游">
+            <Form.Item name="llm_effort" label={t("people.effort")} tooltip={t("people.effortTooltip")}>
               <Select
                 showSearch
                 optionFilterProp="label"
                 options={[
-                  { value: "", label: "未设置（继承研发组/兜底 xhigh）" },
-                  { value: "low", label: "低（low）" },
-                  { value: "medium", label: "中（medium）" },
-                  { value: "high", label: "高（high · claude 默认）" },
-                  { value: "xhigh", label: "特高（xhigh · Qwen 最高档）" },
-                  { value: "max", label: "最高（max）" },
+                  { value: "", label: t("people.effortUnset") },
+                  { value: "low", label: t("people.effortLow") },
+                  { value: "medium", label: t("people.effortMedium") },
+                  { value: "high", label: t("people.effortHigh") },
+                  { value: "xhigh", label: t("people.effortXhigh") },
+                  { value: "max", label: t("people.effortMax") },
                 ]}
               />
             </Form.Item>
-            <Form.Item name="am_user_key" label="agent-memory 用户 key（sk-mem-…，只写不回显）">
-              <Input.Password placeholder={me.has_am_key ? "已配置，留空不改" : ""} />
+            <Form.Item name="am_user_key" label={t("profileModal.amKeyLabel")}>
+              <Input.Password placeholder={me.has_am_key ? t("profileModal.configuredKeep") : ""} />
             </Form.Item>
           </Form>
           <Divider plain style={{ fontSize: 12, margin: "8px 0" }}>
-            修改密码
+            {t("profileModal.pwSection")}
           </Divider>
           <Form form={pwForm} layout="vertical" onFinish={changePw}>
-            <Form.Item name="old" label="旧密码" rules={[{ required: true, message: "请输入旧密码" }]}>
+            <Form.Item name="old" label={t("profileModal.oldPw")} rules={[{ required: true, message: t("profileModal.oldPwRequired") }]}>
               <Input.Password />
             </Form.Item>
-            <Form.Item name="new" label="新密码" rules={[{ required: true, message: "至少 6 位" }, { min: 6, message: "至少 6 位" }]}>
+            <Form.Item
+              name="new"
+              label={t("profileModal.newPw")}
+              rules={[{ required: true, message: t("profileModal.pwMin") }, { min: 6, message: t("profileModal.pwMin") }]}
+            >
               <Input.Password />
             </Form.Item>
-            <Form.Item name="confirm" label="确认新密码" rules={[{ required: true, message: "再输一次新密码" }]}>
+            <Form.Item name="confirm" label={t("profileModal.confirmPw")} rules={[{ required: true, message: t("profileModal.confirmRequired") }]}>
               <Input.Password />
             </Form.Item>
             <Button type="primary" ghost onClick={() => pwForm.submit()}>
-              修改密码
+              {t("profileModal.pwSection")}
             </Button>
           </Form>
         </>
