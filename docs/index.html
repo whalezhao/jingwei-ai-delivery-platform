@@ -1,0 +1,438 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vega · 织女星 — 研发流程自动化平台</title>
+<meta name="description" content="Vega 把需求、方案、AI 开发任务、MR 评审、CI 与合入收敛成一条服务化链路：AI 认领需求、写代码、提 MR，人只把关关键节点。">
+<meta name="theme-color" content="#070b16">
+<meta property="og:title" content="Vega · 织女星 — 研发流程自动化平台">
+<meta property="og:description" content="从需求到合入，全流程交给 AI，人只把关关键节点。">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://whalezhao.github.io/vega/">
+<style>
+  :root {
+    --bg: #070b16;
+    --bg-soft: #0b1224;
+    --panel: rgba(14, 22, 42, 0.72);
+    --line: rgba(125, 150, 200, 0.16);
+    --line-strong: rgba(125, 150, 200, 0.3);
+    --text: #e6ecf9;
+    --muted: #8b9abb;
+    --faint: #616f8e;
+    --cyan: #5ed2ff;
+    --violet: #a78bfa;
+    --green: #4ade9c;
+    --amber: #ffc46b;
+    --red: #ff7d7d;
+    --radius: 18px;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    font-family: var(--sans);
+    color: var(--text);
+    background:
+      radial-gradient(900px 520px at 10% -10%, rgba(94, 210, 255, 0.16), transparent 65%),
+      radial-gradient(760px 480px at 94% 4%, rgba(167, 139, 250, 0.14), transparent 62%),
+      linear-gradient(180deg, #070b16 0%, #080d1b 55%, #060912 100%);
+    -webkit-font-smoothing: antialiased;
+  }
+  body::before {
+    position: fixed; inset: 0; z-index: -1; content: "";
+    background-image:
+      radial-gradient(1px 1px at 12% 22%, rgba(255,255,255,0.55), transparent),
+      radial-gradient(1px 1px at 34% 8%, rgba(255,255,255,0.4), transparent),
+      radial-gradient(1.4px 1.4px at 68% 16%, rgba(255,255,255,0.55), transparent),
+      radial-gradient(1px 1px at 82% 34%, rgba(255,255,255,0.35), transparent),
+      radial-gradient(1px 1px at 22% 62%, rgba(255,255,255,0.3), transparent),
+      radial-gradient(1.2px 1.2px at 58% 74%, rgba(255,255,255,0.28), transparent),
+      linear-gradient(rgba(125, 150, 200, 0.045) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(125, 150, 200, 0.045) 1px, transparent 1px);
+    background-size: auto, auto, auto, auto, auto, auto, 64px 64px, 64px 64px;
+    mask-image: radial-gradient(ellipse at 50% 0%, #000 0%, transparent 78%);
+  }
+  a { color: inherit; text-decoration: none; }
+  .wrap { width: min(1160px, calc(100% - 40px)); margin: 0 auto; }
+
+  .nav {
+    position: sticky; top: 0; z-index: 20; padding: 14px 0;
+    background: rgba(7, 11, 22, 0.74);
+    border-bottom: 1px solid var(--line);
+    backdrop-filter: blur(16px);
+  }
+  .nav-inner { display: flex; gap: 20px; align-items: center; }
+  .brand { display: flex; gap: 10px; align-items: center; font-weight: 700; letter-spacing: 0.3px; }
+  .brand svg { width: 26px; height: 26px; filter: drop-shadow(0 0 14px rgba(94, 210, 255, 0.6)); }
+  .brand span { font-size: 17px; }
+  .brand small { padding: 2px 7px; font-family: var(--mono); font-size: 10px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; }
+  .nav-links { display: flex; gap: 22px; align-items: center; margin-left: auto; font-size: 14px; color: var(--muted); }
+  .nav-links a:hover { color: var(--text); }
+  .nav-cta {
+    padding: 8px 14px; font-size: 13px; color: var(--text) !important;
+    background: rgba(94, 210, 255, 0.1);
+    border: 1px solid rgba(94, 210, 255, 0.34);
+    border-radius: 10px;
+  }
+  .nav-cta:hover { background: rgba(94, 210, 255, 0.18); }
+
+  .hero { padding: 76px 0 36px; }
+  .hero-grid { display: grid; grid-template-columns: 1.02fr 0.98fr; gap: 52px; align-items: center; }
+  .eyebrow {
+    display: inline-flex; gap: 8px; align-items: center;
+    padding: 5px 10px; margin-bottom: 20px;
+    font-family: var(--mono); font-size: 11px; color: #a8e6ff; letter-spacing: 0.7px;
+    background: rgba(94, 210, 255, 0.08);
+    border: 1px solid rgba(94, 210, 255, 0.22);
+    border-radius: 999px;
+  }
+  .eyebrow i { width: 7px; height: 7px; background: var(--green); border-radius: 50%; box-shadow: 0 0 10px var(--green); }
+  h1 { margin: 0; font-size: clamp(36px, 5vw, 62px); font-weight: 750; line-height: 1.08; letter-spacing: -1.6px; }
+  h1 .grad {
+    color: transparent;
+    background: linear-gradient(100deg, #a8e6ff 0%, #6fb5ff 45%, #b79cff 100%);
+    -webkit-background-clip: text; background-clip: text;
+  }
+  .lede { max-width: 540px; margin: 22px 0 28px; font-size: 16px; line-height: 1.85; color: var(--muted); }
+  .actions { display: flex; flex-wrap: wrap; gap: 12px; }
+  .btn {
+    display: inline-flex; gap: 9px; align-items: center; padding: 12px 18px;
+    font-size: 14px; font-weight: 600; border-radius: 11px;
+    transition: transform 0.15s ease, background 0.15s ease;
+  }
+  .btn:hover { transform: translateY(-1px); }
+  .btn-primary { color: #04121f; background: linear-gradient(135deg, #7addff, #6fa8ff); box-shadow: 0 12px 30px rgba(94, 210, 255, 0.24); }
+  .btn-ghost { color: var(--text); background: rgba(255, 255, 255, 0.03); border: 1px solid var(--line-strong); }
+  .btn-ghost:hover { background: rgba(255, 255, 255, 0.06); }
+  .hero-facts { display: flex; flex-wrap: wrap; gap: 26px; margin-top: 34px; }
+  .fact strong { display: block; font-size: 20px; font-weight: 700; }
+  .fact span { font-size: 12px; color: var(--faint); }
+
+  /* pipeline visual */
+  .pipe {
+    position: relative; padding: 22px;
+    background: linear-gradient(160deg, rgba(18, 28, 52, 0.9), rgba(9, 14, 28, 0.9));
+    border: 1px solid var(--line-strong); border-radius: 20px;
+    box-shadow: 0 40px 100px rgba(0, 0, 0, 0.45);
+  }
+  .pipe::before {
+    position: absolute; inset: 12% 14% auto; z-index: -1; height: 55%; content: "";
+    background: rgba(94, 210, 255, 0.16); filter: blur(70px);
+  }
+  .pipe-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; font-family: var(--mono); font-size: 10px; color: var(--faint); }
+  .pipe-head b { color: var(--green); font-weight: 500; }
+  .node {
+    display: flex; gap: 12px; align-items: center;
+    padding: 11px 13px; margin-bottom: 9px;
+    font-size: 13px;
+    background: rgba(255, 255, 255, 0.025);
+    border: 1px solid var(--line); border-radius: 11px;
+  }
+  .node:last-child { margin-bottom: 0; }
+  .node .dot { flex: none; width: 8px; height: 8px; border-radius: 50%; }
+  .node .n { flex: none; width: 22px; font-family: var(--mono); font-size: 10px; color: var(--faint); }
+  .node .t { flex: 1; }
+  .node .s { font-family: var(--mono); font-size: 10px; color: var(--faint); }
+  .done .dot { background: var(--green); box-shadow: 0 0 9px rgba(74, 222, 156, 0.7); }
+  .live .dot { background: var(--cyan); box-shadow: 0 0 9px rgba(94, 210, 255, 0.8); }
+  .live { border-color: rgba(94, 210, 255, 0.35); background: rgba(94, 210, 255, 0.06); }
+  .wait .dot { background: #39445e; }
+  .node .s.ok { color: var(--green); }
+  .node .s.run { color: var(--cyan); }
+
+  .tech {
+    display: flex; flex-wrap: wrap; gap: 8px 26px; align-items: center;
+    padding: 22px 0; margin-top: 30px;
+    font-family: var(--mono); font-size: 11px; color: var(--faint); letter-spacing: 0.5px;
+    border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+  }
+  .tech b { color: var(--muted); font-weight: 500; }
+
+  section { padding: 70px 0; }
+  .section-head { max-width: 720px; margin-bottom: 34px; }
+  .kicker { margin-bottom: 10px; font-family: var(--mono); font-size: 11px; color: var(--cyan); letter-spacing: 1.4px; text-transform: uppercase; }
+  h2 { margin: 0; font-size: clamp(26px, 3.2vw, 38px); font-weight: 720; letter-spacing: -0.8px; }
+  .section-head p { margin: 14px 0 0; font-size: 15px; line-height: 1.8; color: var(--muted); }
+
+  .features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .card {
+    position: relative; padding: 22px; overflow: hidden;
+    background: linear-gradient(160deg, rgba(17, 26, 48, 0.85), rgba(10, 16, 30, 0.78));
+    border: 1px solid var(--line); border-radius: var(--radius);
+    transition: border-color 0.2s ease, transform 0.2s ease;
+  }
+  .card:hover { border-color: rgba(94, 210, 255, 0.38); transform: translateY(-2px); }
+  .card .ico {
+    display: flex; align-items: center; justify-content: center;
+    width: 36px; height: 36px; margin-bottom: 16px; font-size: 17px;
+    background: rgba(94, 210, 255, 0.1);
+    border: 1px solid rgba(94, 210, 255, 0.22);
+    border-radius: 10px;
+  }
+  .card h3 { margin: 0 0 8px; font-size: 15px; font-weight: 650; }
+  .card p { margin: 0; font-size: 13px; line-height: 1.75; color: var(--muted); }
+  .card .tag { display: inline-block; padding: 2px 7px; margin-top: 14px; font-family: var(--mono); font-size: 10px; color: var(--faint); border: 1px solid var(--line); border-radius: 999px; }
+
+  .split { display: grid; grid-template-columns: 0.9fr 1.1fr; gap: 46px; align-items: center; }
+  .checklist { display: flex; flex-direction: column; gap: 16px; padding: 0; margin: 26px 0 0; list-style: none; }
+  .checklist li { display: flex; gap: 12px; align-items: flex-start; font-size: 14px; line-height: 1.7; color: var(--muted); }
+  .checklist li::before {
+    flex: none; width: 20px; height: 20px; margin-top: 1px;
+    font-size: 11px; line-height: 20px; color: var(--green); text-align: center;
+    content: "✓"; background: rgba(74, 222, 156, 0.1);
+    border: 1px solid rgba(74, 222, 156, 0.26); border-radius: 50%;
+  }
+  .checklist b { color: var(--text); font-weight: 600; }
+
+  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .step { padding: 22px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
+  .step .num { font-family: var(--mono); font-size: 11px; color: var(--cyan); letter-spacing: 1px; }
+  .step h3 { margin: 14px 0 8px; font-size: 15px; }
+  .step p { margin: 0; font-size: 13px; line-height: 1.7; color: var(--muted); }
+
+  .quick {
+    display: grid; grid-template-columns: 0.9fr 1.1fr; gap: 40px; align-items: center;
+    padding: 34px;
+    background: linear-gradient(145deg, rgba(17, 26, 48, 0.85), rgba(8, 13, 25, 0.85));
+    border: 1px solid var(--line-strong); border-radius: 22px;
+  }
+  .quick h2 { font-size: 28px; }
+  .quick p { margin: 14px 0 0; font-size: 14px; line-height: 1.8; color: var(--muted); }
+  pre {
+    padding: 20px; margin: 0; overflow: auto;
+    font-family: var(--mono); font-size: 12px; line-height: 1.8; color: #c6d6f2;
+    background: #060a13; border: 1px solid var(--line); border-radius: 14px;
+  }
+  pre .c { color: #5b6884; }
+  pre .g { color: #7ee2b0; }
+  pre .b { color: #8fd4ff; }
+
+  footer { padding: 38px 0 46px; border-top: 1px solid var(--line); }
+  .footer-inner { display: flex; flex-wrap: wrap; gap: 18px; align-items: center; justify-content: space-between; font-size: 12px; color: var(--faint); }
+  .footer-inner a { color: var(--muted); }
+  .footer-inner a:hover { color: var(--text); }
+  .footer-links { display: flex; flex-wrap: wrap; gap: 18px; }
+
+  @media (max-width: 900px) {
+    .hero-grid, .split, .quick { grid-template-columns: 1fr; }
+    .features { grid-template-columns: repeat(2, 1fr); }
+    .hero { padding-top: 48px; }
+    .nav-links a:not(.nav-cta) { display: none; }
+  }
+  @media (max-width: 560px) {
+    .features, .steps { grid-template-columns: 1fr; }
+    .wrap { width: calc(100% - 28px); }
+    .quick { padding: 22px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    .card, .btn { transition: none; }
+  }
+</style>
+</head>
+<body>
+
+<nav class="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="#top">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 1.6 14.2 10 22.4 12l-8.2 2-2.2 8.4-2.2-8.4L1.6 12l8.2-2z" fill="url(#g)"/>
+        <defs>
+          <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#a8e6ff"/><stop offset="1" stop-color="#b79cff"/>
+          </linearGradient>
+        </defs>
+      </svg>
+      <span>Vega</span>
+      <small>织女星</small>
+    </a>
+    <div class="nav-links">
+      <a href="#features">能力</a>
+      <a href="#flow">链路</a>
+      <a href="#arch">架构</a>
+      <a href="#quickstart">快速开始</a>
+      <a class="nav-cta" href="https://github.com/whalezhao/vega" target="_blank" rel="noreferrer">GitHub ↗</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero" id="top">
+  <div class="wrap">
+    <div class="hero-grid">
+      <div>
+        <div class="eyebrow"><i></i> R&amp;D AUTOMATION · MIT</div>
+        <h1>从需求到合入，<br><span class="grad">整条链路交给 AI。</span></h1>
+        <p class="lede">
+          Vega 把人员、研发组、项目、需求、方案、AI 开发任务、MR 评审、CI 与合入收进同一个系统：
+          AI 认领需求、对齐方案、写代码、提 MR，通过评审与 CI 后自动合入 nightly，
+          全程群内播报，人只把关关键节点。
+        </p>
+        <div class="actions">
+          <a class="btn btn-primary" href="https://github.com/whalezhao/vega" target="_blank" rel="noreferrer">在 GitHub 查看 →</a>
+          <a class="btn btn-ghost" href="#quickstart">Docker 快速开始</a>
+        </div>
+        <div class="hero-facts">
+          <div class="fact"><strong>6</strong><span>阶段流水线</span></div>
+          <div class="fact"><strong>N×</strong><span>runner 节点扩容</span></div>
+          <div class="fact"><strong>100%</strong><span>过程事件留痕</span></div>
+        </div>
+      </div>
+      <div class="pipe">
+        <div class="pipe-head"><span>dev_task · pipeline</span><b>● 自动放行已开启</b></div>
+        <div class="node done"><span class="dot"></span><span class="n">01</span><span class="t">需求定稿 · 支付回调幂等修复</span><span class="s ok">已定稿</span></div>
+        <div class="node done"><span class="dot"></span><span class="n">02</span><span class="t">方案版本 v2 · 与 AI 方案专家对齐</span><span class="s ok">已通过</span></div>
+        <div class="node done"><span class="dot"></span><span class="n">03</span><span class="t">开发任务 · runner 在 worktree 写代码</span><span class="s ok">分支已推送</span></div>
+        <div class="node live"><span class="dot"></span><span class="n">04</span><span class="t">MR !128 · AI 代码评审</span><span class="s run">评审中</span></div>
+        <div class="node wait"><span class="dot"></span><span class="n">05</span><span class="t">CI · 单测 / 构建</span><span class="s">等待</span></div>
+        <div class="node wait"><span class="dot"></span><span class="n">06</span><span class="t">自动 FF 合入 nightly</span><span class="s">等待</span></div>
+      </div>
+    </div>
+
+    <div class="tech">
+      <b>BUILT WITH</b>
+      <span>Python 3.12</span><span>FastAPI</span><span>SQLAlchemy async</span><span>PostgreSQL 17</span>
+      <span>React 18</span><span>Ant Design 5</span><span>APScheduler</span><span>Docker Compose</span>
+    </div>
+  </div>
+</header>
+
+<section id="features">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="kicker">Capabilities</div>
+      <h2>散在定时脚本里的研发自动化，收成一个系统。</h2>
+      <p>MR 初审、merge 轮询、CI 失败分析、代码统计这些事，不再是几个互不相干的 cron，而是一条有状态、有界面、有审计留痕的流水线。</p>
+    </div>
+    <div class="features">
+      <article class="card">
+        <div class="ico">✎</div>
+        <h3>需求池与 AI 协写</h3>
+        <p>上传文档或对话生成需求，认领后进入「AI 需求专家协写 → 定稿」，定稿后的需求才能进入方案阶段。</p>
+        <span class="tag">requirement · draft</span>
+      </article>
+      <article class="card">
+        <div class="ico">⌘</div>
+        <h3>方案讨论与版本</h3>
+        <p>与 AI 方案专家多轮流式对话，定稿成方案版本；方案是开发任务的输入，改方案就有新版本可追溯。</p>
+        <span class="tag">design · streaming</span>
+      </article>
+      <article class="card">
+        <div class="ico">⚙</div>
+        <h3>Agent 开发任务</h3>
+        <p>方案一键派发为开发任务，runner 节点领任务，驱动 claude 在独立 worktree 里写代码、推分支、建 MR。</p>
+        <span class="tag">runner · worktree</span>
+      </article>
+      <article class="card">
+        <div class="ico">✓</div>
+        <h3>AI 代码评审</h3>
+        <p>MR 命中项目审计前缀即入队初审，结论（✅ 可批准 / ⚠️ 需修改 / ❌ 未通过）回帖到 GitLab 并同步播报。</p>
+        <span class="tag">mr · ai review</span>
+      </article>
+      <article class="card">
+        <div class="ico">⇉</div>
+        <h3>CI 与自动放行</h3>
+        <p>CI 绿了按项目白名单前缀自动 FF 合入 nightly；冲突或不可合并一律通知负责人，绝不盲目重试、不自动解决冲突。</p>
+        <span class="tag">ci · fail-closed</span>
+      </article>
+      <article class="card">
+        <div class="ico">◎</div>
+        <h3>工作台与代码统计</h3>
+        <p>需求 → 定稿 → 开发 → 评审 → CI → 合入的实时流程图，5 秒刷新；按日提交、增删行与热点文件，人员和项目双维度落库。</p>
+        <span class="tag">board · stats</span>
+      </article>
+    </div>
+  </div>
+</section>
+
+<section id="flow">
+  <div class="wrap split">
+    <div>
+      <div class="kicker">Guardrails</div>
+      <h2>自动化再往前一步，<br>边界也画清楚。</h2>
+      <p class="lede" style="margin-bottom:0">
+        全自动不等于放任：该拦的拦住，该叫人的叫人，每一步都留证据。
+      </p>
+      <ul class="checklist">
+        <li><span><b>自动放行 fail-closed</b>：项目没配白名单前缀就绝不自动合入，收尾改为通知项目负责人人工合并。</span></li>
+        <li><span><b>冲突必须通知人</b>：无法 fast-forward 的 MR 不重试、不强推，直接 @ 负责人。</span></li>
+        <li><span><b>评审结论可追溯</b>：每条 AI 初审结论落库并回帖 MR，谁在什么时候放的行有据可查。</span></li>
+        <li><span><b>过程全量留痕</b>：runner 回传的思考 / 工具调用 / 结果全量落库，任务详情页可回放。</span></li>
+      </ul>
+    </div>
+    <div class="pipe">
+      <div class="pipe-head"><span>webhook · merge_poll</span><b>幂等去重</b></div>
+      <div class="node"><span class="dot" style="background:var(--cyan)"></span><span class="n">→</span><span class="t">GitLab webhook（Push / MR / Pipeline）</span><span class="s">实时</span></div>
+      <div class="node"><span class="dot" style="background:var(--cyan)"></span><span class="n">↻</span><span class="t">merge_poll 10 分钟轮询兜底</span><span class="s">防漏</span></div>
+      <div class="node"><span class="dot" style="background:var(--violet)"></span><span class="n">⇄</span><span class="t">vega-api ↔ runner 长轮询</span><span class="s">SSE 流式</span></div>
+      <div class="node"><span class="dot" style="background:var(--green)"></span><span class="n">✓</span><span class="t">终态幂等：webhook 与轮询不重复收尾</span><span class="s ok">一致</span></div>
+      <div class="node"><span class="dot" style="background:var(--amber)"></span><span class="n">!</span><span class="t">异常 → 群里 @ 负责人，等人工</span><span class="s">兜底</span></div>
+    </div>
+  </div>
+</section>
+
+<section id="arch">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="kicker">Architecture</div>
+      <h2>一个仓库，两个入口。</h2>
+      <p>api 是控制面，runner 是可多节点的执行面；web 是唯一界面。GitLab 与 octo 都是外部系统，靠 webhook 与 bot API 对接。</p>
+    </div>
+    <div class="quick" style="grid-template-columns:1fr 1.15fr">
+      <div>
+        <h2 style="font-size:22px">控制面 / 执行面分离</h2>
+        <p>api 负责状态机、webhook、定时任务与数据落库；runner 每个节点独立驱动 claude，领任务、跑 worktree、回传事件。加容量就是加 runner 节点，api 不动。</p>
+      </div>
+<pre>octo 群 ← 播报/派单 ← vega-api ← webhook ← GitLab 13.12
+                        ↑  ↓ 长轮询
+                    vega-runner（可多节点，每节点驱动 claude -p）
+                        ↑ SSE 流式
+                     vega-web（React 18 + antd 5）</pre>
+    </div>
+  </div>
+</section>
+
+<section id="quickstart">
+  <div class="wrap">
+    <div class="quick">
+      <div>
+        <div class="kicker">Quickstart</div>
+        <h2>compose 起服务，接上 GitLab 就能跑。</h2>
+        <p>依赖 Docker + Docker Compose v2；默认外接 PostgreSQL，也可以加 profile 起内置 PG。runner 节点另需 <code>claude</code> CLI。</p>
+        <p style="margin-top:18px">
+          部署细节（建库、runner 注册、webhook 接线、密钥不可更换的原因、备份恢复）见
+          <a href="https://github.com/whalezhao/vega/blob/main/deploy/README.md" style="color:var(--cyan)">deploy/README.md</a>。
+        </p>
+      </div>
+<pre><span class="c"># 1. 配置</span>
+git clone https://github.com/whalezhao/vega.git
+cd vega
+cp .env.example .env
+<span class="c"># 至少改 VEGA_SECRET_KEY 和数据库口令</span>
+
+<span class="c"># 2. 启动</span>
+docker compose up -d --build api web
+
+<span class="c"># 3. 登录后台，在「集成」页填 GitLab 地址与 token</span>
+<span class="c">#    webhook 指向 &lt;VEGA_API_URL&gt;/webhooks/gitlab</span>
+</pre>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap footer-inner">
+    <div>© 2026 Vega contributors · MIT License</div>
+    <div class="footer-links">
+      <a href="https://github.com/whalezhao/vega" target="_blank" rel="noreferrer">GitHub</a>
+      <a href="https://github.com/whalezhao/vega/blob/main/DESIGN.md" target="_blank" rel="noreferrer">设计文档</a>
+      <a href="https://github.com/whalezhao/vega/blob/main/deploy/README.md" target="_blank" rel="noreferrer">部署手册</a>
+      <a href="https://github.com/whalezhao/vega/blob/main/LICENSE" target="_blank" rel="noreferrer">License</a>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>
