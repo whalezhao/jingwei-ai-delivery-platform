@@ -1,6 +1,6 @@
 [project]
 name = "vega-api"
-version = "0.1.0"
+version = "1.0.0"
 description = "织女 · 研发流程自动化系统（api + runner 同仓两入口）"
 requires-python = ">=3.12"
 dependencies = [

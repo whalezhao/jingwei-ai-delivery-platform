@@ -71,7 +71,7 @@ def _scheduler_wanted() -> bool:
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="Vega 织女", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Vega 织女", version="1.0.0", lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],  # 内网工具；web 与 api 同 nginx 部署后收紧
