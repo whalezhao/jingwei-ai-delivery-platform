@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from urllib.parse import quote
+
 from vega.auth import hash_password, parse_token, sign_token, verify_password
 from vega.config import get_settings
 from vega.crypto import decrypt, encrypt
@@ -98,7 +100,7 @@ def test_build_claude_env():
     # 中文 team id 不能裸进 HTTP 头（claude CLI 会拒掉非 ASCII 头直接退出 1）
     env_cn = build_claude_env(LLMTarget(), team_id="示例团队", agent_id="agt-中国", user_key="k")
     hdr = [h for h in env_cn["ANTHROPIC_CUSTOM_HEADERS"].splitlines() if h.startswith("x-team-id")][0]
-    assert hdr.isascii() and "x-team-id: %E4%B8%AD" in hdr
+    assert hdr.isascii() and f"x-team-id: {quote('示例团队')}" in hdr
     assert "CLAUDE_CODE_MAX_OUTPUT_TOKENS" in env
 
     # team 单独存在时不下发：proxy 会为"选专家"发 AskUserQuestion，claude -p 答不了

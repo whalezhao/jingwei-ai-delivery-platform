@@ -33,9 +33,9 @@ class Settings(BaseSettings):
     claude_max_output_tokens: int = 32000
     claude_max_context_tokens: int = 128144  # Qwen3.8-27B 总上下文；不声明时 CLI 拒识自定义模型名
 
-    # octo bot API。地址给默认值：用户只需要在集成中心贴一个 bot token 就能拉群列表。
-    # token 留空则通知全部记 notify_log 不外发。
-    octo_api_url: str = "https://octo.example.com"
+    # octo bot API。地址与 token 都只走 .env（VEGA_OCTO_API_URL / VEGA_OCTO_BOT_TOKEN），
+    # 仓库里不留内部服务域名；任一为空则通知全部记 notify_log 不外发。
+    octo_api_url: str = ""
     octo_bot_token: str = ""  # 兜底：集成中心录入的全局 token 优先
 
     # claude CLI（测试时指向 stub）
