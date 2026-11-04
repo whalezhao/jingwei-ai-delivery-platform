@@ -29,6 +29,18 @@ class GitlabClient:
     def _headers(self) -> dict[str, str]:
         return {"PRIVATE-TOKEN": self.token}
 
+    async def whoami(self, client: httpx.AsyncClient) -> dict:
+        """校验 token 归属：返回 {"id": 42, "username": ..., "name": ..., "email": ...}。"""
+        r = await client.get(f"{self.api}/user", headers=self._headers())
+        r.raise_for_status()
+        return r.json()
+
+    async def get_project(self, client: httpx.AsyncClient, ref: int | str) -> dict:
+        """按 id 或 group/repo 路径取项目；无权限时 404（个人账号派发前的权限预检）。"""
+        r = await client.get(f"{self.api}/projects/{ref}", headers=self._headers())
+        r.raise_for_status()
+        return r.json()
+
     async def list_admin_projects(self, client: httpx.AsyncClient) -> list[dict]:
         """有 Maintainer(40)+ 权限的项目。"""
         out: list[dict] = []

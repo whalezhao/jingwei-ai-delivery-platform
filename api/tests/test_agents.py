@@ -19,7 +19,7 @@ async def _mk_running_task(client, admin_client, db, seeded) -> tuple[int, int, 
     req_id = (
         await client.post(
             "/api/requirements",
-            json={"project_id": seeded["project"].id, "title": "协作", "description": "d"},
+            json={"system_id": seeded["project"].id, "title": "协作", "description": "d"},
         )
     ).json()["id"]
     await client.post(f"/api/requirements/{req_id}/claim")
@@ -63,7 +63,7 @@ async def test_subagent_events_lanes_and_workbench(client, admin_client, db, see
 
     # 工作台跟踪初态是需求定稿：还没上传定稿文档的需求不进场
     req_id = (await db.scalar(select(DevTask.requirement_id).where(DevTask.id == dev_id)))  # type: ignore[assignment]
-    wb = (await client.get("/api/workbench", params={"project_id": seeded["project"].id})).json()
+    wb = (await client.get("/api/workbench", params={"system_id": seeded["project"].id})).json()
     assert all(r["id"] != req_id for r in wb["requirements"])
 
     # 上传首个文档即自动定稿 → 进流程图，协作统计（1 主 + 1 子）带出
@@ -74,7 +74,7 @@ async def test_subagent_events_lanes_and_workbench(client, admin_client, db, see
         files={"file": ("需求.md", io.BytesIO("# 需求".encode()), "text/markdown")},
     )
     assert r.status_code == 200, r.text
-    wb = (await client.get("/api/workbench", params={"project_id": seeded["project"].id})).json()
+    wb = (await client.get("/api/workbench", params={"system_id": seeded["project"].id})).json()
     row = next(r for r in wb["requirements"] if r["id"] == req_id)
     assert row["doc_final"] is True and row["plan_final"] is True
     assert row["tasks"][0]["agents"] == {"sub": 1, "events": 5}

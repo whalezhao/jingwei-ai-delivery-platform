@@ -18,9 +18,9 @@ from vega.schemas import TaskResultIn
 SHA = "a" * 40
 
 
-def _mr_payload(action: str = "update", sha: str = SHA, project_id: int | None = None) -> dict:
+def _mr_payload(action: str = "update", sha: str = SHA, system_id: int | None = None) -> dict:
     return {
-        "project_id": project_id,
+        "project_id": system_id,  # GitLab hook 的真实字段名，_project_id 只认这个
         "author": {"name": "张三"},
         "object_attributes": {
             "iid": 7,
@@ -34,16 +34,16 @@ def _mr_payload(action: str = "update", sha: str = SHA, project_id: int | None =
 
 
 async def _patch_gl(monkeypatch, *, changes: list[dict], pipelines: list[dict], notes: list[str]):
-    async def fake_changes(self, client, project_id, mr_iid):
+    async def fake_changes(self, client, system_id, mr_iid):
         return changes
 
-    async def fake_detail(self, client, project_id, mr_iid):
+    async def fake_detail(self, client, system_id, mr_iid):
         return {"sha": SHA}
 
-    async def fake_pipelines(self, client, project_id, mr_iid):
+    async def fake_pipelines(self, client, system_id, mr_iid):
         return pipelines
 
-    async def fake_note(self, client, project_id, mr_iid, body):
+    async def fake_note(self, client, system_id, mr_iid, body):
         notes.append(body)
         return {}
 
@@ -161,7 +161,7 @@ async def test_enqueue_circuit_breaker_after_5_per_day(client, db, seeded, monke
     for i in range(5):
         db.add(
             MrReview(
-                project_id=seeded["project"].id,
+                system_id=seeded["project"].id,
                 group_id=seeded["group"].id,
                 mr_iid=7,
                 head_sha=f"{i}" + "b" * 39,
@@ -193,7 +193,7 @@ async def test_webhook_mr_update_triggers_review(client, db, seeded, monkeypatch
 
     r = await client.post(
         "/webhooks/gitlab",
-        json=_mr_payload(project_id=seeded["project"].gitlab_project_id),
+        json=_mr_payload(system_id=seeded["project"].gitlab_project_id),
         headers={
             "X-Gitlab-Event": "Merge Request Hook",
             "X-Gitlab-Token": seeded["group"].webhook_secret,
@@ -209,7 +209,7 @@ async def test_webhook_mr_update_triggers_review(client, db, seeded, monkeypatch
 
 async def _make_review_task(db, seeded) -> RunnerTask:
     review = MrReview(
-        project_id=seeded["project"].id,
+        system_id=seeded["project"].id,
         group_id=seeded["group"].id,
         mr_iid=7,
         head_sha=SHA,
@@ -223,7 +223,7 @@ async def _make_review_task(db, seeded) -> RunnerTask:
         db,
         type="mr_review",
         payload={
-            "project_id": seeded["project"].id,
+            "system_id": seeded["project"].id,
             "mr": {"iid": 7, "title": "feat: x", "sha": SHA},
             "changed_files": ["api/vega/x.py"],
         },

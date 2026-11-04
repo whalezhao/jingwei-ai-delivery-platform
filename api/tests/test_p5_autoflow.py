@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import select
 
 from vega.autoflow import _prefix_ok, mr_autoflow_sweep, try_autoflow
-from vega.models import DevTask, MrReview, NotifyLog, Person, ProjectOwner, Requirement, RunnerTask
+from vega.models import DevTask, MrReview, NotifyLog, Person, SystemOwner, Requirement, RunnerTask
 
 SHA = "b" * 40
 
@@ -31,7 +31,7 @@ class FakeGL:
         self.author = author or {"username": "zhang", "email": "z@t.cn"}
         self.calls: list[str] = []
 
-    async def mr_detail(self, client, project_id, mr_iid):
+    async def mr_detail(self, client, system_id, mr_iid):
         self.calls.append("detail")
         return {
             "iid": mr_iid, "state": self.state, "sha": self.sha, "target_branch": self.target,
@@ -39,21 +39,21 @@ class FakeGL:
             "author": self.author,
         }
 
-    async def mr_pipelines(self, client, project_id, mr_iid):
+    async def mr_pipelines(self, client, system_id, mr_iid):
         self.calls.append("pipelines")
         return self.pipelines
 
-    async def approve_mr(self, client, project_id, mr_iid):
+    async def approve_mr(self, client, system_id, mr_iid):
         self.calls.append("approve")
         return True
 
-    async def merge_mr(self, client, project_id, mr_iid, sha):
+    async def merge_mr(self, client, system_id, mr_iid, sha):
         self.calls.append("merge")
         if self.merge_raises:
             raise self.merge_raises
         return {"state": "merged"}
 
-    async def add_mr_note(self, client, project_id, mr_iid, body):
+    async def add_mr_note(self, client, system_id, mr_iid, body):
         self.calls.append(f"note:{body[:12]}")
         return {}
 
@@ -65,7 +65,7 @@ async def _mk_review(db, seeded, *, iid=7, verdict="approve", gate="", flow="", 
     seeded["project"].auto_approve_prefixes = ["api/"] if prefixes is _UNSET else prefixes
     await db.commit()
     review = MrReview(
-        project_id=seeded["project"].id,
+        system_id=seeded["project"].id,
         group_id=seeded["group"].id,
         mr_iid=iid,
         head_sha=SHA,
@@ -122,8 +122,8 @@ async def test_autoflow_merge_notify_mentions_project_owner(client, db, seeded):
     owner = Person(name="负责人丁", octo_uid="uid-owner-autoflow")
     db.add(owner)
     await db.flush()
-    db.add(ProjectOwner(project_id=seeded["project"].id, person_id=owner.id))
-    req = Requirement(project_id=seeded["project"].id, title="放行通知", code="REQ-AF-OWNER")
+    db.add(SystemOwner(system_id=seeded["project"].id, person_id=owner.id))
+    req = Requirement(system_id=seeded["project"].id, title="放行通知", code="REQ-AF-OWNER")
     db.add(req)
     await db.flush()
     db.add(
@@ -253,10 +253,10 @@ async def test_finish_review_direct_triggers_autoflow(client, db, seeded, monkey
     async def fake_autoflow(db, group, project, review, gl, client):
         calls.append(review.mr_iid)
 
-    async def fake_note(self, client, project_id, mr_iid, body):
+    async def fake_note(self, client, system_id, mr_iid, body):
         return {}
 
-    async def fake_pipes(self, client, project_id, mr_iid):
+    async def fake_pipes(self, client, system_id, mr_iid):
         return []
 
     monkeypatch.setattr("vega.routers.runner_api.try_autoflow", fake_autoflow)
@@ -267,7 +267,7 @@ async def test_finish_review_direct_triggers_autoflow(client, db, seeded, monkey
         db,
         type="mr_review",
         payload={
-            "project_id": seeded["project"].id,
+            "system_id": seeded["project"].id,
             "mr": {"iid": 20, "title": "t", "sha": SHA},
             "changed_files": ["api/x.py"],
         },

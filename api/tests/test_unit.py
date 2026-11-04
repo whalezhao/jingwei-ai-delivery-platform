@@ -135,14 +135,14 @@ def test_build_claude_env_conversation_headers():
 
 
 async def test_numbering(db):
-    from vega.models import Project, Requirement
+    from vega.models import System, Requirement
     from vega.numbering import next_requirement_code, next_task_code
 
-    proj = Project(group_id=1, gitlab_project_id=1, path="a/b", name="b", code_prefix="TEST")
+    proj = System(group_id=1, gitlab_project_id=1, path="a/b", name="b", code_prefix="TEST")
     db.add(proj)
     await db.flush()
     c1 = await next_requirement_code(db, "TEST")
-    req = Requirement(project_id=proj.id, code=c1, title="t")
+    req = Requirement(system_id=proj.id, code=c1, title="t")
     db.add(req)
     await db.flush()
     assert c1.startswith("REQ-TEST-")
@@ -222,6 +222,37 @@ def test_repo_dir_and_crg_sync(tmp_path, monkeypatch):
     status["current_sha"] = "b"
     r._crg_sync(repo)  # commit 漂移 → update + embed
     assert calls == ["status", "update", "embed"]
+
+
+async def test_ensure_project_repo_resets_dirty_baseline(tmp_path, monkeypatch):
+    """回归：基线里留了改动/未跟踪文件时 checkout 会 Abort，EGM 与开发任务全挂。"""
+    import vega.runner as runner_mod
+    from vega.runner import Runner, _git
+
+    remote, src = tmp_path / "remote.git", tmp_path / "src"
+    _git("init", "-q", "--bare", "-b", "main", str(remote))
+    _git("init", "-q", "-b", "main", str(src))
+    (src / "README.md").write_text("v1")
+    (src / ".serena").mkdir()
+    (src / ".serena" / "project.yml").write_text("tracked")
+    _git("add", "-A", cwd=src)
+    _git("-c", "user.email=a@b", "-c", "user.name=a", "commit", "-qm", "init", cwd=src)
+    _git("push", "-q", str(remote), "main", cwd=src)
+
+    monkeypatch.setattr(runner_mod.shutil, "which", lambda _: None)  # 不挂 crg-daemon / 图谱
+    r = Runner(workdir=tmp_path / "home")
+    payload = {"git_http_url": f"file://{remote}", "git_token": "", "default_branch": "main"}
+    repo = await r._ensure_project_repo(payload)
+
+    # serena 常驻写 .serena/，手工调试改 README、留散落文件
+    (repo / "README.md").write_text("手工改")
+    (repo / ".serena" / "project.yml").write_text("本地覆盖")
+    (repo / "stray.txt").write_text("x")
+
+    assert await r._ensure_project_repo(payload) == repo
+    assert (repo / "README.md").read_text() == "v1"
+    assert (repo / ".serena" / "project.yml").read_text() == "tracked"
+    assert (repo / "stray.txt").read_text() == "x"  # 不挡路的未跟踪文件不动（-f 只覆盖冲突项）
 
 
 def test_octo_mention_offsets():

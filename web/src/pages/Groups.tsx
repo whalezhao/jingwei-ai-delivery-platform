@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Alert,
@@ -29,6 +29,9 @@ import { PAGE } from "../table";
 interface Group {
   id: number;
   name: string;
+  project_id: number | null;
+  project_name: string | null;
+  gitlab_bot_username: string | null;
   gitlab_base_url: string | null;
   octo_group_no: string | null;
   am_team_id: string | null;
@@ -49,6 +52,9 @@ interface Member {
   person_name: string;
   gitlab_username: string | null;
   gitlab_email: string | null;
+  gitlab_account_id: number | null;
+  gitlab_account_username: string | null;
+  gitlab_accounts: { id: number; username: string; base_url: string; has_token: boolean }[];
   octo_uid: string | null;
   octo_nickname: string | null;
   match_status: string;
@@ -76,6 +82,8 @@ const STATUS_TAG: Record<string, [string, MsgKey]> = {
 
 const empty: any = {
   name: "",
+  project_id: undefined,
+  gitlab_bot_username: "",
   gitlab_base_url: "",
   gitlab_token: "",
   llm_base_url: "",
@@ -104,16 +112,13 @@ export default function Groups() {
   const [octoList, setOctoList] = useState<{ uid: string; nickname: string }[]>([]);
   const [octoErr, setOctoErr] = useState<string | null>(null);
   const [people, setPeople] = useState<any[]>([]);
+  const [projects, setProjects] = useState<any[]>([]);
   const [addOpen, setAddOpen] = useState(false);
   const [addPid, setAddPid] = useState<number | null>(null);
   // 群号下拉：本组 bot 所在的群
   const [octoGroups, setOctoGroups] = useState<{ group_no: string; name: string }[]>([]);
   const [octoGroupsErr, setOctoGroupsErr] = useState<string | null>(null);
-  // GitLab 账号绑定下拉：读本组成员快照（秒开）；「刷新 GitLab 名单」才重拉全部项目
-  const [glUsers, setGlUsers] = useState<{ username: string; name: string; email: string }[]>([]);
-  const [glErr, setGlErr] = useState<string | null>(null);
   const [glBusy, setGlBusy] = useState(false);
-  const glLoaded = useRef(false);
 
   // 表格里显示中文名而不是 id：octo 群名按组用各组 bot 拉，am 团队名取当前用户的团队列表
   const [octoNames, setOctoNames] = useState<Record<string, string>>({});
@@ -145,6 +150,7 @@ export default function Groups() {
   useEffect(() => {
     load();
     api<any[]>("/api/people").then(setPeople).catch(() => {});
+    api<any[]>("/api/projects").then(setProjects).catch(() => {});
   }, []);
 
   const open = (g?: Group) => {
@@ -207,32 +213,14 @@ export default function Groups() {
     }
   };
 
-  const loadGlUsers = async () => {
-    if (glLoaded.current) return;
-    glLoaded.current = true;
-    try {
-      const d = await api<{ items: { username: string; name: string; email: string }[]; error: string | null }>(
-        `/api/groups/${mgroup?.id}/gitlab-users`,
-      );
-      setGlUsers(d.items || []);
-      setGlErr(d.error || null);
-    } catch (e: any) {
-      setGlErr(e.message);
-    }
-  };
-
-  // 重拉本组全部项目成员并覆盖快照；只刷名单，不跑 AI 对配
+  // 重拉本组全部项目成员并覆盖快照；账号在「人员」页维护，这里只刷新名单
   const refreshGlUsers = async () => {
     if (!mgroup) return;
     setGlBusy(true);
     try {
-      const d = await api<{ items: { username: string; name: string; email: string }[] }>(
-        `/api/groups/${mgroup.id}/gitlab-users/refresh`,
-        { method: "POST" },
-      );
-      glLoaded.current = true;
-      setGlUsers(d.items || []);
-      setGlErr(null);
+      const d = await api<{ items: unknown[] }>(`/api/groups/${mgroup.id}/gitlab-users/refresh`, {
+        method: "POST",
+      });
       message.success(t("groups.refreshDone", { n: d.items?.length ?? 0 }));
     } catch (e: any) {
       message.error(e.message);
@@ -241,20 +229,14 @@ export default function Groups() {
     }
   };
 
-  const bindGitlab = async (m: Member, username: string | null) => {
+  const bindAccount = async (m: Member, accountId: number | null) => {
     if (!mgroup) return;
     try {
-      const d = await api<any>(`/api/groups/${mgroup.id}/gitlab-match/${m.person_id}`, {
+      await api(`/api/groups/${mgroup.id}/members/${m.person_id}/account`, {
         method: "PUT",
-        body: JSON.stringify({ gitlab_username: username }),
+        body: JSON.stringify({ gitlab_account_id: accountId }),
       });
-      message.success(
-        username
-          ? d.released
-            ? t("groups.boundGitlabReleased", { username, released: d.released })
-            : t("groups.boundGitlab", { username })
-          : t("groups.unboundGitlab"),
-      );
+      message.success(accountId ? t("groups.boundGitlab") : t("groups.unboundGitlab"));
       setMembers(await api<Member[]>(`/api/groups/${mgroup.id}/members`));
     } catch (e: any) {
       message.error(e.message);
@@ -263,9 +245,6 @@ export default function Groups() {
 
   const openMembers = async (g: Group) => {
     setMgroup(g);
-    glLoaded.current = false;
-    setGlUsers([]);
-    setGlErr(null);
     const [ms, oc, ps] = await Promise.all([
       api<Member[]>(`/api/groups/${g.id}/members`),
       api<{ items: { uid: string; nickname: string }[]; error: string | null }>(
@@ -332,7 +311,7 @@ export default function Groups() {
   const memShown = [
     ...(mterm
       ? members.filter((m) =>
-          [m.person_name, m.gitlab_username, m.gitlab_email, m.octo_nickname, m.octo_uid].some((s) =>
+          [m.person_name, m.gitlab_account_username, m.gitlab_username, m.gitlab_email, m.octo_nickname, m.octo_uid].some((s) =>
             (s || "").toLowerCase().includes(mterm),
           ),
         )
@@ -365,6 +344,11 @@ export default function Groups() {
           pagination={PAGE}
           columns={[
             { title: t("groups.colGroup"), dataIndex: "name" },
+            {
+              title: t("groups.colProject"),
+              dataIndex: "project_name",
+              render: (v, r) => (v ? v : <Tag>{t("groups.noProject")}</Tag>),
+            },
             {
               title: t("groups.colGitlab"),
               dataIndex: "gitlab_base_url",
@@ -452,8 +436,20 @@ export default function Groups() {
           <Form.Item name="name" label={t("groups.name")} rules={[{ required: true }]}>
             <Input />
           </Form.Item>
+          <Form.Item name="project_id" label={t("groups.project")} tooltip={t("groups.projectTooltip")}>
+            <Select
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              placeholder={t("groups.projectPlaceholder")}
+              options={projects.map((p) => ({ value: p.id, label: p.name }))}
+            />
+          </Form.Item>
           <Form.Item name="gitlab_base_url" label={t("groups.gitlabUrl")}>
             <Input placeholder="https://git.example.com" />
+          </Form.Item>
+          <Form.Item name="gitlab_bot_username" label={t("groups.gitlabBot")} tooltip={t("groups.gitlabBotTooltip")}>
+            <Input placeholder={t("groups.gitlabBotPlaceholder")} />
           </Form.Item>
           <Form.Item name="gitlab_token" label={t("groups.gitlabToken")}>
             <Input.Password placeholder={editing?.has_gitlab_token ? t("groups.configuredKeep") : ""} />
@@ -597,16 +593,15 @@ export default function Groups() {
                   popupMatchSelectWidth={320}
                   optionRender={(o) => optionTip(String(o.label ?? ""))}
                   labelRender={({ label, value }) => optionTip(String(label ?? value ?? ""))}
-                  value={m.gitlab_username || undefined}
-                  onOpenChange={(o) => o && loadGlUsers()}
-                  onClear={() => bindGitlab(m, null)}
-                  onChange={(u) => bindGitlab(m, u)}
-                  notFoundContent={glErr || t("groups.noGlMembers")}
-                  options={glUsers.map((u) => ({
-                    value: u.username,
-                    label: u.name ? `${u.username} · ${u.name}` : u.username,
+                  value={m.gitlab_account_id || undefined}
+                  onClear={() => bindAccount(m, null)}
+                  onChange={(id) => bindAccount(m, id)}
+                  notFoundContent={t("groups.noGlAccounts")}
+                  options={(m.gitlab_accounts || []).map((a) => ({
+                    value: a.id,
+                    label: a.has_token ? a.username : `${a.username}${t("groups.noToken")}`,
                   }))}
-                  disabled={!isAdmin()}
+                  disabled={!isAdmin() || !(m.gitlab_accounts || []).length}
                 />
               ),
             },
@@ -650,7 +645,7 @@ export default function Groups() {
               width: 190,
               render: (_, m) => (
                 <Space size={12}>
-                  {m.gitlab_username && <a onClick={() => bindGitlab(m, null)}>{t("groups.unbindGitlab")}</a>}
+                  {m.gitlab_account_id && <a onClick={() => bindAccount(m, null)}>{t("groups.unbindGitlab")}</a>}
                   {m.octo_uid && <a onClick={() => manualBind(m, null)}>{t("groups.unbindOcto")}</a>}
                   <a
                     style={{ color: "#cf1322" }}
@@ -694,7 +689,7 @@ export default function Groups() {
             onChange={setAddPid}
             options={people.map((p) => ({
               value: p.id,
-              label: t("groups.personLabel", { name: p.name, username: p.gitlab_username || "" }),
+              label: t("groups.personLabel", { name: p.name, username: p.username || p.gitlab_username || "" }),
             }))}
           />
         </Modal>

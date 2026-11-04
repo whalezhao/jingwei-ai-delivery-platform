@@ -66,16 +66,21 @@ async def test_sync_gitlab_enroll(client, db, seeded, monkeypatch):
         lambda group_no, token=None: ({"u-new": "新同事", "u-only": "路人甲"}, None),
     )
 
-    async def fake_ai(group, people, octo_members):
+    async def fake_ai(group, people, octo_members, aliases=None):
         return {}
 
     monkeypatch.setattr("vega.matching.ai_match", fake_ai)
     stats = await sync_members_and_match(db, seeded["group"])
 
     # GitLab 新账号自动建档；已有 username 不重建
-    gl_new = await db.scalar(select(Person).where(Person.gitlab_username == "gl-new"))
-    assert gl_new and gl_new.name == "新同事" and gl_new.gitlab_email == "gl-new@test.cn"
-    assert (await db.scalar(select(Person).where(Person.gitlab_username == "laowang"))).id == existing.id
+    from vega.models import PersonGitlabAccount
+
+    acc_new = await db.scalar(select(PersonGitlabAccount).where(PersonGitlabAccount.username == "gl-new"))
+    assert acc_new and acc_new.name == "新同事" and acc_new.email == "gl-new@test.cn"
+    gl_new = await db.get(Person, acc_new.person_id)
+    assert gl_new.name == "新同事"
+    acc_old = await db.scalar(select(PersonGitlabAccount).where(PersonGitlabAccount.username == "laowang"))
+    assert acc_old and acc_old.person_id == existing.id
     assert stats["gitlab_created"] == 1
 
     # octo 昵称=姓名 → 规则精确绑定，person.octo_uid 回填（三方串起来）
@@ -110,7 +115,7 @@ async def test_sync_octo_enroll_leftover_humans(client, db, seeded, monkeypatch)
         lambda group_no, token=None: ({"u-a": "同事A", "u-left": "纯群友"}, None),
     )
 
-    async def fake_ai(group, people, octo_members):
+    async def fake_ai(group, people, octo_members, aliases=None):
         return {}
 
     monkeypatch.setattr("vega.matching.ai_match", fake_ai)
@@ -122,7 +127,10 @@ async def test_sync_octo_enroll_leftover_humans(client, db, seeded, monkeypatch)
     assert gm_left.manual_lock and gm_left.match_reason == "群成员自动建档"
     assert stats["octo_created"] == 1
 
-    gl_a = await db.scalar(select(Person).where(Person.gitlab_username == "gl-a"))
+    from vega.models import PersonGitlabAccount
+
+    acc_a = await db.scalar(select(PersonGitlabAccount).where(PersonGitlabAccount.username == "gl-a"))
+    gl_a = await db.get(Person, acc_a.person_id)
     assert gl_a.octo_uid == "u-a"  # GitLab 对配优先占了 u-a，没给 u-a 重复建档
     assert (await db.scalar(select(Person).where(Person.octo_uid == "u-a"))).id == gl_a.id
 
@@ -148,15 +156,31 @@ async def test_gitlab_users_and_match(client, admin_client, db, seeded, monkeypa
     r = await admin_client.get(f"/api/groups/{gid}/gitlab-users")
     assert r.json()["items"] == [{"username": "zhousan", "name": "张三", "email": "zs@test.cn"}]
 
+    from vega.models import PersonGitlabAccount
+
+    async def acc_of(username: str):
+        return await db.scalar(
+            select(PersonGitlabAccount).where(
+                PersonGitlabAccount.base_url == "http://gitlab.test",
+                PersonGitlabAccount.username == username,
+            )
+        )
+
+    async def gm_of(person_id: int):
+        return await db.scalar(
+            select(GroupMember).where(GroupMember.group_id == gid, GroupMember.person_id == person_id)
+        )
+
     r = await admin_client.put(
         f"/api/groups/{gid}/gitlab-match/{pid}", json={"gitlab_username": "zhousan"}
     )
     assert r.status_code == 200
     db.expire_all()  # sessionmaker expire_on_commit=False，identity map 里是 seed 旧对象，须显式过期重读
-    person = await db.get(Person, pid)
-    assert person.gitlab_username == "zhousan" and person.gitlab_email == "zs@test.cn"
+    acc = await acc_of("zhousan")
+    assert acc and acc.person_id == pid and acc.email == "zs@test.cn"
+    assert (await gm_of(pid)).gitlab_account_id == acc.id
 
-    # username 唯一：第二个成员绑同一账号 → 旧持有者（张三）自动解绑，而不是报错
+    # (实例, username) 唯一：第二个成员绑同一账号 → 账号整体转手，旧绑定自动解除
     other = Person(name="李四", gitlab_username=f"lisi-{pid}")
     db.add(other)
     await db.flush()
@@ -168,20 +192,20 @@ async def test_gitlab_users_and_match(client, admin_client, db, seeded, monkeypa
     )
     assert r.status_code == 200 and r.json()["released"] == "张三"
     db.expire_all()
-    assert (await db.get(Person, pid)).gitlab_username is None
-    assert (await db.get(Person, other_id)).gitlab_username == "zhousan"
+    assert (await acc_of("zhousan")).person_id == other_id
+    assert (await gm_of(pid)).gitlab_account_id is None
+    assert (await gm_of(other_id)).gitlab_account_id == (await acc_of("zhousan")).id
 
     # 解绑
     r = await admin_client.put(f"/api/groups/{gid}/gitlab-match/{other_id}", json={"gitlab_username": None})
     assert r.status_code == 200
     db.expire_all()
-    person = await db.get(Person, other_id)
-    assert person.gitlab_username is None and person.gitlab_email is None
+    assert (await gm_of(other_id)).gitlab_account_id is None
 
 
 async def test_gitlab_enroll_merges_octo_person(client, db, seeded, monkeypatch):
     """octo 兜底建档的人后来被 GitLab 扫到：唯一精确同名（无 gitlab_username）复用回填，不建第二条。"""
-    async def fake_ai(group, people, octo_members):
+    async def fake_ai(group, people, octo_members, aliases=None):
         return {}
 
     monkeypatch.setattr("vega.matching.ai_match", fake_ai)
@@ -205,14 +229,17 @@ async def test_gitlab_enroll_merges_octo_person(client, db, seeded, monkeypatch)
     assert stats["gitlab_created"] == 0 and stats["gitlab_merged"] == 1
     rows = (await db.scalars(select(Person).where(Person.name == "王二"))).all()
     assert len(rows) == 1 and rows[0].id == wang.id
-    assert rows[0].gitlab_username == "wanger" and rows[0].gitlab_email == "we@test.cn"
+    from vega.models import PersonGitlabAccount
+
+    acc = await db.scalar(select(PersonGitlabAccount).where(PersonGitlabAccount.username == "wanger"))
+    assert acc and acc.person_id == wang.id and acc.email == "we@test.cn"
     assert rows[0].octo_uid == "u-x"
 
 
 async def test_daily_commit_stats_no_double_count(client, db, seeded, monkeypatch):
     """同人跨项目累加，首条不翻倍（曾因 setdefault 放拷贝再恒真累加导致每条目双计）。"""
     from vega.jobs import daily_commit_stats
-    from vega.models import Project
+    from vega.models import System
 
     email = seeded["person"].gitlab_email
 
@@ -230,7 +257,7 @@ async def test_daily_commit_stats_no_double_count(client, db, seeded, monkeypatc
 
     monkeypatch.setattr("vega.gitlab.GitlabClient.project_commits", fake_commits)
     monkeypatch.setattr("vega.gitlab.GitlabClient.commit_diff", fake_diff)
-    p2 = Project(
+    p2 = System(
         group_id=seeded["group"].id, gitlab_project_id=990, path="team/repo2",
         name="repo2", code_prefix="R2", default_branch="master",
     )

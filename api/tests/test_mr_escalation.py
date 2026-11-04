@@ -1,4 +1,4 @@
-"""MR 无人处理三级升级：12h/级、3 级封顶、级别单调不重发；第 3 级连带 @项目负责人。"""
+"""MR 无人处理三级升级：12h/级、3 级封顶、级别单调不重发；第 3 级连带 @系统负责人。"""
 
 from __future__ import annotations
 
@@ -9,15 +9,15 @@ from sqlalchemy import select
 
 from vega.gitlab import GitlabClient
 from vega.jobs import merge_poll
-from vega.models import DevTask, NotifyLog, Person, ProjectOwner, Requirement, utcnow
+from vega.models import DevTask, NotifyLog, Person, SystemOwner, Requirement, utcnow
 
 
 def _hours_ago(h: float) -> str:
     return (utcnow() - timedelta(hours=h)).isoformat().replace("+00:00", "Z")
 
 
-async def _seed_task(db, project_id: int, person_id: int, *, iid: int) -> tuple[Requirement, DevTask]:
-    req = Requirement(project_id=project_id, title="升级验证", code=f"REQ-ESC-{iid}")
+async def _seed_task(db, system_id: int, person_id: int, *, iid: int) -> tuple[Requirement, DevTask]:
+    req = Requirement(system_id=system_id, title="升级验证", code=f"REQ-ESC-{iid}")
     db.add(req)
     await db.flush()
     task = DevTask(
@@ -34,7 +34,7 @@ async def _seed_task(db, project_id: int, person_id: int, *, iid: int) -> tuple[
 
 
 def _patch_mr_detail(monkeypatch, *, state: str = "opened", updated_at: str | None = None):
-    async def fake(self, client, project_id, mr_iid):
+    async def fake(self, client, system_id, mr_iid):
         return {"state": state, "updated_at": updated_at or _hours_ago(0)}
 
     monkeypatch.setattr(GitlabClient, "mr_detail", fake)
@@ -91,7 +91,7 @@ async def test_level3_mentions_owner(client, db, seeded, monkeypatch):
     owner = Person(name="项目负责人甲", gitlab_username="owner-esc", octo_uid="uid-owner-esc")
     db.add(owner)
     await db.flush()
-    db.add(ProjectOwner(project_id=seeded["project"].id, person_id=owner.id))
+    db.add(SystemOwner(system_id=seeded["project"].id, person_id=owner.id))
     _, task = await _seed_task(db, seeded["project"].id, pid, iid=33)
     _patch_mr_detail(monkeypatch, updated_at=_hours_ago(37))
     await merge_poll(db)
@@ -100,8 +100,8 @@ async def test_level3_mentions_owner(client, db, seeded, monkeypatch):
     logs = await _escalate_logs(db, task)
     assert [l.reason for l in logs] == ["mr_escalate_l3"]  # 跳级只发当前级，不倒补 l1/l2
     top = logs[-1]
-    assert "项目负责人介入" in top.content
-    assert "uid-owner-esc" in top.mentioned_uids  # 审核人之外连带 @项目负责人
+    assert "系统负责人介入" in top.content
+    assert "uid-owner-esc" in top.mentioned_uids  # 审核人之外连带 @系统负责人
 
 
 async def test_merged_or_closed_no_escalation(client, db, seeded, monkeypatch):

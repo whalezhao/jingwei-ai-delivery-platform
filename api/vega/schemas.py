@@ -12,8 +12,9 @@ Effort = Literal["low", "medium", "high", "xhigh", "max"]
 EffortOpt = Annotated[Effort | None, BeforeValidator(lambda v: v or None)]
 
 # 研发体系角色：product 认领需求池里的需求并定稿需求文档；dev 在定稿后接管做方案与开发。
+# project_lead = 项目总负责人（关注本项目各研发组负责人的汇报，不参与认领门禁）
 # pm / tech_lead / qa 目前只作标识与展示，不参与认领门禁
-Role = Literal["pm", "product", "tech_lead", "dev", "qa"]
+Role = Literal["pm", "product", "tech_lead", "dev", "qa", "project_lead"]
 
 # 能接进方案会话的 EGM 技能；review / review-loop / bootstrap / drift 走独立任务类型，
 # 因为它们要么必须零上下文、要么是项目级产物
@@ -39,6 +40,8 @@ class PasswordChangeIn(BaseModel):
 
 class PersonIn(BaseModel):
     name: str
+    # Vega 登录名；不填时回落到 gitlab_username（兼容旧导入）
+    username: str | None = None
     # 内置头像 key；只允许小写字母/数字，空串 = 不设置（杜绝任意 URL / 路径穿越）
     avatar: str | None = Field(default=None, pattern=r"^([a-z0-9]{1,32})?$")
     gitlab_username: str | None = None
@@ -55,6 +58,7 @@ class PersonIn(BaseModel):
 
 class PersonUpd(BaseModel):
     name: str | None = None
+    username: str | None = None
     avatar: str | None = Field(default=None, pattern=r"^([a-z0-9]{1,32})?$")
     gitlab_username: str | None = None
     gitlab_email: str | None = None
@@ -74,6 +78,7 @@ class PersonOut(BaseModel):
 
     id: int
     name: str
+    username: str | None = None
     avatar: str | None = None
     gitlab_username: str | None
     gitlab_email: str | None
@@ -89,8 +94,10 @@ class PersonOut(BaseModel):
 
 class GroupIn(BaseModel):
     name: str
+    project_id: int | None = None
     gitlab_base_url: str | None = None
     gitlab_token: str | None = None
+    gitlab_bot_username: str | None = None
     llm_base_url: str | None = None
     llm_api_key: str | None = None
     llm_model: str | None = None
@@ -113,7 +120,10 @@ class GroupOut(BaseModel):
 
     id: int
     name: str
+    project_id: int | None = None
+    project_name: str | None = None
     gitlab_base_url: str | None
+    gitlab_bot_username: str | None = None
     octo_group_no: str | None
     am_team_id: str | None
     scan_enabled: bool
@@ -131,6 +141,25 @@ class MemberAdd(BaseModel):
     person_id: int
 
 
+class MemberAccountIn(BaseModel):
+    gitlab_account_id: int | None = None
+
+
+class GitlabAccountIn(BaseModel):
+    base_url: str
+    token: str
+
+
+class GitlabAccountOut(BaseModel):
+    id: int
+    base_url: str
+    gitlab_user_id: int
+    username: str
+    name: str = ""
+    email: str = ""
+    has_token: bool = True
+
+
 class MemberOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -139,6 +168,10 @@ class MemberOut(BaseModel):
     person_name: str = ""
     gitlab_username: str | None = None
     gitlab_email: str | None = None
+    # 本人在本研发组使用的 GitLab 账号（空 = 未绑定，派发开发任务会被拦）
+    gitlab_account_id: int | None = None
+    gitlab_account_username: str | None = None
+    gitlab_accounts: list[GitlabAccountOut] = []  # 该成员名下可选的本组账号
     octo_uid: str | None
     octo_nickname: str | None
     match_status: str
@@ -156,6 +189,29 @@ class GitlabMatchIn(BaseModel):
 
 
 class ProjectIn(BaseModel):
+    name: str
+    code: str | None = None
+    octo_group_no: str | None = None
+    leader_person_ids: list[int] = []
+
+
+class ProjectUpd(BaseModel):
+    name: str | None = None
+    code: str | None = None
+    octo_group_no: str | None = None
+    leader_person_ids: list[int] | None = None
+
+
+class ProjectOut(BaseModel):
+    id: int
+    name: str
+    code: str | None = None
+    octo_group_no: str | None = None
+    leader_person_ids: list[int] = []
+    group_ids: list[int] = []
+
+
+class SystemIn(BaseModel):
     group_id: int
     gitlab_project_id: int
     path: str
@@ -171,7 +227,7 @@ class ProjectIn(BaseModel):
     run_egm_bootstrap: bool = False
 
 
-class ProjectUpd(BaseModel):
+class SystemUpd(BaseModel):
     path: str | None = None
     name: str | None = None
     code_prefix: str | None = None
@@ -185,7 +241,7 @@ class ProjectUpd(BaseModel):
     am_agent_id: str | None = None
 
 
-class ProjectOut(BaseModel):
+class SystemOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
@@ -205,7 +261,7 @@ class ProjectOut(BaseModel):
 
 
 class RequirementIn(BaseModel):
-    project_id: int
+    system_id: int
     title: str
     description: str | None = None
 
@@ -225,7 +281,7 @@ class RequirementOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    project_id: int
+    system_id: int
     project_name: str | None = None
     code: str
     title: str
@@ -286,7 +342,7 @@ class EgmJobIn(BaseModel):
 
 class EgmReportOut(BaseModel):
     id: int
-    project_id: int
+    system_id: int
     kind: str
     status: str
     report_md: str | None = None

@@ -19,7 +19,7 @@ router = APIRouter(prefix="/api/code-stats", tags=["code-stats"])
 @router.get("")
 async def code_stats(
     group_id: int | None = None,
-    project_id: int | None = None,
+    system_id: int | None = None,
     person_id: int | None = None,
     start: date | None = None,
     end: date | None = None,
@@ -32,7 +32,7 @@ async def code_stats(
     if not start:
         start = end - timedelta(days=6)
     data = await aggregate(
-        db, group_id=group_id, project_id=project_id, person_id=person_id, start=start, end=end
+        db, group_id=group_id, system_id=system_id, person_id=person_id, start=start, end=end
     )
     return {"start": str(start), "end": str(end), **data}
 
@@ -42,7 +42,7 @@ async def collect(
     group_id: int,
     start: date,
     end: date,
-    project_id: int | None = None,
+    system_id: int | None = None,
     db: AsyncSession = Depends(get_db),
     _admin: Person = Depends(require_admin),
 ) -> dict:
@@ -54,7 +54,7 @@ async def collect(
         raise HTTPException(400, "区间需在 31 天以内")
     rows = files = days = 0
     for i in range((end - start).days + 1):
-        res = await collect_day(db, group, start + timedelta(days=i), project_id)
+        res = await collect_day(db, group, start + timedelta(days=i), system_id)
         if "error" in res:
             raise HTTPException(400, res["error"])
         rows += res["rows"]

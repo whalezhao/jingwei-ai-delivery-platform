@@ -201,7 +201,7 @@ async def _login(client, db, seeded):
 
 
 async def _claimed_req(client, seeded, title: str) -> int:
-    r = await client.post("/api/requirements", json={"project_id": seeded["project"].id, "title": title})
+    r = await client.post("/api/requirements", json={"system_id": seeded["project"].id, "title": title})
     assert r.status_code == 200, r.text
     req_id = r.json()["id"]
     assert (await client.post(f"/api/requirements/{req_id}/claim")).status_code == 200
@@ -309,7 +309,7 @@ async def test_review_with_blockers_notifies_and_counts(db, seeded, monkeypatch)
     monkeypatch.setattr(runner_api, "notify", fake_notify)
 
     req = Requirement(
-        project_id=seeded["project"].id,
+        system_id=seeded["project"].id,
         code=f"TEST-B{seeded['person'].id}",
         title="阻塞项用例",
         claimant_id=seeded["person"].id,
@@ -339,7 +339,7 @@ async def test_creating_project_can_bootstrap_egm(admin_client, db, seeded):
     from vega.models import RunnerTask
 
     r = await admin_client.post(
-        "/api/projects",
+        "/api/systems",
         json={
             "group_id": seeded["group"].id,
             "gitlab_project_id": 99001,
@@ -354,7 +354,7 @@ async def test_creating_project_can_bootstrap_egm(admin_client, db, seeded):
 
     await db.commit()
     tasks = (await db.scalars(select(RunnerTask).where(RunnerTask.type == "egm_job"))).all()
-    task = next(t for t in tasks if t.payload.get("project_id") == pid)
+    task = next(t for t in tasks if t.payload.get("system_id") == pid)
     assert task.payload["kind"] == "bootstrap"
     task.status = "done"
     await db.commit()
@@ -366,7 +366,7 @@ async def test_project_egm_job_endpoint_enqueues_bootstrap(client, db, seeded):
     from vega.models import RunnerTask
 
     await _login(client, db, seeded)
-    r = await client.post(f"/api/projects/{seeded['project'].id}/egm-jobs", json={"kind": "bootstrap"})
+    r = await client.post(f"/api/systems/{seeded['project'].id}/egm-jobs", json={"kind": "bootstrap"})
     assert r.status_code == 200, r.text
     rep = r.json()
     assert rep["kind"] == "bootstrap" and rep["status"] == "running"
@@ -377,7 +377,7 @@ async def test_project_egm_job_endpoint_enqueues_bootstrap(client, db, seeded):
     assert task.payload["kind"] == "bootstrap" and task.payload["git_http_url"].endswith("/team/repo.git")
 
     # 同一项目已有 EGM 任务在跑：拒绝并发
-    r = await client.post(f"/api/projects/{seeded['project'].id}/egm-jobs", json={"kind": "bootstrap"})
+    r = await client.post(f"/api/systems/{seeded['project'].id}/egm-jobs", json={"kind": "bootstrap"})
     assert r.status_code == 400 and "在跑" in r.json()["detail"]
 
     task.status = "done"
@@ -447,7 +447,7 @@ async def test_incomplete_or_failed_review_notifies_claimant(db, seeded, monkeyp
     monkeypatch.setattr(runner_api, "notify", fake_notify)
 
     req = Requirement(
-        project_id=seeded["project"].id,
+        system_id=seeded["project"].id,
         code=f"TEST-N{seeded['person'].id}",
         title="通知用例",
         claimant_id=seeded["person"].id,
@@ -475,12 +475,12 @@ async def test_incomplete_or_failed_review_notifies_claimant(db, seeded, monkeyp
 
 async def test_egm_drift_sweep_skips_projects_checked_this_week(db, seeded, monkeypatch):
     from vega.models import EgmReport, Requirement
-    from vega.routers import projects as projects_mod
+    from vega.routers import systems as systems_mod
 
     monkeypatch.setattr(get_settings(), "egm_auto_drift", True)
     db.add(
         Requirement(
-            project_id=seeded["project"].id,
+            system_id=seeded["project"].id,
             code=f"TEST-D{seeded['person'].id}",
             title="漂移用例",
             plan_md="# 方案",
@@ -492,16 +492,16 @@ async def test_egm_drift_sweep_skips_projects_checked_this_week(db, seeded, monk
 
     async def fake_enqueue(_db, project, kind):
         queued.append((project.id, kind))
-        return EgmReport(project_id=project.id, kind=kind, status="running")
+        return EgmReport(system_id=project.id, kind=kind, status="running")
 
-    monkeypatch.setattr(projects_mod, "enqueue_project_egm_job", fake_enqueue)
+    monkeypatch.setattr(systems_mod, "enqueue_project_egm_job", fake_enqueue)
 
-    assert await projects_mod.egm_drift_sweep(db) >= 1
+    assert await systems_mod.egm_drift_sweep(db) >= 1
     assert (seeded["project"].id, "drift") in queued
 
     # 7 天内已经跑过 drift：这周不再投
     queued.clear()
-    db.add(EgmReport(project_id=seeded["project"].id, kind="drift", status="done"))
+    db.add(EgmReport(system_id=seeded["project"].id, kind="drift", status="done"))
     await db.commit()
-    await projects_mod.egm_drift_sweep(db)
+    await systems_mod.egm_drift_sweep(db)
     assert (seeded["project"].id, "drift") not in queued

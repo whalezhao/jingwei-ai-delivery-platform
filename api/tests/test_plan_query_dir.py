@@ -121,7 +121,7 @@ async def test_plan_payload_carries_repo(client, db, seeded):
     token, _ = await login_as(client, db, seeded["person"].gitlab_username)
     client.headers["Authorization"] = f"Bearer {token}"
 
-    r = await client.post("/api/requirements", json={"project_id": seeded["project"].id, "title": "问答基线"})
+    r = await client.post("/api/requirements", json={"system_id": seeded["project"].id, "title": "问答基线"})
     assert r.status_code == 200, r.text
     req_id = r.json()["id"]
     assert (await client.post(f"/api/requirements/{req_id}/claim")).status_code == 200

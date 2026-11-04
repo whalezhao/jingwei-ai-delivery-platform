@@ -21,7 +21,16 @@ from ..jobs import (
     sync_members_and_match,
 )
 from ..reports import build_code_report, report_range
-from ..models import DevGroup, GitlabMember, GroupMember, GroupTechLead, Person
+from ..models import (
+    DevGroup,
+    GitlabMember,
+    GroupMember,
+    GroupTechLead,
+    Person,
+    PersonGitlabAccount,
+    Project,
+    System,
+)
 from ..notify import notify
 from ..person_links import person_ids, set_persons
 from ..schemas import (
@@ -31,6 +40,7 @@ from ..schemas import (
     GroupUpd,
     ManualMatchIn,
     MatchRunOut,
+    MemberAccountIn,
     MemberAdd,
     MemberOut,
     ScanOut,
@@ -46,11 +56,16 @@ def _group_bot_token(group: DevGroup) -> str | None:
     return decrypt(get_settings().secret_key, group.octo_bot_token_enc)
 
 
-def group_to_out(g: DevGroup, tech_lead_ids: list[int] | None = None) -> dict:
+def group_to_out(
+    g: DevGroup, tech_lead_ids: list[int] | None = None, project_name: str | None = None
+) -> dict:
     return {
         "id": g.id,
         "name": g.name,
+        "project_id": g.project_id,
+        "project_name": project_name,
         "gitlab_base_url": g.gitlab_base_url,
+        "gitlab_bot_username": g.gitlab_bot_username,
         "octo_group_no": g.octo_group_no,
         "am_team_id": g.am_team_id,
         "scan_enabled": g.scan_enabled,
@@ -71,6 +86,7 @@ def _apply(body: GroupIn | GroupUpd, group: DevGroup) -> None:
     for k in (
         "name",
         "gitlab_base_url",
+        "gitlab_bot_username",
         "octo_group_no",
         "am_team_id",
         "scan_enabled",
@@ -80,6 +96,8 @@ def _apply(body: GroupIn | GroupUpd, group: DevGroup) -> None:
     ):
         if k in data and data[k] is not None:
             setattr(group, k, data[k])
+    if "project_id" in data:  # 传 null = 解绑项目
+        group.project_id = data["project_id"]
     if "gitlab_token" in data:
         group.gitlab_token_enc = encrypt(s, data["gitlab_token"]) if data["gitlab_token"] else None
     if "octo_bot_token" in data:  # 空 = 清除，回退全局 bot
@@ -95,6 +113,26 @@ async def _get_group(db: AsyncSession, group_id: int) -> DevGroup:
     if not group:
         raise HTTPException(404, "研发组不存在")
     return group
+
+
+async def _check_project(db: AsyncSession, project_id: int | None) -> None:
+    if project_id is not None and not await db.get(Project, project_id):
+        raise HTTPException(400, "项目不存在")
+
+
+async def _check_bot_account(db: AsyncSession, group: DevGroup) -> None:
+    """同一个 GitLab 实例的同一个账号不能同时给两个组当机器账号（权限隔离的前提）。"""
+    if not group.gitlab_bot_username or not group.gitlab_base_url:
+        return
+    dup = await db.scalar(
+        select(DevGroup.id).where(
+            DevGroup.gitlab_base_url == group.gitlab_base_url,
+            DevGroup.gitlab_bot_username == group.gitlab_bot_username,
+            DevGroup.id != group.id,
+        )
+    )
+    if dup:
+        raise HTTPException(400, "该 GitLab 账号已被其他研发组用作机器账号")
 
 
 # ---------- 保存后自动触发（后台任务用自己的 session，请求 session 响应后即关闭） ----------
@@ -133,11 +171,18 @@ def _auto_triggers(background: BackgroundTasks, before: tuple | None, group: Dev
 
 @router.get("", response_model=list[GroupOut])
 async def list_groups(
-    db: AsyncSession = Depends(get_db), me: Person = Depends(current_person)
+    project_id: int | None = None,
+    db: AsyncSession = Depends(get_db),
+    me: Person = Depends(current_person),
 ) -> list[GroupOut]:
-    rows = (await db.scalars(select(DevGroup).order_by(DevGroup.id))).all()
+    q = select(DevGroup).order_by(DevGroup.id)
+    if project_id:
+        q = q.where(DevGroup.project_id == project_id)
+    rows = (await db.scalars(q)).all()
+    projects = {p.id: p.name for p in (await db.scalars(select(Project))).all()}
     return [
-        group_to_out(g, await person_ids(db, GroupTechLead, group_id=g.id)) for g in rows
+        group_to_out(g, await person_ids(db, GroupTechLead, group_id=g.id), projects.get(g.project_id))
+        for g in rows
     ]
 
 
@@ -148,15 +193,21 @@ async def create_group(
     db: AsyncSession = Depends(get_db),
     admin: Person = Depends(require_admin),
 ) -> GroupOut:
+    await _check_project(db, body.project_id)
     group = DevGroup(webhook_secret=secrets.token_hex(16))
     _apply(body, group)
+    await _check_bot_account(db, group)
     db.add(group)
     await db.flush()
     await set_persons(db, GroupTechLead, body.tech_lead_person_ids, "技术负责人", group_id=group.id)
     await db.commit()
     await db.refresh(group)
     _auto_triggers(background, None, group)
-    return group_to_out(group, body.tech_lead_person_ids)
+    return group_to_out(
+        group,
+        body.tech_lead_person_ids,
+        (await db.get(Project, group.project_id)).name if group.project_id else None,
+    )
 
 
 @router.put("/{group_id}", response_model=GroupOut)
@@ -170,6 +221,9 @@ async def update_group(
     group = await _get_group(db, group_id)
     before = (group.gitlab_base_url, group.gitlab_token_enc, group.octo_group_no, group.octo_bot_token_enc)
     _apply(body, group)
+    if "project_id" in body.model_fields_set:
+        await _check_project(db, group.project_id)
+    await _check_bot_account(db, group)
     if body.regenerate_webhook_secret:
         group.webhook_secret = secrets.token_hex(16)
     if "tech_lead_person_ids" in body.model_fields_set:
@@ -177,7 +231,11 @@ async def update_group(
     await db.commit()
     await db.refresh(group)
     _auto_triggers(background, before, group)
-    return group_to_out(group, await person_ids(db, GroupTechLead, group_id=group.id))
+    return group_to_out(
+        group,
+        await person_ids(db, GroupTechLead, group_id=group.id),
+        (await db.get(Project, group.project_id)).name if group.project_id else None,
+    )
 
 
 @router.delete("/{group_id}")
@@ -231,6 +289,8 @@ async def octo_test(
 async def list_members(
     group_id: int, db: AsyncSession = Depends(get_db), me: Person = Depends(current_person)
 ) -> list[MemberOut]:
+    group = await _get_group(db, group_id)
+    base = (group.gitlab_base_url or "").rstrip("/")
     rows = (
         await db.scalars(
             select(GroupMember)
@@ -239,22 +299,100 @@ async def list_members(
             .order_by(GroupMember.id)
         )
     ).all()
-    return [
-        MemberOut(
-            id=gm.id,
-            person_id=gm.person_id,
-            person_name=gm.person.name if gm.person else "",
-            gitlab_username=gm.person.gitlab_username if gm.person else None,
-            gitlab_email=gm.person.gitlab_email if gm.person else None,
-            octo_uid=gm.octo_uid,
-            octo_nickname=gm.octo_nickname,
-            match_status=gm.match_status,
-            match_confidence=gm.match_confidence,
-            match_reason=gm.match_reason,
-            manual_lock=gm.manual_lock,
-        ).model_dump()
-        for gm in rows
-    ]
+    # 一次取出全组成员名下的账号，避免逐成员查库
+    by_person: dict[int, list[PersonGitlabAccount]] = {}
+    if rows:
+        for a in (
+            await db.scalars(
+                select(PersonGitlabAccount)
+                .where(PersonGitlabAccount.person_id.in_([gm.person_id for gm in rows]))
+                .order_by(PersonGitlabAccount.id)
+            )
+        ).all():
+            # 只列出本组 GitLab 实例下的账号；选了别的实例后端也会拒绝
+            if not base or a.base_url.rstrip("/") == base:
+                by_person.setdefault(a.person_id, []).append(a)
+    return [await _member_out(db, gm, by_person.get(gm.person_id, [])) for gm in rows]
+
+
+async def _member_out(
+    db: AsyncSession, gm: GroupMember, accounts: list[PersonGitlabAccount] | None = None
+) -> dict:
+    acc = await db.get(PersonGitlabAccount, gm.gitlab_account_id) if gm.gitlab_account_id else None
+    if accounts is None:
+        accounts = list(
+            (
+                await db.scalars(
+                    select(PersonGitlabAccount).where(PersonGitlabAccount.person_id == gm.person_id)
+                )
+            ).all()
+        )
+    return MemberOut(
+        id=gm.id,
+        person_id=gm.person_id,
+        person_name=gm.person.name if gm.person else "",
+        gitlab_username=gm.person.gitlab_username if gm.person else None,
+        gitlab_email=gm.person.gitlab_email if gm.person else None,
+        gitlab_account_id=gm.gitlab_account_id,
+        gitlab_account_username=acc.username if acc else None,
+        gitlab_accounts=[
+            {
+                "id": a.id,
+                "base_url": a.base_url,
+                "gitlab_user_id": a.gitlab_user_id or 0,
+                "username": a.username,
+                "name": a.name,
+                "email": a.email,
+                "has_token": bool(a.token_enc),
+            }
+            for a in accounts
+        ],
+        octo_uid=gm.octo_uid,
+        octo_nickname=gm.octo_nickname,
+        match_status=gm.match_status,
+        match_confidence=gm.match_confidence,
+        match_reason=gm.match_reason,
+        manual_lock=gm.manual_lock,
+    ).model_dump()
+
+
+@router.put("/{group_id}/members/{person_id}/account", response_model=MemberOut)
+async def set_member_account(
+    group_id: int,
+    person_id: int,
+    body: MemberAccountIn,
+    db: AsyncSession = Depends(get_db),
+    me: Person = Depends(current_person),
+) -> MemberOut:
+    """选择「我在本组用哪个 GitLab 账号」。本人或管理员可改；一组只许一个账号。"""
+    if not me.is_admin and me.id != person_id:
+        raise HTTPException(403, "只能设置自己的账号")
+    group = await _get_group(db, group_id)
+    gm = await db.scalar(
+        select(GroupMember)
+        .where(GroupMember.group_id == group_id, GroupMember.person_id == person_id)
+        .options(selectinload(GroupMember.person))
+    )
+    if not gm:
+        raise HTTPException(404, "成员不存在")
+    acc = None
+    if body.gitlab_account_id:
+        acc = await db.get(PersonGitlabAccount, body.gitlab_account_id)
+        if not acc or acc.person_id != person_id:
+            raise HTTPException(404, "账号不存在或不属于该成员")
+        if group.gitlab_base_url and acc.base_url.rstrip("/") != group.gitlab_base_url.rstrip("/"):
+            raise HTTPException(400, "该账号不属于本组使用的 GitLab 实例")
+        holder = await db.scalar(
+            select(GroupMember.id).where(
+                GroupMember.gitlab_account_id == acc.id, GroupMember.id != gm.id
+            )
+        )
+        if holder:
+            raise HTTPException(400, "该账号已绑定在其他研发组")
+    gm.gitlab_account_id = acc.id if acc else None
+    await db.commit()
+    await db.refresh(gm)
+    return await _member_out(db, gm)
 
 
 @router.post("/{group_id}/members", response_model=MemberOut)
@@ -280,19 +418,7 @@ async def add_member(
     db.add(gm)
     await db.commit()
     await db.refresh(gm)
-    return MemberOut(
-        id=gm.id,
-        person_id=gm.person_id,
-        person_name=person.name,
-        gitlab_username=person.gitlab_username,
-        gitlab_email=person.gitlab_email,
-        octo_uid=gm.octo_uid,
-        octo_nickname=gm.octo_nickname,
-        match_status=gm.match_status,
-        match_confidence=gm.match_confidence,
-        match_reason=gm.match_reason,
-        manual_lock=gm.manual_lock,
-    ).model_dump()
+    return await _member_out(db, gm)
 
 
 @router.delete("/{group_id}/members/{person_id}")
@@ -386,33 +512,57 @@ async def gitlab_match(
     db: AsyncSession = Depends(get_db),
     admin: Person = Depends(require_admin),
 ) -> dict:
-    """人工绑定/解绑 GitLab 账号。一个账号只归一个人：改绑时旧持有者自动解绑。"""
+    """人工把本组成员的 GitLab 身份绑到他的账号表记录上。
+
+    账号以 (GitLab 实例, username) 为唯一键；改绑到别人时账号整体转手，
+    并解除其在其他研发组的占用（一组只用一个账号）。
+    """
     gm = await db.scalar(
         select(GroupMember).where(GroupMember.group_id == group_id, GroupMember.person_id == person_id)
     )
     if not gm:
         raise HTTPException(404, "成员不存在")
-    person = await db.get(Person, person_id)
     username = (body.gitlab_username or "").strip()
-    released = None
     if not username:
-        person.gitlab_username, person.gitlab_email = None, None
-    else:
-        holder = await db.scalar(select(Person).where(Person.gitlab_username == username))
-        if holder and holder.id != person.id:
-            # username 有唯一约束：先把旧持有者落库成 NULL，再写新值，否则 flush 顺序不定会撞约束
-            released = holder.name
-            holder.gitlab_username, holder.gitlab_email = None, None
-            await db.flush()
-        person.gitlab_username = username
-        # 邮箱取本组快照（下拉能选到 username 就说明快照里已经有它）
+        gm.gitlab_account_id = None
+        await db.commit()
+        return {"ok": True, "released": None}
+    group = await _get_group(db, group_id)
+    base = (group.gitlab_base_url or "").rstrip("/")
+    if not base:
+        raise HTTPException(400, "研发组未配置 GitLab 地址")
+    acc = await db.scalar(
+        select(PersonGitlabAccount).where(
+            PersonGitlabAccount.base_url == base, PersonGitlabAccount.username == username
+        )
+    )
+    released = None
+    if acc and acc.person_id != person_id:
+        holder = await db.get(Person, acc.person_id)
+        released = holder.name if holder else None
+        acc.person_id = person_id
+    if not acc:
         info = await db.scalar(
             select(GitlabMember).where(
                 GitlabMember.group_id == group_id, GitlabMember.username == username
             )
         )
-        if info and info.email:
-            person.gitlab_email = info.email
+        acc = PersonGitlabAccount(
+            person_id=person_id,
+            base_url=base,
+            username=username,
+            name=info.name if info else "",
+            email=info.email if info else "",
+        )
+        db.add(acc)
+        await db.flush()
+    # 一个账号在一个研发组只用一次；账号整体转手时，旧的组内绑定一并解除
+    for other in (
+        await db.scalars(select(GroupMember).where(GroupMember.gitlab_account_id == acc.id))
+    ).all():
+        if other.id != gm.id:
+            other.gitlab_account_id = None
+    gm.gitlab_account_id = acc.id
     await db.commit()
     return {"ok": True, "released": released}
 

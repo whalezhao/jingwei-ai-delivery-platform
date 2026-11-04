@@ -106,7 +106,7 @@ async def _job_mr_autoflow() -> None:
 
 
 async def _job_egm_drift() -> None:
-    from .routers.projects import egm_drift_sweep
+    from .routers.systems import egm_drift_sweep
 
     async with sessionmaker()() as s:
         try:

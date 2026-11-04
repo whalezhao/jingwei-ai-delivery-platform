@@ -24,23 +24,16 @@ from ..db import get_db, sessionmaker
 from ..gitlab import client_ctx
 from ..jobs import MR_CLOSED_MARK, _gitlab, _notify_task_final, ci_failure_analysis, mark_requirement_online
 from ..llm import am_user_key, build_claude_env, resolve_llm
-from ..models import DevGroup, DevTask, GitlabEvent, MrReview, Person, Project, Requirement, utcnow
+from ..models import DevGroup, DevTask, GitlabEvent, MrReview, Person, System, Requirement, utcnow
 from ..notify import merge_mentions, notify, project_owners
+from ..person_links import gitlab_username_for, person_by_gitlab
 from ..queue import enqueue
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/webhooks/gitlab", tags=["webhooks"])
 
 
-async def _person_by(db: AsyncSession, *, email: str | None = None, username: str | None = None) -> Person | None:
-    q = select(Person)
-    if email:
-        row = await db.scalar(q.where(Person.gitlab_email == email))
-        if row:
-            return row
-    if username:
-        return await db.scalar(q.where(Person.gitlab_username == username))
-    return None
+
 
 
 def _project_id(payload: dict) -> int | None:
@@ -84,11 +77,11 @@ async def _on_push(db: AsyncSession, group: DevGroup, payload: dict) -> None:
     if n == 0 and payload.get("after", "").rstrip("0") == "":
         return  # 纯分支删除/空推送静默
     user_email = payload.get("user_email")
-    person = await _person_by(db, email=user_email, username=payload.get("user_name"))
+    person = await person_by_gitlab(db, group, email=user_email, username=payload.get("user_name"))
     project = await db.scalar(
-        select(Project).where(
-            Project.group_id == group.id,
-            Project.gitlab_project_id == _project_id(payload),
+        select(System).where(
+            System.group_id == group.id,
+            System.gitlab_project_id == _project_id(payload),
         )
     )
     pname = project.path if project else (payload.get("project") or {}).get("path_with_namespace", "?")
@@ -107,9 +100,9 @@ async def _on_mr(db: AsyncSession, group: DevGroup, payload: dict, background: B
     action = attrs.get("action")
     if action in ("open", "reopen"):
         author = payload.get("author") or {}
-        person = await _person_by(db, email=author.get("email"), username=author.get("username"))
+        person = await person_by_gitlab(db, group, email=author.get("email"), username=author.get("username"))
         project = await db.scalar(
-            select(Project).where(Project.group_id == group.id, Project.gitlab_project_id == _project_id(payload))
+            select(System).where(System.group_id == group.id, System.gitlab_project_id == _project_id(payload))
         )
         pname = project.path if project else "?"
         owners = await project_owners(db, project.id) if project else []
@@ -141,8 +134,8 @@ async def _enqueue_mr_review_if_needed(group_id: int, gitlab_project_id, payload
         async with sessionmaker()() as s:
             group = await s.get(DevGroup, group_id)
             project = await s.scalar(
-                select(Project).where(
-                    Project.group_id == group_id, Project.gitlab_project_id == gitlab_project_id
+                select(System).where(
+                    System.group_id == group_id, System.gitlab_project_id == gitlab_project_id
                 )
             )
             if not group or not project or not project.audit_prefixes:
@@ -168,7 +161,7 @@ async def _enqueue_mr_review_if_needed(group_id: int, gitlab_project_id, payload
                 (
                     await s.scalars(
                         select(MrReview.id).where(
-                            MrReview.project_id == project.id,
+                            MrReview.system_id == project.id,
                             MrReview.mr_iid == iid,
                             MrReview.created_at >= day_ago,
                         )
@@ -189,7 +182,7 @@ async def _enqueue_mr_review_if_needed(group_id: int, gitlab_project_id, payload
             # 失败可重试——runner 偶发挂（LLM 抖动、claude 退出）不该让这个 commit 永远没人审
             existing = await s.scalar(
                 select(MrReview).where(
-                    MrReview.project_id == project.id,
+                    MrReview.system_id == project.id,
                     MrReview.mr_iid == iid,
                     MrReview.head_sha == sha,
                 )
@@ -204,7 +197,7 @@ async def _enqueue_mr_review_if_needed(group_id: int, gitlab_project_id, payload
                 # 入队即建占位行：(project, iid, sha) 唯一约束挡住并发事件重复入队
                 s.add(
                     MrReview(
-                        project_id=project.id,
+                        system_id=project.id,
                         group_id=group.id,
                         mr_iid=iid,
                         head_sha=sha,
@@ -226,14 +219,14 @@ async def _enqueue_mr_review_if_needed(group_id: int, gitlab_project_id, payload
                     select(DevTask, Requirement, Person)
                     .join(Requirement, DevTask.requirement_id == Requirement.id)
                     .join(Person, DevTask.creator_id == Person.id)
-                    .where(Requirement.project_id == project.id, DevTask.mr_iid == iid)
+                    .where(Requirement.system_id == project.id, DevTask.mr_iid == iid)
                 )
             ).first()
             reviewer = row.Person if row else None
             if not reviewer:
                 author = (payload.get("author") or {}).get("username")
                 if author:
-                    reviewer = await s.scalar(select(Person).where(Person.gitlab_username == author))
+                    reviewer = await person_by_gitlab(s, group, username=author)
             owners = await project_owners(s, project.id)
             token = decrypt(get_settings().secret_key, group.gitlab_token_enc)
             target = resolve_llm(None, group, person_first=False)
@@ -250,7 +243,7 @@ async def _enqueue_mr_review_if_needed(group_id: int, gitlab_project_id, payload
                 s,
                 type="mr_review",
                 payload={
-                    "project_id": project.id,
+                    "system_id": project.id,
                     "mr": {
                         "iid": iid,
                         "title": attrs.get("title") or "",
@@ -284,8 +277,8 @@ async def _on_pipeline(
     attrs = payload.get("object_attributes") or {}
     status = attrs.get("status")
     project = await db.scalar(
-        select(Project).where(
-            Project.group_id == group.id, Project.gitlab_project_id == _project_id(payload)
+        select(System).where(
+            System.group_id == group.id, System.gitlab_project_id == _project_id(payload)
         )
     )
     if status == "success":
@@ -298,7 +291,7 @@ async def _on_pipeline(
     async def _run() -> None:
         async with sessionmaker()() as s:
             g = await s.get(DevGroup, group.id)
-            p = await s.get(Project, project.id)
+            p = await s.get(System, project.id)
             await ci_failure_analysis(s, g, p, payload)
             ev = await s.get(GitlabEvent, event_id)
             if ev:
@@ -323,8 +316,8 @@ async def _mark_task_final(
     if not mr_iid or not gitlab_project_id:
         return
     project = await db.scalar(
-        select(Project).where(
-            Project.group_id == group.id, Project.gitlab_project_id == gitlab_project_id
+        select(System).where(
+            System.group_id == group.id, System.gitlab_project_id == gitlab_project_id
         )
     )
     if not project:
@@ -333,7 +326,7 @@ async def _mark_task_final(
         await db.execute(
             select(DevTask, Requirement)
             .join(Requirement, DevTask.requirement_id == Requirement.id)
-            .where(Requirement.project_id == project.id, DevTask.mr_iid == mr_iid)
+            .where(Requirement.system_id == project.id, DevTask.mr_iid == mr_iid)
         )
     ).first()
     if not row:

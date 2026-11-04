@@ -10,7 +10,7 @@ import pytest
 from conftest import TMP, login_as
 
 from vega.gitlab import GitlabClient
-from vega.models import DevTask, NotifyLog, Person, PlanVersion, ProjectOwner, Requirement
+from vega.models import DevTask, NotifyLog, Person, PersonGitlabAccount, PlanVersion, SystemOwner, Requirement
 from vega.runner import Runner
 
 
@@ -58,6 +58,8 @@ async def test_dev_task_loop(admin_client, client, db, seeded, claude_stub, monk
 
     # 组指向 file:// gitroot；token 对 file:// 无效但不影响（runner 会透传）
     seeded["group"].gitlab_base_url = f"file://{TMP}/gitroot"
+    acc = await db.get(PersonGitlabAccount, seeded["gm"].gitlab_account_id)
+    acc.base_url = seeded["group"].gitlab_base_url
     await db.commit()
 
     # 项目负责人（绑定了 GitLab 账号）→ MR 审核人是他们，而不是任务创建人；多个负责人都要带上
@@ -68,14 +70,14 @@ async def test_dev_task_loop(admin_client, client, db, seeded, claude_stub, monk
     db.add_all([owner, owner2])
     await db.flush()
     db.add_all([
-        ProjectOwner(project_id=seeded["project"].id, person_id=owner.id),
-        ProjectOwner(project_id=seeded["project"].id, person_id=owner2.id),
+        SystemOwner(system_id=seeded["project"].id, person_id=owner.id),
+        SystemOwner(system_id=seeded["project"].id, person_id=owner2.id),
     ])
     await db.commit()
     seen_assignee: list[list[str]] = []
 
     # MR 创建 mock（不真打 GitLab）
-    async def fake_create_mr(self, client, project_id, *, source, target, title, description, assignee_usernames, labels="ai-gen"):
+    async def fake_create_mr(self, client, system_id, *, source, target, title, description, assignee_usernames, labels="ai-gen"):
         seen_assignee.append(assignee_usernames)
         return {"iid": 7, "web_url": f"http://gitlab.test/team/repo/-/merge_requests/7", "state": "opened"}
 
@@ -87,7 +89,7 @@ async def test_dev_task_loop(admin_client, client, db, seeded, claude_stub, monk
     token, _ = await login_as(client, db, seeded["person"].gitlab_username)
     client.headers["Authorization"] = f"Bearer {token}"
     r = await client.post("/api/requirements", json={
-        "project_id": seeded["project"].id, "title": "需求B", "description": "原始需求描述：做一个很厉害的功能",
+        "system_id": seeded["project"].id, "title": "需求B", "description": "原始需求描述：做一个很厉害的功能",
     })
     req_id = r.json()["id"]
     await client.post(f"/api/requirements/{req_id}/claim")
@@ -235,7 +237,7 @@ async def test_dev_task_events_persisted(admin_client, client, db, seeded):
     req_id = (
         await client.post(
             "/api/requirements",
-            json={"project_id": seeded["project"].id, "title": "留痕", "description": "d"},
+            json={"system_id": seeded["project"].id, "title": "留痕", "description": "d"},
         )
     ).json()["id"]
     await client.post(f"/api/requirements/{req_id}/claim")

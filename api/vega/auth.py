@@ -1,7 +1,7 @@
 """登录认证：PBKDF2 口令 + HMAC 签名 token（无状态，stdlib 实现）。
 
 bootstrap：首次启动若无 admin，用 settings.admin_username/password 建一个。
-登录名 = person.gitlab_username。
+登录名 = person.username（与 GitLab 身份解耦；旧数据迁移时由 gitlab_username 回填）。
 """
 
 from __future__ import annotations
@@ -83,6 +83,7 @@ async def bootstrap_admin(db: AsyncSession) -> None:
         return
     admin = Person(
         name=s.admin_username,
+        username=s.admin_username,
         gitlab_username=s.admin_username,
         password_hash=hash_password(s.admin_password),
         is_admin=True,
@@ -92,7 +93,7 @@ async def bootstrap_admin(db: AsyncSession) -> None:
 
 
 async def login(db: AsyncSession, username: str, password: str) -> tuple[Person, str]:
-    person = await db.scalar(select(Person).where(Person.gitlab_username == username))
+    person = await db.scalar(select(Person).where(Person.username == username))
     if not person or not verify_password(password, person.password_hash):
         raise HTTPException(401, "用户名或密码错误")
     return person, sign_token(person.id)

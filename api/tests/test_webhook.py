@@ -60,12 +60,12 @@ async def test_push_event_notifies(client, db, seeded):
 
 async def test_mr_open_notifies(client, db, seeded):
     secret = await _secret(client, seeded)
-    from vega.models import ProjectOwner
+    from vega.models import SystemOwner
 
     owner = Person(name="项目负责人乙", octo_uid="uid-mr-owner")
     db.add(owner)
     await db.flush()
-    db.add(ProjectOwner(project_id=seeded["project"].id, person_id=owner.id))
+    db.add(SystemOwner(system_id=seeded["project"].id, person_id=owner.id))
     await db.commit()
     r = await client.post(
         "/webhooks/gitlab",
@@ -100,13 +100,13 @@ async def test_mr_close_marks_task_and_notifies(client, db, seeded):
     secret = await _secret(client, seeded)
     from sqlalchemy import select
 
-    from vega.models import DevTask, NotifyLog, ProjectOwner, Requirement
+    from vega.models import DevTask, NotifyLog, SystemOwner, Requirement
 
     owner = Person(name="项目负责人丙", octo_uid="uid-close-owner")
     db.add(owner)
     await db.flush()
-    db.add(ProjectOwner(project_id=seeded["project"].id, person_id=owner.id))
-    req = Requirement(project_id=seeded["project"].id, code="REQ-CLOSE-1", title="关闭需求", status="claimed")
+    db.add(SystemOwner(system_id=seeded["project"].id, person_id=owner.id))
+    req = Requirement(system_id=seeded["project"].id, code="REQ-CLOSE-1", title="关闭需求", status="claimed")
     db.add(req)
     await db.flush()
     task = DevTask(
@@ -153,10 +153,10 @@ async def test_mr_close_marks_task_and_notifies(client, db, seeded):
 async def test_pipeline_failed_triggers_llm_analysis(client, db, seeded, monkeypatch):
     secret = await _secret(client, seeded)
 
-    async def fake_pipeline_jobs(self, client_, project_id, pipeline_id):
+    async def fake_pipeline_jobs(self, client_, system_id, pipeline_id):
         return [{"id": 99, "name": "build", "stage": "build", "status": "failed"}]
 
-    async def fake_trace(self, client_, project_id, job_id):
+    async def fake_trace(self, client_, system_id, job_id):
         return "npm ERR! missing script build\nexit 1"
 
     async def fake_ask_llm(prompt, **kw):

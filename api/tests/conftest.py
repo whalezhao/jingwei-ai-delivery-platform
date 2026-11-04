@@ -28,6 +28,9 @@ os.environ.update(
         "VEGA_EGM_AUTO_DRIFT": "0",
     }
 )
+# 本机代理环境里的 NO_PROXY 含 [::1]，httpx 0.28 的 URLPattern 解析会抛 InvalidURL
+os.environ.pop("NO_PROXY", None)
+os.environ.pop("no_proxy", None)
 
 from vega.auth import bootstrap_admin  # noqa: E402
 from vega.db import init_db, sessionmaker  # noqa: E402
@@ -125,12 +128,13 @@ async def seeded(db):
     username = f"zhangsan{_seed_seq}"
 
     from vega.crypto import encrypt
-    from vega.models import DevGroup, GroupMember, Person, Project, ProjectPM
+    from vega.models import DevGroup, GroupMember, Person, PersonGitlabAccount, System, SystemPM
 
     # 产品+开发双角色：现有用例都是「一个人从写需求一路走到定稿方案」，
     # 单角色会卡在两段式交接上；真实环境里兼职开发的技术经理正是这种配置
     person = Person(
         name="张三",
+        username=username,
         gitlab_username=username,
         gitlab_email=f"{username}@test.cn",
         password_hash=None,
@@ -148,9 +152,19 @@ async def seeded(db):
     )
     db.add(group)
     await db.flush()
-    gm = GroupMember(group_id=group.id, person_id=person.id, am_agent_id="agent-zhangsan")
+    account = PersonGitlabAccount(
+        person_id=person.id,
+        base_url="http://gitlab.test",
+        username=username,
+        token_enc=encrypt(get_settings().secret_key, "gl-token"),
+    )
+    db.add(account)
+    await db.flush()
+    gm = GroupMember(
+        group_id=group.id, person_id=person.id, am_agent_id="agent-zhangsan", gitlab_account_id=account.id
+    )
     db.add(gm)
-    project = Project(
+    project = System(
         group_id=group.id,
         gitlab_project_id=100 + group.id,
         path="team/repo",
@@ -160,7 +174,7 @@ async def seeded(db):
     )
     db.add(project)
     await db.flush()
-    db.add(ProjectPM(project_id=project.id, person_id=person.id))
+    db.add(SystemPM(system_id=project.id, person_id=person.id))
     await db.commit()
     return {"person": person, "group": group, "project": project, "gm": gm}
 
@@ -170,9 +184,9 @@ async def login_as(client: httpx.AsyncClient, db, username: str, password: str =
     from vega.auth import hash_password
     from vega.models import Person
 
-    p = await db.scalar(select(Person).where(Person.gitlab_username == username))
+    p = await db.scalar(select(Person).where(Person.username == username))
     if not p:
-        p = Person(name=username, gitlab_username=username)
+        p = Person(name=username, username=username, gitlab_username=username)
         db.add(p)
     p.password_hash = hash_password(password)  # 测试里统一给账号可登录态
     await db.commit()

@@ -350,7 +350,7 @@ class Runner:
 
         绝不能放在基线仓库里——那是多任务共享的检出，写进去会弄脏它。
         """
-        key = f"req-{payload['requirement_id']}" if payload.get("requirement_id") else f"project-{payload.get('project_id')}"
+        key = f"req-{payload['requirement_id']}" if payload.get("requirement_id") else f"project-{payload.get('system_id')}"
         d = (self.workdir or _workdir()) / "egm" / key
         if sub:
             d = d / sub
@@ -557,7 +557,9 @@ class Runner:
             # 默认分支根本不在本地（首轮评审/开发任务会直接找不到 ref）
             _git("checkout", "-q", "--detach", "HEAD", cwd=repo)
             _git("fetch", "--prune", authed, "+refs/heads/*:refs/heads/*", cwd=repo)
-        _git("checkout", "-q", "--detach", f"refs/heads/{payload['default_branch']}", cwd=repo)
+        # -f：共享基线是只读副本，但 serena/手工调试会在里面留下改动和未跟踪文件；
+        # 不清掉的话 checkout 直接 Abort，所有 EGM/开发任务一起失败。
+        _git("checkout", "-q", "--detach", "-f", f"refs/heads/{payload['default_branch']}", cwd=repo)
         # 迁移到 vega-workspace 后的仓库不在 daemon 配置里，这里兜住（已挂则跳过）
         self._daemon_register(repo)
         self._crg_sync_bg(repo)

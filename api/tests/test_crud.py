@@ -42,7 +42,7 @@ async def test_full_crud_flow(admin_client, client, db, seeded):
 
     # 项目（挂 PM）
     r = await c.post(
-        "/api/projects",
+        "/api/systems",
         json={
             "group_id": group["id"],
             "gitlab_project_id": 42,
@@ -64,7 +64,7 @@ async def test_full_crud_flow(admin_client, client, db, seeded):
 
     # 需求（seeded 项目的成员才可认领）
     _, zhangsan = await login_as(client, db, seeded["person"].gitlab_username)
-    r = await c.post("/api/requirements", json={"project_id": seeded["project"].id, "title": "登录功能", "description": "支持 SSO"})
+    r = await c.post("/api/requirements", json={"system_id": seeded["project"].id, "title": "登录功能", "description": "支持 SSO"})
     assert r.status_code == 200, r.text
     req = r.json()
     assert req["code"].startswith("REQ-TEST-")
@@ -116,7 +116,7 @@ async def test_requirement_tags_and_iteration_status(client, db, seeded):
     token, _ = await login_as(client, db, seeded["person"].gitlab_username)
     client.headers["Authorization"] = f"Bearer {token}"
     req = (
-        await client.post("/api/requirements", json={"project_id": seeded["project"].id, "title": "迭代标签"})
+        await client.post("/api/requirements", json={"system_id": seeded["project"].id, "title": "迭代标签"})
     ).json()
     assert req["iteration_status"] == "iterating" and req["tags"] == []
 
@@ -160,14 +160,14 @@ async def test_list_filters_group_project_status_keyword(admin_client, db, seede
     assert r.status_code == 200, r.text
     g2 = r.json()["id"]
     r = await c.post(
-        "/api/projects",
+        "/api/systems",
         json={"group_id": g2, "gitlab_project_id": 9001, "path": "team/other", "name": "other", "code_prefix": "OTH"},
     )
     assert r.status_code == 200, r.text
     p2 = r.json()["id"]
 
-    req1 = (await c.post("/api/requirements", json={"project_id": p1, "title": "本组需求"})).json()["id"]
-    req2 = (await c.post("/api/requirements", json={"project_id": p2, "title": "外组需求"})).json()["id"]
+    req1 = (await c.post("/api/requirements", json={"system_id": p1, "title": "本组需求"})).json()["id"]
+    req2 = (await c.post("/api/requirements", json={"system_id": p2, "title": "外组需求"})).json()["id"]
 
     # 需求：按组过滤
     ids = {r["id"] for r in (await c.get("/api/requirements", params={"group_id": g1})).json()}
@@ -183,8 +183,8 @@ async def test_list_filters_group_project_status_keyword(admin_client, db, seede
 
     assert codes((await c.get("/api/dev-tasks", params={"group_id": g1})).json()) >= {"ALPHA-1"}
     assert "BETA-2" not in codes((await c.get("/api/dev-tasks", params={"group_id": g1})).json())
-    assert codes((await c.get("/api/dev-tasks", params={"project_id": p2})).json()) == {"BETA-2"}
-    assert codes((await c.get("/api/dev-tasks", params={"project_id": p1, "status": "done"})).json()) >= {"ALPHA-1"}
+    assert codes((await c.get("/api/dev-tasks", params={"system_id": p2})).json()) == {"BETA-2"}
+    assert codes((await c.get("/api/dev-tasks", params={"system_id": p1, "status": "done"})).json()) >= {"ALPHA-1"}
     assert codes((await c.get("/api/dev-tasks", params={"q": "alpha"})).json()) == {"ALPHA-1"}
     assert (await c.get("/api/dev-tasks", params={"q": "%"})).json() == []
 
@@ -314,9 +314,9 @@ async def test_delete_requirement(client, db, seeded):
     pid = seeded["project"].id
 
     # 别人创建的需求，非认领人不能删
-    r = await client.post("/api/requirements", json={"project_id": pid, "title": "待删"})
+    r = await client.post("/api/requirements", json={"system_id": pid, "title": "待删"})
     req = r.json()
-    other = await client.post("/api/requirements", json={"project_id": pid, "title": "别人的"})
+    other = await client.post("/api/requirements", json={"system_id": pid, "title": "别人的"})
     # 造全套子表数据
     db.add(RequirementDoc(requirement_id=req["id"], filename="需求.md", content=b"# x"))
     db.add(PlanVersion(requirement_id=req["id"], content="# 方案"))
@@ -338,12 +338,12 @@ async def test_delete_requirement(client, db, seeded):
 
     # 取号不回退：删掉中间一个后新建，不能撞上仍在库里的旧号（code unique）。
     # 此刻库里只剩 other（后一号）；count+1 会算出与它相同的号直接冲突。
-    fresh = await client.post("/api/requirements", json={"project_id": pid, "title": "删后新建"})
+    fresh = await client.post("/api/requirements", json={"system_id": pid, "title": "删后新建"})
     assert fresh.status_code == 200, fresh.text
     assert int(fresh.json()["code"].rsplit("-", 1)[1]) > int(other.json()["code"].rsplit("-", 1)[1])
 
     # 任务已有 MR → 拒绝
-    stuck = (await client.post("/api/requirements", json={"project_id": pid, "title": "开发中"})).json()
+    stuck = (await client.post("/api/requirements", json={"system_id": pid, "title": "开发中"})).json()
     db.add(
         DevTask(
             requirement_id=stuck["id"],

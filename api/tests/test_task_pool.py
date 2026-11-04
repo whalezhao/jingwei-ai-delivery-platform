@@ -35,7 +35,7 @@ async def _add_version(db, req_id: int, content: str) -> int:
     return v.id
 
 
-async def _mk_confirmed_req(client, db, person_id: int, project_id: int, plan_md: str | None = None) -> int:
+async def _mk_confirmed_req(client, db, person_id: int, system_id: int, plan_md: str | None = None) -> int:
     # 用 int 而非实例属性：本文件有的测试 db.expire_all() 过，过期实例任何属性访问都会触发同步 refresh
     username = await db.scalar(select(Person.gitlab_username).where(Person.id == person_id))
     token, _ = await login_as(client, db, username)
@@ -43,7 +43,7 @@ async def _mk_confirmed_req(client, db, person_id: int, project_id: int, plan_md
     req_id = (
         await client.post(
             "/api/requirements",
-            json={"project_id": project_id, "title": "单任务需求", "description": "d"},
+            json={"system_id": system_id, "title": "单任务需求", "description": "d"},
         )
     ).json()["id"]
     await client.post(f"/api/requirements/{req_id}/claim")
@@ -93,7 +93,7 @@ async def test_finalize_picks_chosen_version(client, db, seeded):
     token, _ = await login_as(client, db, username)
     client.headers["Authorization"] = f"Bearer {token}"
     req2 = (
-        await client.post("/api/requirements", json={"project_id": proj_id, "title": "挑版需求", "description": "d"})
+        await client.post("/api/requirements", json={"system_id": proj_id, "title": "挑版需求", "description": "d"})
     ).json()["id"]
     await client.post(f"/api/requirements/{req2}/claim")
     v1 = await _add_version(db, req2, "旧方案")

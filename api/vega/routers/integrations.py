@@ -12,7 +12,7 @@ from ..auth import current_person, require_admin
 from ..config import get_settings
 from ..crypto import encrypt
 from ..db import get_db
-from ..models import AppSetting, DevGroup, GitlabEvent, MrReview, NotifyLog, Person, Project
+from ..models import AppSetting, DevGroup, GitlabEvent, MrReview, NotifyLog, Person, System
 
 router = APIRouter(prefix="/api/integrations", tags=["integrations"])
 
@@ -166,7 +166,7 @@ async def list_mr_reviews(
     db: AsyncSession = Depends(get_db),
     _me: Person = Depends(current_person),
 ) -> dict:
-    stmt = select(MrReview, Project).join(Project, MrReview.project_id == Project.id)
+    stmt = select(MrReview, System).join(System, MrReview.system_id == System.id)
     if group_id:
         stmt = stmt.where(MrReview.group_id == group_id)
     term = (q or "").strip().lower()
@@ -174,7 +174,7 @@ async def list_mr_reviews(
         stmt = stmt.where(
             or_(
                 func.lower(MrReview.title).contains(term, autoescape=True),
-                func.lower(Project.path).contains(term, autoescape=True),
+                func.lower(System.path).contains(term, autoescape=True),
             )
         )
     total = (await db.scalar(select(func.count()).select_from(stmt.subquery()))) or 0

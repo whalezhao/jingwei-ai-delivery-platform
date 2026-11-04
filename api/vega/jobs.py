@@ -27,14 +27,16 @@ from .models import (
     GitlabMember,
     GroupMember,
     GroupTechLead,
-    Project,
-    ProjectOwner,
-    ProjectPM,
+    System,
+    SystemOwner,
+    SystemPM,
     Person,
+    PersonGitlabAccount,
+    Project,
     Requirement,
     utcnow,
 )
-from .notify import merge_mentions, notify, project_owners
+from .notify import merge_mentions, notify, notify_project, project_owners
 from .reports import build_code_report
 
 log = logging.getLogger(__name__)
@@ -61,18 +63,40 @@ async def _link_persons(db: AsyncSession, model, **owner_filter) -> list[Person]
 
 
 async def _group_tech_leads(db: AsyncSession, group: DevGroup) -> list[Person]:
-    """研发组技术负责人：代码日报的 @ 对象。"""
+    """研发组负责人：代码日报的 @ 对象，也是项目群汇报人。"""
     return await _link_persons(db, GroupTechLead, group_id=group.id)
 
 
-async def _tech_leads(db: AsyncSession, project: Project, group: DevGroup) -> list[Person]:
+async def _gitlab_identity_maps(
+    db: AsyncSession, group: DevGroup
+) -> tuple[dict[str, Person], dict[str, Person]]:
+    """本组的 GitLab 身份 → 人：账号表优先，旧 person.gitlab_* 兜底。"""
+    rows = (
+        await db.execute(
+            select(PersonGitlabAccount, Person)
+            .join(Person, Person.id == PersonGitlabAccount.person_id)
+            .join(GroupMember, GroupMember.person_id == Person.id)
+            .where(GroupMember.group_id == group.id)
+        )
+    ).all()
+    by_user = {a.username: p for a, p in rows}
+    by_email = {a.email: p for a, p in rows if a.email}
+    for p in (await db.scalars(select(Person))).all():
+        if p.gitlab_username:
+            by_user.setdefault(p.gitlab_username, p)
+        if p.gitlab_email:
+            by_email.setdefault(p.gitlab_email, p)
+    return by_user, by_email
+
+
+async def _tech_leads(db: AsyncSession, project: System, group: DevGroup) -> list[Person]:
     """技术负责人：项目级优先，没配落组级。"""
-    return await _link_persons(db, ProjectPM, project_id=project.id) or await _group_tech_leads(db, group)
+    return await _link_persons(db, SystemPM, system_id=project.id) or await _group_tech_leads(db, group)
 
 
-async def _owner_targets(db: AsyncSession, project: Project, group: DevGroup) -> list[Person]:
-    """卡 MR 一级升级对象：项目负责人；没配就直接升到技术负责人。"""
-    return await _link_persons(db, ProjectOwner, project_id=project.id) or await _tech_leads(
+async def _owner_targets(db: AsyncSession, project: System, group: DevGroup) -> list[Person]:
+    """卡 MR 一级升级对象：系统负责人；没配就直接升到技术负责人。"""
+    return await _link_persons(db, SystemOwner, system_id=project.id) or await _tech_leads(
         db, project, group
     )
 
@@ -90,15 +114,15 @@ async def scan_projects(db: AsyncSession, group: DevGroup) -> dict:
         projects = await gl.list_admin_projects(client)
         for p in projects:
             proj = await db.scalar(
-                select(Project).where(
-                    Project.group_id == group.id, Project.gitlab_project_id == p["id"]
+                select(System).where(
+                    System.group_id == group.id, System.gitlab_project_id == p["id"]
                 )
             )
             if not proj:
                 path = p.get("path_with_namespace") or p["path"]
                 prefix = (p.get("path") or "PRJ")[:12].upper().replace("-", "_")
                 db.add(
-                    Project(
+                    System(
                         group_id=group.id,
                         gitlab_project_id=p["id"],
                         path=path,
@@ -130,7 +154,7 @@ async def _gitlab_project_members(db: AsyncSession, group: DevGroup) -> tuple[di
     if not gl:
         return {}, False
     project_ids = list(
-        (await db.scalars(select(Project.gitlab_project_id).where(Project.group_id == group.id))).all()
+        (await db.scalars(select(System.gitlab_project_id).where(System.group_id == group.id))).all()
     )
     if not project_ids:
         return {}, True  # 本组确实没有项目 = 空名单，可以覆盖
@@ -178,10 +202,12 @@ async def refresh_gitlab_members(db: AsyncSession, group: DevGroup) -> tuple[dic
 
 
 async def _sync_gitlab_people(db: AsyncSession, group: DevGroup) -> tuple[int, int]:
-    """GitLab 是研发身份的权威来源：新 username 自动建 Person + 挂本组，返回 (新建, 合并)。
-    octo 群成员不直接建档——群里有 bot/外人，直接建会污染人员表；
-    octo 身份靠对配挂到 Person 上。先被 octo 兜底建档的人（无 gitlab_username）
-    被 GitLab 扫到时复用回填而不是另建一条——否则同人两条 Person，octo 绑定被旧记录锁死。"""
+    """GitLab 成员名单是研发身份的权威来源：按 (GitLab 实例, username) 建档并挂本组。
+
+    同一个人的多个 GitLab 账号落在 person_gitlab_account；Person 本身不再存唯一
+    gitlab_username。账号先按 (base_url, username) 找，找不到再看旧字段；
+    都找不到才新建 Person。成员加入本组时若还没选定账号，自动绑上本组这份身份。
+    """
     members, ok = await _gitlab_project_members(db, group)
     if ok:
         await _store_gitlab_members(db, group, members)  # 每次成功的拉取都整组覆盖快照
@@ -189,7 +215,19 @@ async def _sync_gitlab_people(db: AsyncSession, group: DevGroup) -> tuple[int, i
         if ok:
             await db.commit()
         return 0, 0
-    known = {
+    base = (group.gitlab_base_url or "").rstrip("/")
+    accounts = {
+        a.username: a
+        for a in (
+            await db.scalars(
+                select(PersonGitlabAccount).where(
+                    PersonGitlabAccount.base_url == base,
+                    PersonGitlabAccount.username.in_(list(members)),
+                )
+            )
+        ).all()
+    } if base else {}
+    legacy = {
         p.gitlab_username: p
         for p in (
             await db.scalars(select(Person).where(Person.gitlab_username.in_(list(members))))
@@ -200,36 +238,60 @@ async def _sync_gitlab_people(db: AsyncSession, group: DevGroup) -> tuple[int, i
     )
     created = merged = 0
     for username, m in members.items():
-        person = known.get(username)
+        acc = accounts.get(username)
+        person = await db.get(Person, acc.person_id) if acc else None
+        if not person and username in legacy:
+            person = legacy[username]
+            merged += 1
         if not person and m.get("name"):
-            # 同人合并：仅「唯一精确同名且无 gitlab_username」才复用；同名歧义/昵称改名的
-            # 不自动猜，留给成员抽屉的人工绑定
-            cands = (
-                await db.scalars(
-                    select(Person).where(
-                        Person.gitlab_username.is_(None), Person.name == m["name"]
+            # 同人合并：仅「唯一精确同名且既无账号也无旧 gitlab_username」才复用；
+            # 同名歧义/昵称改名的的不自动猜，留给成员抽屉的人工绑定
+            person_ids = set(
+                (await db.scalars(select(PersonGitlabAccount.person_id))).all()
+            )
+            cands = [
+                p
+                for p in (
+                    await db.scalars(
+                        select(Person).where(
+                            Person.gitlab_username.is_(None), Person.name == m["name"]
+                        )
                     )
-                )
-            ).all()
+                ).all()
+                if p.id not in person_ids
+            ]
             if len(cands) == 1:
                 person = cands[0]
-                person.gitlab_username = username
-                person.gitlab_email = m.get("email")
                 merged += 1
         if not person:
-            person = Person(
-                name=m.get("name") or username,
-                gitlab_username=username,
-                gitlab_email=m.get("email"),
-            )
+            person = Person(name=m.get("name") or username)
             db.add(person)
             await db.flush()
             created += 1
+        if not acc and base:
+            acc = PersonGitlabAccount(
+                person_id=person.id,
+                base_url=base,
+                username=username,
+                name=m.get("name") or "",
+                email=m.get("email") or "",
+            )
+            db.add(acc)
+            await db.flush()
+            accounts[username] = acc
         if person.id not in in_group:
             # 同上：GitLab 用户名不是 agent-memory 的专家 id，存进去只会让
             # proxy 判 mismatch 弹表单。专家由人员在 Vega 里显式选。
-            db.add(GroupMember(group_id=group.id, person_id=person.id))
+            db.add(GroupMember(group_id=group.id, person_id=person.id, gitlab_account_id=acc.id if acc else None))
             in_group.add(person.id)
+        else:
+            gm = await db.scalar(
+                select(GroupMember).where(
+                    GroupMember.group_id == group.id, GroupMember.person_id == person.id
+                )
+            )
+            if gm and not gm.gitlab_account_id and acc:
+                gm.gitlab_account_id = acc.id
     if created or merged or ok:
         await db.commit()
     return created, merged
@@ -318,7 +380,7 @@ def _diff_lines(diff: str) -> tuple[int, int]:
 
 
 async def collect_day(
-    db: AsyncSession, group: DevGroup, day: date, project_id: int | None = None
+    db: AsyncSession, group: DevGroup, day: date, system_id: int | None = None
 ) -> dict:
     """采集某天 项目×提交人 / 项目×文件 统计入库，不推送报表（每日任务与补数据共用）。"""
     gl = _gitlab(group)
@@ -326,9 +388,9 @@ async def collect_day(
         return {"error": "研发组未配置 GitLab"}
     since = datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
     until = since + timedelta(days=1)
-    q = select(Project).where(Project.group_id == group.id)
-    if project_id:
-        q = q.where(Project.id == project_id)
+    q = select(System).where(System.group_id == group.id)
+    if system_id:
+        q = q.where(System.id == system_id)
     projects = list((await db.scalars(q)).all())
     agg: dict[tuple[int, str], dict] = {}
     files: dict[tuple[int, str], dict] = {}
@@ -378,7 +440,7 @@ async def collect_day(
             commit_rows[(proj.id, c["id"], path)] = CommitFile(
                 group_id=group.id,
                 stat_date=day,
-                project_id=proj.id,
+                system_id=proj.id,
                 path=path,
                 sha=c["id"],
                 author=author,
@@ -389,8 +451,22 @@ async def collect_day(
 
     # 人员匹配：邮箱整串 → GitLab 账号 → 邮箱前缀（工号@域名 最常见）→ 提交人姓名（重名不猜）
     people = list((await db.scalars(select(Person))).all())
-    by_email = {p.gitlab_email.lower(): p for p in people if p.gitlab_email}
-    by_username = {p.gitlab_username.lower(): p for p in people if p.gitlab_username}
+    # 本人名下的 GitLab 身份按账号表匹配；旧字段只作兜底
+    acct_rows = (
+        await db.execute(
+            select(PersonGitlabAccount, Person)
+            .join(Person, Person.id == PersonGitlabAccount.person_id)
+            .join(GroupMember, GroupMember.person_id == Person.id)
+            .where(GroupMember.group_id == group.id)
+        )
+    ).all()
+    by_email = {a.email.lower(): p for a, p in acct_rows if a.email}
+    by_username = {a.username.lower(): p for a, p in acct_rows}
+    for p in people:
+        if p.gitlab_email:
+            by_email.setdefault(p.gitlab_email.lower(), p)
+        if p.gitlab_username:
+            by_username.setdefault(p.gitlab_username.lower(), p)
     name_count = Counter(p.name for p in people)
     by_name = {p.name: p for p in people if name_count[p.name] == 1}
     # 重跑同一天（补数据/重发日报）先清旧行，唯一约束才不会炸
@@ -398,7 +474,7 @@ async def collect_day(
         await db.execute(
             model.__table__.delete().where(model.group_id == group.id, model.stat_date == day)
         )
-    for (project_id, author), s in agg.items():
+    for (system_id, author), s in agg.items():
         key = author.strip().lower()
         person = (
             by_email.get(key)
@@ -410,7 +486,7 @@ async def collect_day(
             DailyStat(
                 group_id=group.id,
                 stat_date=day,
-                project_id=project_id,
+                system_id=system_id,
                 person_id=person.id if person else None,
                 gitlab_author=author,
                 commits=s["commits"],
@@ -418,8 +494,8 @@ async def collect_day(
                 deletions=s["deletions"],
             )
         )
-    for (project_id, path), s in files.items():
-        db.add(FileStat(group_id=group.id, stat_date=day, project_id=project_id, path=path, **s))
+    for (system_id, path), s in files.items():
+        db.add(FileStat(group_id=group.id, stat_date=day, system_id=system_id, path=path, **s))
     db.add_all(commit_rows.values())
     await db.commit()
     return {"rows": len(agg), "files": len(files), "projects": len(projects)}
@@ -438,18 +514,16 @@ async def daily_commit_stats(db: AsyncSession, group: DevGroup, day: date | None
 
 
 async def blocked_mr_scan(db: AsyncSession, group: DevGroup) -> dict:
-    """open 超 3 天 @assignee，超 7 天 @项目负责人，超 10 天兜底 @技术负责人。"""
+    """open 超 3 天 @assignee，超 7 天 @系统负责人，超 10 天兜底 @技术负责人。"""
     gl = _gitlab(group)
     if not gl:
         return {"error": "研发组未配置 GitLab"}
-    projects = list((await db.scalars(select(Project).where(Project.group_id == group.id))).all())
+    projects = list((await db.scalars(select(System).where(System.group_id == group.id))).all())
     cutoff = utcnow() - timedelta(days=MR_BLOCK_DAYS)
     escalate_cutoff = utcnow() - timedelta(days=MR_BLOCK_ESCALATE_DAYS)
     final_cutoff = utcnow() - timedelta(days=MR_BLOCK_FINAL_DAYS)
     notified = 0
-    people = list((await db.scalars(select(Person))).all())
-    by_user = {p.gitlab_username: p for p in people if p.gitlab_username}
-    by_email = {p.gitlab_email: p for p in people if p.gitlab_email}
+    by_user, by_email = await _gitlab_identity_maps(db, group)
     async with client_ctx() as client:
         for proj in projects:
             mrs = await gl.list_merge_requests(client, proj.gitlab_project_id, state="opened", wip="no")
@@ -470,7 +544,7 @@ async def blocked_mr_scan(db: AsyncSession, group: DevGroup) -> dict:
                 notified += 1
                 if updated >= escalate_cutoff:
                     continue
-                owners = await _link_persons(db, ProjectOwner, project_id=proj.id)
+                owners = await _link_persons(db, SystemOwner, system_id=proj.id)
                 if not owners:
                     # 没配项目负责人：直接升到技术负责人，不再重复发第二条
                     leads = await _tech_leads(db, proj, group)
@@ -479,12 +553,24 @@ async def blocked_mr_scan(db: AsyncSession, group: DevGroup) -> dict:
                             db, group, f"🔔 技术负责人兜底：{text}", reason="mr_blocked_escalate", mention=leads
                         )
                     continue
-                await notify(db, group, f"⚠️ 项目负责人升级：{text}", reason="mr_blocked_escalate", mention=owners)
+                await notify(db, group, f"⚠️ 系统负责人升级：{text}", reason="mr_blocked_escalate", mention=owners)
                 if updated < final_cutoff:
                     leads = await _tech_leads(db, proj, group)
                     if leads:
                         await notify(
                             db, group, f"🔔 技术负责人兜底：{text}", reason="mr_blocked_final", mention=leads
+                        )
+                elif group.project_id:
+                    # 满 10 天仍未推进：升到项目群（群里是各研发组负责人，一级一级汇报）
+                    project = await db.get(Project, group.project_id)
+                    if project:
+                        await notify_project(
+                            db,
+                            project,
+                            f"📣 项目级提醒：研发组「{group.name}」的 {proj.path} MR 已 10 天以上无动态\n{text}",
+                            reason="mr_blocked_project",
+                            mention=await _group_tech_leads(db, group),
+                            source_group=group,
                         )
     return {"notified": notified}
 
@@ -505,7 +591,7 @@ async def merge_poll(db: AsyncSession) -> dict:
         if not task.mr_iid:
             continue
         req = task.requirement
-        proj = await db.get(Project, req.project_id)
+        proj = await db.get(System, req.system_id)
         group = await db.get(DevGroup, proj.group_id)
         gl = _gitlab(group)
         if not gl:
@@ -545,7 +631,7 @@ async def _notify_task_final(
 ) -> None:
     """MR 到终态（合并/关闭）→ octo @plan 负责人（=任务创建人=需求认领人）。"""
     creator = await db.get(Person, task.creator_id)
-    project = await db.get(Project, req.project_id)
+    project = await db.get(System, req.system_id)
     owners = await project_owners(db, project.id) if project else []
     if kind == "merged":
         text = (
@@ -564,7 +650,7 @@ async def _notify_task_final(
 
 
 async def _maybe_escalate(
-    db: AsyncSession, group: DevGroup, project: Project, req: Requirement, task: DevTask, mr: dict
+    db: AsyncSession, group: DevGroup, project: System, req: Requirement, task: DevTask, mr: dict
 ) -> None:
     """MR 一直开放无人管：每 12h 升一级（1~3），每级 @审核人；第 3 级连带 @项目负责人（无则技术负责人）。
 
@@ -587,22 +673,19 @@ async def _maybe_escalate(
         targets = await _owner_targets(db, project, group)
         if targets:
             mention += targets
-            text = f"🔔 MR 无人处理已达最高级，请项目负责人介入\n{text}"
+            text = f"🔔 MR 无人处理已达最高级，请系统负责人介入\n{text}"
     await notify(db, group, text, reason=f"mr_escalate_l{level}", mention=mention)
 
 
-async def ci_failure_analysis(db: AsyncSession, group: DevGroup, project: Project, payload: dict) -> None:
+async def ci_failure_analysis(db: AsyncSession, group: DevGroup, project: System, payload: dict) -> None:
     """pipeline 失败 → 拉 job 日志 → 组 LLM 分析 → @提交人。"""
     gl = _gitlab(group)
     if not gl:
         return
     user = payload.get("user") or {}
     attrs = payload.get("object_attributes") or {}
-    people = list((await db.scalars(select(Person))).all())
-    person = next(
-        (p for p in people if p.gitlab_email == user.get("email") or p.gitlab_username == user.get("username")),
-        None,
-    )
+    by_user, by_email = await _gitlab_identity_maps(db, group)
+    person = by_user.get(user.get("username")) or by_email.get(user.get("email"))
     log_snippet = ""
     try:
         async with client_ctx() as client:

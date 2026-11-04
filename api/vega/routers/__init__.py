@@ -9,6 +9,7 @@ def person_to_out(p: Person) -> dict:
     return {
         "id": p.id,
         "name": p.name,
+        "username": p.username,
         "avatar": p.avatar,
         "gitlab_username": p.gitlab_username,
         "gitlab_email": p.gitlab_email,

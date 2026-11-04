@@ -9,11 +9,12 @@ from __future__ import annotations
 import json
 import re
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .llm import resolve_llm
 from .llm_client import LLMError, ask_llm
-from .models import DevGroup, GroupMember, Person
+from .models import DevGroup, GroupMember, Person, PersonGitlabAccount
 
 AI_CONFIDENCE_THRESHOLD = 0.8
 
@@ -33,11 +34,13 @@ def _email_prefix(email: str | None) -> str:
     return _norm((email or "").split("@")[0])
 
 
-def rule_match(person: Person, octo_members: dict[str, str]) -> tuple[str, float, str] | None:
-    """① 规则层：username/姓名/邮箱前缀 与群昵称的归一化比较。"""
+def rule_match(
+    person: Person, octo_members: dict[str, str], aliases: set[str] | None = None
+) -> tuple[str, float, str] | None:
+    """① 规则层：username/姓名/邮箱前缀（含本人名下本组 GitLab 账号）与群昵称的归一化比较。"""
     names = {
         _norm(n)
-        for n in (person.gitlab_username, person.name, _email_prefix(person.gitlab_email))
+        for n in (person.gitlab_username, person.name, _email_prefix(person.gitlab_email), *(aliases or ()))
         if n
     }
     for uid, nickname in octo_members.items():
@@ -51,12 +54,19 @@ async def ai_match(
     group: DevGroup,
     people: list[Person],
     octo_members: dict[str, str],
+    aliases_by_person: dict[int, set[str]] | None = None,
 ) -> dict[int, tuple[str, float, str]]:
     """② AI 层：返回 {person_id: (octo_uid, confidence, reason)}。"""
     if not people or not octo_members:
         return {}
     a = [
-        {"person_id": p.id, "name": p.name, "gitlab_username": p.gitlab_username, "email": p.gitlab_email}
+        {
+            "person_id": p.id,
+            "name": p.name,
+            "gitlab_username": p.gitlab_username,
+            "email": p.gitlab_email,
+            "gitlab_accounts": sorted((aliases_by_person or {}).get(p.id, ())),
+        }
         for p in people
     ]
     b = [{"octo_uid": uid, "nickname": nm} for uid, nm in octo_members.items()]
@@ -90,6 +100,22 @@ async def run_matching(
 
     people = {gm.person_id: gm.person for gm in gm_rows if gm.person}
 
+    # 本人名下、属于本组 GitLab 实例的账号，作为昵称匹配的额外候选名
+    aliases: dict[int, set[str]] = {}
+    if people:
+        acc_rows = (
+            await db.scalars(
+                select(PersonGitlabAccount).where(PersonGitlabAccount.person_id.in_(list(people)))
+            )
+        ).all()
+        base = (group.gitlab_base_url or "").rstrip("/")
+        for a in acc_rows:
+            if base and a.base_url.rstrip("/") != base:
+                continue
+            aliases.setdefault(a.person_id, set()).update(
+                x for x in (a.username, a.name, _email_prefix(a.email)) if x
+            )
+
     # 手工锁定的先排除（其绑定视为已占用）
     locked = {gm.person_id for gm in gm_rows if gm.manual_lock and gm.octo_uid}
     used_uids = {gm.octo_uid for gm in gm_rows if gm.octo_uid and gm.manual_lock}
@@ -103,7 +129,9 @@ async def run_matching(
         gm = gm_by_pid[pid]
         if pid in locked:
             continue
-        hit = rule_match(person, {u: n for u, n in octo_members.items() if u not in used_uids})
+        hit = rule_match(
+            person, {u: n for u, n in octo_members.items() if u not in used_uids}, aliases.get(pid, set())
+        )
         if hit:
             uid, conf, reason = hit
             gm.octo_uid, gm.octo_nickname = uid, octo_members[uid]
@@ -116,7 +144,12 @@ async def run_matching(
 
     # ② AI 层
     if leftovers:
-        ai = await ai_match(group, leftovers, {u: n for u, n in octo_members.items() if u not in used_uids})
+        ai = await ai_match(
+            group,
+            leftovers,
+            {u: n for u, n in octo_members.items() if u not in used_uids},
+            aliases,
+        )
         for person in leftovers:
             gm = gm_by_pid[person.id]
             hit = ai.get(person.id)

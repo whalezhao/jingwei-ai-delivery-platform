@@ -17,6 +17,7 @@ from .routers import (
     nodes,
     people,
     projects,
+    systems,
     requirements,
     runner_api,
     setup,
@@ -79,7 +80,7 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    for r in (am, auth, people, groups, projects, requirements, tasks, nodes, runner_api, webhooks, integrations, setup, workbench, code_stats):
+    for r in (am, auth, people, groups, projects, systems, requirements, tasks, nodes, runner_api, webhooks, integrations, setup, workbench, code_stats):
         app.include_router(r.router)
     return app
 

@@ -74,7 +74,7 @@ async def test_claim_priority_mr_review_first(db, seeded):
     await _clear_queue(db)
     dev = await _mk_task(db, type="dev_task", prompt="slow-dev")
     plan = await _mk_task(db, type="plan_turn", prompt="plan")
-    review = await _mk_task(db, type="mr_review", project_id=1)
+    review = await _mk_task(db, type="mr_review", system_id=1)
 
     rid = seeded["group"].id + 7000
     first = await claim_next(rid, wait_s=1)
@@ -109,7 +109,7 @@ async def test_delete_node_unbinds_sticky(admin_client, db, seeded):
     node_id = r.json()["id"]
 
     req = Requirement(
-        project_id=seeded["project"].id,
+        system_id=seeded["project"].id,
         code="REQ-DEL-1",
         title="删节点",
         status="claimed",

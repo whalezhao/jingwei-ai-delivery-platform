@@ -8,6 +8,7 @@ import { api } from "../api";
 export interface Me {
   id: number;
   name: string;
+  username: string | null;
   avatar: string | null;
   gitlab_username: string | null;
   gitlab_email: string | null;
@@ -115,7 +116,7 @@ export default function ProfileModal({
             </Form.Item>
             <Form.Item label={t("profileModal.loginLabel")}>
               <Input
-                value={`${me.gitlab_username || "—"} · octo: ${me.octo_uid || t("profileModal.octoUnbound")}`}
+                value={`${me.username || "—"} · octo: ${me.octo_uid || t("profileModal.octoUnbound")}`}
                 disabled
               />
             </Form.Item>

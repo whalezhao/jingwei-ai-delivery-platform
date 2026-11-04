@@ -8,18 +8,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from . import octo
 from .config import get_settings
 from .crypto import decrypt
-from .models import DevGroup, NotifyLog, Person, ProjectOwner
+from .models import DevGroup, NotifyLog, Person, Project, SystemOwner
 
 
-async def project_owners(db: AsyncSession, project_id: int) -> list[Person]:
-    """项目负责人：MR/评审相关通知除任务创建人外一并 @ 的人。"""
+async def project_owners(db: AsyncSession, system_id: int) -> list[Person]:
+    """系统负责人：MR/评审相关通知除任务创建人外一并 @ 的人。"""
     return list(
         (
             await db.scalars(
                 select(Person)
-                .join(ProjectOwner, ProjectOwner.person_id == Person.id)
-                .where(ProjectOwner.project_id == project_id)
-                .order_by(ProjectOwner.id)  # 顺序稳定：MR 只能挂第一个有 GitLab 账号的人
+                .join(SystemOwner, SystemOwner.person_id == Person.id)
+                .where(SystemOwner.system_id == system_id)
+                .order_by(SystemOwner.id)  # 顺序稳定：MR 只能挂第一个有 GitLab 账号的人
             )
         ).all()
     )
@@ -55,6 +55,38 @@ async def notify(
     db.add(
         NotifyLog(
             group_id=group.id,
+            octo_chat=chat,
+            mentioned_uids=uids,
+            content=content,
+            reason=reason,
+            ok=ok,
+        )
+    )
+    await db.commit()
+    return ok
+
+
+async def notify_project(
+    db: AsyncSession,
+    project: Project,
+    content: str,
+    *,
+    reason: str,
+    mention: list[Person] | None = None,
+    source_group: DevGroup,
+) -> bool:
+    """项目级通知：发到项目 octo 群（成员是各研发组负责人）。
+
+    @ 的对象必须是群成员才有效，所以调用方传研发组负责人，不要传总负责人。
+    """
+    chat = project.octo_group_no
+    uids = await _uids_for(mention or [])
+    # 项目群跨研发组，任何一组的专用 bot 都未必在群里；统一用全局 bot
+    ok = octo.send_text(chat, content, uids) if chat else False
+    db.add(
+        NotifyLog(
+            group_id=source_group.id,
+            project_id=project.id,
             octo_chat=chat,
             mentioned_uids=uids,
             content=content,

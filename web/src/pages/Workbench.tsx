@@ -58,8 +58,8 @@ interface Req {
   can_open: boolean;
   claimant_name: string | null;
   created_at: string | null;
-  project_id: number;
-  project_name: string;
+  system_id: number;
+  system_name: string;
   group_id: number;
   doc_final: boolean;
   plan_final: boolean;
@@ -403,7 +403,7 @@ export default function Workbench() {
   const load = async () => {
     const p = new URLSearchParams();
     if (groupId) p.set("group_id", String(groupId));
-    if (projectId) p.set("project_id", String(projectId));
+    if (projectId) p.set("system_id", String(projectId));
     const d = await api<{ requirements: Req[] }>(`/api/workbench?${p}`);
     setReqs(d.requirements);
   };
@@ -413,7 +413,7 @@ export default function Workbench() {
     return () => clearInterval(timer);
   }, [groupId, projectId]);
   useEffect(() => {
-    api<any[]>("/api/projects").then(setProjects);
+    api<any[]>("/api/systems").then(setProjects);
   }, []);
   useEffect(() => {
     setProjectId(undefined); // 切组后旧项目筛选可能不属于该组
@@ -438,7 +438,7 @@ export default function Workbench() {
     if (key === "doc") return agentLabel(r.doc_agent?.id, r.doc_agent?.name);
     if (key === "plan") return agentLabel(r.plan_agent?.id, r.plan_agent?.name);
     if (key === "dev") {
-      const project = projects.find((p) => p.id === r.project_id);
+      const project = projects.find((p) => p.id === r.system_id);
       return agentLabel(project?.am_agent_id, null);
     }
     return null;
@@ -542,7 +542,7 @@ export default function Workbench() {
                         {r.title}
                       </div>
                       <div className="wb-req-meta">
-                        {r.project_name} · {r.claimant_name || t("workbench.unclaimed")} ·{" "}
+                        {r.system_name} · {r.claimant_name || t("workbench.unclaimed")} ·{" "}
                         {t("workbench.taskCount", { n: r.tasks.length })}
                         {r.created_at ? ` · ${t("workbench.created", { time: fmtT(r.created_at) ?? "" })}` : ""}
                       </div>

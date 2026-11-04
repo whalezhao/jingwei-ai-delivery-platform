@@ -38,6 +38,8 @@ class Person(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(64))
+    # Vega 登录名：与 GitLab 身份解耦（一个人可以有多个 GitLab 账号）
+    username: Mapped[str | None] = mapped_column(String(64), unique=True)
     # 预设头像 key（web/public/avatars/aNN.svg），只允许内置头像、不上传；
     # 新用户默认随机分配一张，之后仍可清空
     avatar: Mapped[str | None] = mapped_column(String(32), default=lambda: f"a{random.randint(1, 12)}")
@@ -62,13 +64,68 @@ class Person(Base):
     created_at: Mapped[datetime] = mapped_column(TZDateTime, default=utcnow)
 
 
+class Project(Base):
+    """项目：公司级团队分割单位；下挂多个研发组，负责人由 project_leader 指定。
+
+    项目群（octo）只放本项目各研发组的负责人，作为管理阶段的汇报场所。
+    """
+
+    __tablename__ = "project"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(64), unique=True)
+    code: Mapped[str | None] = mapped_column(String(16))
+    octo_group_no: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, default=utcnow)
+
+    leaders: Mapped[list[ProjectLeader]] = relationship(back_populates="project", cascade="all,delete-orphan")
+
+
+class ProjectLeader(Base):
+    """项目总负责人（多个）：关注本项目各研发组负责人的汇报，也是最终升级对象。"""
+
+    __tablename__ = "project_leader"
+    __table_args__ = (UniqueConstraint("project_id", "person_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("project.id"), index=True)
+    person_id: Mapped[int] = mapped_column(ForeignKey("person.id"), index=True)
+    project: Mapped[Project] = relationship(back_populates="leaders")
+
+
+class PersonGitlabAccount(Base):
+    """人员名下的一个 GitLab 身份（可多个）；token 加密，接口只回 has_token。
+
+    (base_url, username) 唯一：一个 GitLab 账号只能挂在一个人名下。
+    """
+
+    __tablename__ = "person_gitlab_account"
+    __table_args__ = (UniqueConstraint("base_url", "username"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    person_id: Mapped[int] = mapped_column(ForeignKey("person.id"), index=True)
+    base_url: Mapped[str] = mapped_column(String(256))  # 如 https://git.example.com
+    # GitLab 侧 id：用户自己录入 token 时由 /user 回填；从成员名单自动建档时可能没有
+    gitlab_user_id: Mapped[int | None] = mapped_column(Integer)
+    username: Mapped[str] = mapped_column(String(190))
+    name: Mapped[str] = mapped_column(String(190), default="")
+    email: Mapped[str] = mapped_column(String(190), default="")
+    # 空 = 只有身份没有 token（成员名单自动建档）；派发开发任务前本人需要补录 token
+    token_enc: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, default=utcnow)
+
+
 class DevGroup(Base):
     __tablename__ = "dev_group"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(64), unique=True)
+    # 所属项目（迁移期可空，页面按空值提示补挂）
+    project_id: Mapped[int | None] = mapped_column(ForeignKey("project.id"), index=True)
     gitlab_base_url: Mapped[str | None] = mapped_column(String(256))  # 如 https://git.example.com
     gitlab_token_enc: Mapped[str | None] = mapped_column(Text)
+    # 本组专用的 GitLab 机器账号（权限隔离）；仅展示与校验，token 在 gitlab_token_enc
+    gitlab_bot_username: Mapped[str | None] = mapped_column(String(190))
     llm_base_url: Mapped[str | None] = mapped_column(String(512))
     llm_api_key_enc: Mapped[str | None] = mapped_column(Text)
     llm_model: Mapped[str | None] = mapped_column(String(128))
@@ -98,6 +155,10 @@ class GroupMember(Base):
 
     octo_uid: Mapped[str | None] = mapped_column(String(64))
     octo_nickname: Mapped[str | None] = mapped_column(String(128))
+    # 本人在本研发组使用的 GitLab 身份；唯一约束 = 一个账号只能绑一条组员记录（一组一账号）
+    gitlab_account_id: Mapped[int | None] = mapped_column(
+        ForeignKey("person_gitlab_account.id"), unique=True
+    )
     # agent-memory 的 agent id（agent 挂在 team 下，所以存组-人对上；默认取 gitlab_username）
     am_agent_id: Mapped[str | None] = mapped_column(String(64))
     # auto_exact / auto_ai / pending / manual / unmatched
@@ -107,8 +168,8 @@ class GroupMember(Base):
     manual_lock: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
-class Project(Base):
-    __tablename__ = "dev_project"
+class System(Base):
+    __tablename__ = "dev_system"
     __table_args__ = (UniqueConstraint("group_id", "gitlab_project_id"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -118,48 +179,48 @@ class Project(Base):
     name: Mapped[str] = mapped_column(String(128))
     code_prefix: Mapped[str] = mapped_column(String(12))  # 需求编号前缀，如 PMS
     default_branch: Mapped[str] = mapped_column(String(64), default="master")
-    # MR 落在项目上：feature 分支合到哪个分支由项目自己定（原研发组配置，组级无意义）
+    # MR 落在系统上：feature 分支合到哪个分支由系统自己定（原研发组配置，组级无意义）
     mr_target_branch: Mapped[str] = mapped_column(String(64), default="nightly")
     # 路径前缀（JSON 数组，None=未配置）：命中 audit_prefixes 的 MR 触发 CRG 审计；
     # auto_approve_prefixes 全命中才允许自动放行（fail-closed）
     audit_prefixes: Mapped[list | None] = mapped_column(JSON)
     auto_approve_prefixes: Mapped[list | None] = mapped_column(JSON)
-    # agent-memory 绑定（项目级优先，组 am_team_id 兜底）：随 claude 调用以 x-team-id /
+    # agent-memory 绑定（系统级优先，组 am_team_id 兜底）：随 claude 调用以 x-team-id /
     # x-agent-id 头下发，proxy 据此直选注入团队资产，跳过会话初始化提问
     am_team_id: Mapped[str | None] = mapped_column(String(64))
     am_agent_id: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(TZDateTime, default=utcnow)
 
-    pms: Mapped[list[ProjectPM]] = relationship(back_populates="project", cascade="all,delete-orphan")
-    owners: Mapped[list[ProjectOwner]] = relationship(back_populates="project", cascade="all,delete-orphan")
+    pms: Mapped[list[SystemPM]] = relationship(back_populates="system", cascade="all,delete-orphan")
+    owners: Mapped[list[SystemOwner]] = relationship(back_populates="system", cascade="all,delete-orphan")
 
 
-class ProjectPM(Base):
-    """技术负责人：MR 卡住升级的备份收件人（项目没配则落到组技术负责人）；不收日报。"""
+class SystemPM(Base):
+    """系统技术负责人：MR 卡住升级的备份收件人（系统没配则落到组负责人）；不收日报。"""
 
-    __tablename__ = "project_pm"
-    __table_args__ = (UniqueConstraint("project_id", "person_id"),)
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    project_id: Mapped[int] = mapped_column(ForeignKey("dev_project.id"), index=True)
-    person_id: Mapped[int] = mapped_column(ForeignKey("person.id"), index=True)
-    project: Mapped[Project] = relationship(back_populates="pms")
-
-
-class ProjectOwner(Base):
-    """项目负责人：MR 卡住时的一级升级对象；无响应再升到技术负责人。"""
-
-    __tablename__ = "project_owner"
-    __table_args__ = (UniqueConstraint("project_id", "person_id"),)
+    __tablename__ = "system_pm"
+    __table_args__ = (UniqueConstraint("system_id", "person_id"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    project_id: Mapped[int] = mapped_column(ForeignKey("dev_project.id"), index=True)
+    system_id: Mapped[int] = mapped_column(ForeignKey("dev_system.id"), index=True)
     person_id: Mapped[int] = mapped_column(ForeignKey("person.id"), index=True)
-    project: Mapped[Project] = relationship(back_populates="owners")
+    system: Mapped[System] = relationship(back_populates="pms")
+
+
+class SystemOwner(Base):
+    """系统负责人：MR 卡住时的一级升级对象；无响应再升到组负责人。"""
+
+    __tablename__ = "system_owner"
+    __table_args__ = (UniqueConstraint("system_id", "person_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    system_id: Mapped[int] = mapped_column(ForeignKey("dev_system.id"), index=True)
+    person_id: Mapped[int] = mapped_column(ForeignKey("person.id"), index=True)
+    system: Mapped[System] = relationship(back_populates="owners")
 
 
 class GroupTechLead(Base):
-    """研发组技术负责人：代码日报/周报/月报的 @ 对象，也是项目没配技术负责人时的兜底。"""
+    """研发组负责人：代码日报/周报/月报的 @ 对象，也是系统没配技术负责人时的兜底。"""
 
     __tablename__ = "group_tech_lead"
     __table_args__ = (UniqueConstraint("group_id", "person_id"),)
@@ -173,7 +234,7 @@ class Requirement(Base):
     __tablename__ = "requirement"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    project_id: Mapped[int] = mapped_column(ForeignKey("dev_project.id"), index=True)
+    system_id: Mapped[int] = mapped_column(ForeignKey("dev_system.id"), index=True)
     code: Mapped[str] = mapped_column(String(64), unique=True)  # REQ-PMS-2610-007
     title: Mapped[str] = mapped_column(String(256))
     description: Mapped[str | None] = mapped_column(Text)
@@ -366,10 +427,10 @@ class MrReview(Base):
     """
 
     __tablename__ = "mr_review"
-    __table_args__ = (UniqueConstraint("project_id", "mr_iid", "head_sha"),)
+    __table_args__ = (UniqueConstraint("system_id", "mr_iid", "head_sha"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    project_id: Mapped[int] = mapped_column(ForeignKey("dev_project.id"), index=True)
+    system_id: Mapped[int] = mapped_column(ForeignKey("dev_system.id"), index=True)
     group_id: Mapped[int] = mapped_column(ForeignKey("dev_group.id"), index=True)
     mr_iid: Mapped[int] = mapped_column(Integer)
     head_sha: Mapped[str] = mapped_column(String(40))
@@ -399,7 +460,7 @@ class EgmReport(Base):
     __tablename__ = "egm_report"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    project_id: Mapped[int] = mapped_column(ForeignKey("dev_project.id"), index=True)
+    system_id: Mapped[int] = mapped_column(ForeignKey("dev_system.id"), index=True)
     kind: Mapped[str] = mapped_column(String(16))  # bootstrap / drift
     runner_task_id: Mapped[int | None] = mapped_column(ForeignKey("runner_task.id"), index=True)
     status: Mapped[str] = mapped_column(String(16), default="running")  # running/done/failed
@@ -425,6 +486,8 @@ class NotifyLog(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     group_id: Mapped[int] = mapped_column(ForeignKey("dev_group.id"), index=True)
+    # 项目级通知（进项目 octo 群）时记录来源项目；组级通知为空
+    project_id: Mapped[int | None] = mapped_column(ForeignKey("project.id"), index=True)
     octo_chat: Mapped[str | None] = mapped_column(String(64))
     mentioned_uids: Mapped[list] = mapped_column(JSON, default=list)
     content: Mapped[str] = mapped_column(Text)
@@ -435,12 +498,12 @@ class NotifyLog(Base):
 
 class DailyStat(Base):
     __tablename__ = "daily_stat"
-    __table_args__ = (UniqueConstraint("group_id", "stat_date", "project_id", "gitlab_author"),)
+    __table_args__ = (UniqueConstraint("group_id", "stat_date", "system_id", "gitlab_author"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     group_id: Mapped[int] = mapped_column(ForeignKey("dev_group.id"), index=True)
     stat_date: Mapped[date] = mapped_column(Date)
-    project_id: Mapped[int] = mapped_column(ForeignKey("dev_project.id"))
+    system_id: Mapped[int] = mapped_column(ForeignKey("dev_system.id"))
     person_id: Mapped[int | None] = mapped_column(ForeignKey("person.id"))  # 匹配不到人为空
     gitlab_author: Mapped[str] = mapped_column(String(190))  # email 或 username
     commits: Mapped[int] = mapped_column(Integer, default=0)
@@ -452,12 +515,12 @@ class FileStat(Base):
     """每日热点文件：同一提交按文件路径计一次，供日报热点榜与代码统计页用。"""
 
     __tablename__ = "file_stat"
-    __table_args__ = (UniqueConstraint("group_id", "stat_date", "project_id", "path"),)
+    __table_args__ = (UniqueConstraint("group_id", "stat_date", "system_id", "path"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     group_id: Mapped[int] = mapped_column(ForeignKey("dev_group.id"), index=True)
     stat_date: Mapped[date] = mapped_column(Date)
-    project_id: Mapped[int] = mapped_column(ForeignKey("dev_project.id"))
+    system_id: Mapped[int] = mapped_column(ForeignKey("dev_system.id"))
     path: Mapped[str] = mapped_column(String(512))
     commits: Mapped[int] = mapped_column(Integer, default=0)
     additions: Mapped[int] = mapped_column(Integer, default=0)
@@ -469,14 +532,14 @@ class CommitFile(Base):
 
     __tablename__ = "commit_file"
     __table_args__ = (
-        UniqueConstraint("project_id", "sha", "path"),
-        Index("ix_commit_file_path", "project_id", "path", "stat_date"),
+        UniqueConstraint("system_id", "sha", "path"),
+        Index("ix_commit_file_path", "system_id", "path", "stat_date"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     group_id: Mapped[int] = mapped_column(ForeignKey("dev_group.id"), index=True)
     stat_date: Mapped[date] = mapped_column(Date)
-    project_id: Mapped[int] = mapped_column(ForeignKey("dev_project.id"))
+    system_id: Mapped[int] = mapped_column(ForeignKey("dev_system.id"))
     path: Mapped[str] = mapped_column(String(512))
     sha: Mapped[str] = mapped_column(String(64))
     author: Mapped[str] = mapped_column(String(190), default="")

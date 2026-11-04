@@ -1963,7 +1963,7 @@ export default function RequirementChat() {
               <h4>{t("reqChat.reqInfo")}</h4>
               <Descriptions size="small" column={1}>
                 <Descriptions.Item label={t("reqChat.fDesc")}>{req.description || "—"}</Descriptions.Item>
-                <Descriptions.Item label={t("reqChat.fProject")}>{req.project_name || `#${req.project_id}`}</Descriptions.Item>
+                <Descriptions.Item label={t("reqChat.fProject")}>{req.system_name || `#${req.system_id}`}</Descriptions.Item>
                 <Descriptions.Item label={t("reqChat.fClaimant")}>{req.claimant_name || "—"}</Descriptions.Item>
                 <Descriptions.Item label={t("reqChat.fProposer")}>{req.proposer_name || "—"}</Descriptions.Item>
                 <Descriptions.Item label={t("reqChat.fCreated")}>

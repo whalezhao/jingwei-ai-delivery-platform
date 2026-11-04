@@ -340,7 +340,7 @@ export default function TaskDetail() {
         </div>
         <div className="td-meta">
           {task.branch && <span className="mono">{t("taskDetail.branch", { branch: task.branch })}</span>}
-          <span>{t("taskDetail.project", { name: d.project?.name || `#${req.project_id}` })}</span>
+          <span>{t("taskDetail.project", { name: d.project?.name || `#${req.system_id}` })}</span>
           <span>{t("taskDetail.created", { time: (task.created_at || "").slice(0, 19) })}</span>
         </div>
         {task.scope && (

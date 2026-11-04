@@ -16,8 +16,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .gitlab import GitlabClient, client_ctx
 from .jobs import _gitlab, mark_requirement_online
-from .models import DevGroup, DevTask, MrReview, Person, Project, Requirement
+from .models import DevGroup, DevTask, MrReview, Person, System, Requirement
 from .notify import merge_mentions, notify, project_owners
+from .person_links import person_by_gitlab
 
 log = logging.getLogger(__name__)
 
@@ -32,20 +33,16 @@ def _prefix_ok(prefixes: list | None, files: list) -> bool:
     return all(any(f.startswith(p) for p in prefixes) for f in files)
 
 
-async def _author_person(db: AsyncSession, author: dict) -> Person | None:
-    if author.get("email"):
-        p = await db.scalar(select(Person).where(Person.gitlab_email == author["email"]))
-        if p:
-            return p
-    if author.get("username"):
-        return await db.scalar(select(Person).where(Person.gitlab_username == author["username"]))
-    return None
+async def _author_person(db: AsyncSession, group: DevGroup, author: dict) -> Person | None:
+    return await person_by_gitlab(
+        db, group, email=author.get("email"), username=author.get("username")
+    )
 
 
 async def try_autoflow(
     db: AsyncSession,
     group: DevGroup,
-    project: Project,
+    project: System,
     review: MrReview,
     gl: GitlabClient,
     client: httpx.AsyncClient,
@@ -67,7 +64,7 @@ async def try_autoflow(
     if not sha.startswith(review.head_sha[:12]):  # 初审后又有新推送 → 等新 sha 的初审，绝不放旧代码
         return
 
-    author_p = await _author_person(db, mr.get("author") or {})
+    author_p = await _author_person(db, group, mr.get("author") or {})
     if mr.get("merge_status") == "cannot_be_merged" or mr.get("can_be_merged") is False:
         await _conflict(db, group, project, review, gl, client, author_p, "GitLab 判定当前不可自动合并")
         return
@@ -104,7 +101,7 @@ async def try_autoflow(
         await db.execute(
             select(DevTask, Requirement)
             .join(Requirement, DevTask.requirement_id == Requirement.id)
-            .where(Requirement.project_id == project.id, DevTask.mr_iid == review.mr_iid)
+            .where(Requirement.system_id == project.id, DevTask.mr_iid == review.mr_iid)
         )
     ).first()
     if row:
@@ -136,7 +133,7 @@ async def try_autoflow(
 async def _conflict(
     db: AsyncSession,
     group: DevGroup,
-    project: Project,
+    project: System,
     review: MrReview,
     gl: GitlabClient,
     client: httpx.AsyncClient,
@@ -168,14 +165,14 @@ async def mr_autoflow_sweep(db: AsyncSession, group: DevGroup) -> dict:
         return {"error": "研发组未配置 GitLab"}
     rows = (
         await db.execute(
-            select(MrReview, Project)
-            .join(Project, MrReview.project_id == Project.id)
+            select(MrReview, System)
+            .join(System, MrReview.system_id == System.id)
             .where(
                 MrReview.group_id == group.id,
                 MrReview.verdict == "approve",
                 MrReview.commented.is_(True),
                 MrReview.flow_state.in_(["", "hold_not_mergeable"]),
-                Project.auto_approve_prefixes.isnot(None),
+                System.auto_approve_prefixes.isnot(None),
             )
         )
     ).all()

@@ -14,7 +14,7 @@ from vega.schemas import TaskResultIn
 async def _mk_req(client, db, seeded, title: str = "版本需求") -> int:
     return (
         await client.post(
-            "/api/requirements", json={"project_id": seeded["project"].id, "title": title, "description": "d"}
+            "/api/requirements", json={"system_id": seeded["project"].id, "title": title, "description": "d"}
         )
     ).json()["id"]
 

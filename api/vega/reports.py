@@ -11,12 +11,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .llm import resolve_llm
 from .llm_client import ask_llm
-from .models import CommitFile, DailyStat, DevGroup, FileStat, Person, Project
+from .models import CommitFile, DailyStat, DevGroup, FileStat, Person, System
 
 log = logging.getLogger(__name__)
 
 TOP_N = 10
-SINGLE_POINT = 0.8  # 单个项目里一人提交占比超过它 = 单点风险
+SINGLE_POINT = 0.8  # 单个系统里一人提交占比超过它 = 单点风险
 SINGLE_POINT_MIN = 3  # 样本太少不判定
 REVISIT_COMMITS = 3  # 单文件区间内被改几次 = 反复修改
 REVISIT_DAYS = 3  # 或横跨几个不同日期
@@ -41,7 +41,7 @@ async def aggregate(
     db: AsyncSession,
     *,
     group_id: int | None,
-    project_id: int | None,
+    system_id: int | None,
     start: date,
     end: date,
     person_id: int | None = None,
@@ -53,8 +53,8 @@ async def aggregate(
     dq = select(DailyStat).where(DailyStat.stat_date >= start, DailyStat.stat_date <= end)
     if group_id:
         dq = dq.where(DailyStat.group_id == group_id)
-    if project_id:
-        dq = dq.where(DailyStat.project_id == project_id)
+    if system_id:
+        dq = dq.where(DailyStat.system_id == system_id)
     if person_id:
         dq = dq.where(DailyStat.person_id == person_id)
     rows = list((await db.scalars(dq)).all())
@@ -64,18 +64,18 @@ async def aggregate(
         fq = select(FileStat).where(FileStat.stat_date >= start, FileStat.stat_date <= end)
         if group_id:
             fq = fq.where(FileStat.group_id == group_id)
-        if project_id:
-            fq = fq.where(FileStat.project_id == project_id)
+        if system_id:
+            fq = fq.where(FileStat.system_id == system_id)
         files = list((await db.scalars(fq)).all())
 
     people = list((await db.scalars(select(Person))).all())
     by_id = {p.id: p.name for p in people}
-    projects = list((await db.scalars(select(Project))).all())
-    path_of = {p.id: p.path for p in projects}
+    systems = list((await db.scalars(select(System))).all())
+    path_of = {p.id: p.path for p in systems}
 
     ppl: dict = defaultdict(lambda: {"commits": 0, "additions": 0, "deletions": 0})
     prj: dict = defaultdict(lambda: {"commits": 0, "additions": 0, "deletions": 0})
-    prj_person: dict = defaultdict(int)  # (项目, 人) → 提交数：查「一个项目是不是一直一个人提交」
+    prj_person: dict = defaultdict(int)  # (项目, 人) → 提交数：查「一个系统是不是一直一个人提交」
     day: dict = defaultdict(lambda: {"commits": 0, "additions": 0, "deletions": 0})
     hot: dict = defaultdict(lambda: {"commits": 0, "additions": 0, "deletions": 0, "_days": set()})
     churn: dict = defaultdict(int)  # (人, 日) → 增删行
@@ -84,14 +84,14 @@ async def aggregate(
         key = r.person_id if r.person_id else f"?{r.gitlab_author}"
         if not r.person_id:
             unmatched.add(r.gitlab_author)
-        for bucket in (ppl[key], prj[r.project_id], day[r.stat_date]):
+        for bucket in (ppl[key], prj[r.system_id], day[r.stat_date]):
             bucket["commits"] += r.commits
             bucket["additions"] += r.additions
             bucket["deletions"] += r.deletions
-        prj_person[(r.project_id, key)] += r.commits
+        prj_person[(r.system_id, key)] += r.commits
         churn[(key, r.stat_date)] += r.additions + r.deletions
     for f in files:
-        slot = hot[(f.project_id, f.path)]
+        slot = hot[(f.system_id, f.path)]
         slot["commits"] += f.commits
         slot["additions"] += f.additions
         slot["deletions"] += f.deletions
@@ -106,12 +106,12 @@ async def aggregate(
     for k, v in _sorted(ppl):
         name = by_id.get(k) if isinstance(k, int) else k[1:]
         people_out.append({"person_id": k if isinstance(k, int) else None, "name": name, "matched": isinstance(k, int), **v})
-    projects_out = [
-        {"project_id": pid, "path": path_of.get(pid, str(pid)), **v} for pid, v in _sorted(prj)
+    systems_out = [
+        {"system_id": pid, "path": path_of.get(pid, str(pid)), **v} for pid, v in _sorted(prj)
     ]
-    project_people = [
+    system_people = [
         {
-            "project_id": pid,
+            "system_id": pid,
             "path": path_of.get(pid, str(pid)),
             "person_id": k if isinstance(k, int) else None,
             "name": by_id.get(k, str(k)) if isinstance(k, int) else k[1:],
@@ -121,8 +121,8 @@ async def aggregate(
     ]
     hot_out = [
         {
-            "project_id": pid,
-            "project": path_of.get(pid, str(pid)),
+            "system_id": pid,
+            "system": path_of.get(pid, str(pid)),
             "path": path,
             **{k: v for k, v in slot.items() if k != "_days"},
             "days": len(slot["_days"]),
@@ -140,11 +140,11 @@ async def aggregate(
             "additions": sum(v["additions"] for v in ppl.values()),
             "deletions": sum(v["deletions"] for v in ppl.values()),
             "people": sum(1 for k in ppl if isinstance(k, int)),
-            "projects": len(prj),
+            "systems": len(prj),
         },
         "people": people_out,
-        "projects": projects_out,
-        "project_people": project_people,
+        "systems": systems_out,
+        "system_people": system_people,
         "hot_files": hot_out,
         "daily": daily_out,
         "unmatched": sorted(unmatched),
@@ -167,7 +167,7 @@ def _top_revisit(agg: dict, n: int = 3) -> list[dict]:
 
 
 def _risks(agg: dict, msgs: dict | None = None) -> list[str]:
-    """规则风险：只看「改得可疑」的模式（反复改同一处、一个项目单点、单日大进大出）。
+    """规则风险：只看「改得可疑」的模式（反复改同一处、一个系统单点、单日大进大出）。
 
     「没提交」不是风险，不列。msgs 给了提交信息就把「在改什么」写在同一条里。
     """
@@ -180,17 +180,17 @@ def _risks(agg: dict, msgs: dict | None = None) -> list[str]:
             f"{f['path']} {span}被改 {f['commits']} 次（+{f['additions']}/-{f['deletions']}），"
             f"最近 {f['last']}"
         )
-        notes = (msgs or {}).get((f["project_id"], f["path"]))
+        notes = (msgs or {}).get((f["system_id"], f["path"]))
         if notes:
             line += "；近几次：" + " / ".join(notes)
         else:
             line += "，建议看下为什么反复动这里"
         out.append(line)
 
-    # 单点项目：一个项目的提交几乎全出自同一个人
+    # 单点项目：一个系统的提交几乎全出自同一个人
     by_prj: dict[int, list[dict]] = defaultdict(list)
-    for row in agg["project_people"]:
-        by_prj[row["project_id"]].append(row)
+    for row in agg["system_people"]:
+        by_prj[row["system_id"]].append(row)
     solo = []
     for rows in by_prj.values():
         n = sum(r["commits"] for r in rows)
@@ -212,7 +212,7 @@ async def build_code_report(
     """渲染一条可直接发群的代码报表（总量 → 排行 → 热点 → 风险 → LLM 研判）。"""
     label = KIND_LABEL.get(kind, kind)
     span = str(start) if start == end else f"{start} ~ {end}"
-    agg = await aggregate(db, group_id=group.id, project_id=None, start=start, end=end)
+    agg = await aggregate(db, group_id=group.id, system_id=None, start=start, end=end)
     total = agg["totals"]
     head = f"📊 {group.name} 代码{label}（{span}）"
     if not total["commits"]:
@@ -221,7 +221,7 @@ async def build_code_report(
     lines = [
         head,
         f"提交 {total['commits']} · +{total['additions']}/-{total['deletions']} · "
-        f"{total['people']} 人 / {total['projects']} 个项目",
+        f"{total['people']} 人 / {total['systems']} 个系统",
         "",
         "🏆 提交排行",
     ]
@@ -233,7 +233,7 @@ async def build_code_report(
 
     lines += ["", "🔥 热点文件"]
     lines += [
-        f"{i + 1}. {f['path']} · {f['project']}（{f['commits']} 次，+{f['additions']}/-{f['deletions']}）"
+        f"{i + 1}. {f['path']} · {f['system']}（{f['commits']} 次，+{f['additions']}/-{f['deletions']}）"
         for i, f in enumerate(agg["hot_files"][:TOP_N])
     ] or ["（暂无文件级数据）"]
 
@@ -244,7 +244,7 @@ async def build_code_report(
             await db.scalars(
                 select(CommitFile.message)
                 .where(
-                    CommitFile.project_id == f["project_id"],
+                    CommitFile.system_id == f["system_id"],
                     CommitFile.path == f["path"],
                     CommitFile.stat_date >= start,
                     CommitFile.stat_date <= end,
@@ -256,7 +256,7 @@ async def build_code_report(
         ).all()
         got = [m if len(m) <= 36 else m[:36].rstrip() + "…" for m in reversed(rows) if m]
         if got:
-            msgs[(f["project_id"], f["path"])] = got
+            msgs[(f["system_id"], f["path"])] = got
     risks = _risks(agg, msgs)
     if risks:
         lines += ["", "⚠️ 风险提示"] + [f"· {r}" for r in risks]
@@ -273,7 +273,7 @@ async def _llm_summary(
     """给了 LLM 就写一段研判；没配或失败就整段省略，不阻塞推送。"""
     facts = [
         head,
-        f"提交 {total['commits']}，+{total['additions']}/-{total['deletions']}，{total['people']} 人，{total['projects']} 个项目",
+        f"提交 {total['commits']}，+{total['additions']}/-{total['deletions']}，{total['people']} 人，{total['systems']} 个系统",
         "排行：" + "；".join(f"{p['name']} {p['commits']} 次" for p in people[:5]),
         "热点：" + "；".join(f"{f['path']} {f['commits']} 次" for f in hot),
         "风险：" + "；".join(risks) if risks else "风险：无",

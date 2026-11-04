@@ -6,6 +6,7 @@ import {
   ClusterOutlined,
   CodeOutlined,
   DashboardOutlined,
+  FileTextOutlined,
   LaptopOutlined,
   ProjectOutlined,
   TeamOutlined,
@@ -23,6 +24,7 @@ import Login from "./pages/Login";
 import People from "./pages/People";
 import Groups from "./pages/Groups";
 import Projects from "./pages/Projects";
+import Systems from "./pages/Systems";
 import Requirements from "./pages/Requirements";
 import RequirementChat from "./pages/RequirementChat";
 import Tasks from "./pages/Tasks";
@@ -31,13 +33,14 @@ import Workbench from "./pages/Workbench";
 import Nodes from "./pages/Nodes";
 import Integrations from "./pages/Integrations";
 
-/** 菜单序：工作台总览 → 业务流（需求→任务）→ 配置（项目→组→人员）→ 系统（节点→集成） */
+/** 菜单序：工作台总览 → 业务流（需求→任务）→ 组织（项目→研发组→系统→人员）→ 节点/集成 */
 const MENU = [
   { path: "/workbench", key: "nav.workbench", icon: <DashboardOutlined /> },
-  { path: "/reqs", key: "nav.requirements", icon: <ProjectOutlined /> },
+  { path: "/reqs", key: "nav.requirements", icon: <FileTextOutlined /> },
   { path: "/tasks", key: "nav.tasks", icon: <CodeOutlined /> },
-  { path: "/projects", key: "nav.projects", icon: <ClusterOutlined /> },
+  { path: "/projects", key: "nav.projects", icon: <ProjectOutlined /> },
   { path: "/groups", key: "nav.groups", icon: <ApartmentOutlined /> },
+  { path: "/systems", key: "nav.systems", icon: <ClusterOutlined /> },
   { path: "/people", key: "nav.people", icon: <TeamOutlined /> },
   { path: "/nodes", key: "nav.nodes", icon: <LaptopOutlined /> },
   { path: "/integrations", key: "nav.integrations", icon: <ApiOutlined /> },
@@ -154,6 +157,7 @@ function Shell() {
         <Route path="/people" element={<People />} />
         <Route path="/groups" element={<Groups />} />
         <Route path="/projects" element={<Projects />} />
+        <Route path="/systems" element={<Systems />} />
         <Route path="/nodes" element={<Nodes />} />
         <Route path="/integrations" element={<Integrations />} />
       </Routes>

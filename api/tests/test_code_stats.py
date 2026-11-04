@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from vega.gitlab import GitlabClient
 from vega.jobs import _group_tech_leads, _owner_targets, _tech_leads, collect_day, daily_commit_stats
-from vega.models import CommitFile, DailyStat, FileStat, GroupTechLead, Person, ProjectOwner, ProjectPM
+from vega.models import CommitFile, DailyStat, FileStat, GroupTechLead, Person, SystemOwner, SystemPM
 from vega.reports import aggregate, build_code_report
 
 
@@ -25,7 +25,7 @@ async def test_tech_leads_project_then_group(db, seeded):
     assert [p.name for p in await _group_tech_leads(db, group)] == ["组技术负责人"]
     assert [p.name for p in await _tech_leads(db, proj, group)] == ["张三"]  # 项目级在场，组级不参与
 
-    for row in (await db.scalars(select(ProjectPM).where(ProjectPM.project_id == proj.id))).all():
+    for row in (await db.scalars(select(SystemPM).where(SystemPM.system_id == proj.id))).all():
         await db.delete(row)
     await db.commit()
     assert [p.name for p in await _tech_leads(db, proj, group)] == ["组技术负责人"]
@@ -39,7 +39,7 @@ async def test_owner_targets_owner_then_tech_lead(db, seeded):
     owner = Person(name="项目负责人乙", gitlab_username=f"owner-{group.id}", octo_uid="uid-owner")
     db.add(owner)
     await db.flush()
-    db.add(ProjectOwner(project_id=proj.id, person_id=owner.id))
+    db.add(SystemOwner(system_id=proj.id, person_id=owner.id))
     await db.commit()
     assert [p.name for p in await _owner_targets(db, proj, group)] == ["项目负责人乙"]
 
@@ -50,41 +50,41 @@ async def test_aggregate_and_report(db, seeded):
     day = date(2026, 10, 20)
     db.add(
         DailyStat(
-            group_id=group.id, stat_date=day, project_id=proj.id, person_id=person.id,
+            group_id=group.id, stat_date=day, system_id=proj.id, person_id=person.id,
             gitlab_author="zhangsan@test.cn", commits=6, additions=100, deletions=20,
         )
     )
     db.add(
         DailyStat(
-            group_id=group.id, stat_date=day, project_id=proj.id, person_id=None,
+            group_id=group.id, stat_date=day, system_id=proj.id, person_id=None,
             gitlab_author="ghost@x.cn", commits=1, additions=5, deletions=1,
         )
     )
     for back, msg in enumerate(["修复空指针", "补充日志", "调整超时"]):  # 同一文件连改三天 = 反复修改
         db.add(
             FileStat(
-                group_id=group.id, stat_date=day - timedelta(days=back), project_id=proj.id,
+                group_id=group.id, stat_date=day - timedelta(days=back), system_id=proj.id,
                 path="src/core/x.py", commits=4, additions=100, deletions=13,
             )
         )
         db.add(
             CommitFile(
-                group_id=group.id, stat_date=day - timedelta(days=back), project_id=proj.id,
+                group_id=group.id, stat_date=day - timedelta(days=back), system_id=proj.id,
                 path="src/core/x.py", sha=f"sha{back}", author="zhangsan@test.cn",
                 message=msg, additions=100, deletions=13,
             )
         )
     db.add(
         CommitFile(
-            group_id=group.id, stat_date=day, project_id=proj.id, path="src/core/x.py",
+            group_id=group.id, stat_date=day, system_id=proj.id, path="src/core/x.py",
             sha="sha-merge", author="zhangsan@test.cn",
             message="Merge branch 'release/1.9.3' into 'master'", additions=0, deletions=0,
         )
     )
     await db.commit()
 
-    agg = await aggregate(db, group_id=group.id, project_id=None, start=day, end=day)
-    assert agg["totals"] == {"commits": 7, "additions": 105, "deletions": 21, "people": 1, "projects": 1}
+    agg = await aggregate(db, group_id=group.id, system_id=None, start=day, end=day)
+    assert agg["totals"] == {"commits": 7, "additions": 105, "deletions": 21, "people": 1, "systems": 1}
     assert agg["people"][0]["name"] == "张三" and agg["people"][0]["commits"] == 6
     assert agg["people"][1]["matched"] is False and agg["people"][1]["name"] == "ghost@x.cn"
     assert agg["hot_files"][0]["path"] == "src/core/x.py"
@@ -204,19 +204,19 @@ async def test_person_view(db, seeded):
     for pid, n in ((person.id, 6), (other.id, 2)):
         db.add(
             DailyStat(
-                group_id=group.id, stat_date=day, project_id=proj.id, person_id=pid,
+                group_id=group.id, stat_date=day, system_id=proj.id, person_id=pid,
                 gitlab_author=f"a{pid}@t.cn", commits=n, additions=10 * n, deletions=n,
             )
         )
     db.add(
         FileStat(
-            group_id=group.id, stat_date=day, project_id=proj.id, path="src/x.py",
+            group_id=group.id, stat_date=day, system_id=proj.id, path="src/x.py",
             commits=3, additions=30, deletions=3,
         )
     )
     await db.commit()
 
-    agg = await aggregate(db, group_id=group.id, project_id=None, person_id=person.id, start=day, end=day)
+    agg = await aggregate(db, group_id=group.id, system_id=None, person_id=person.id, start=day, end=day)
     assert agg["totals"]["commits"] == 6 and agg["totals"]["people"] == 1
     assert [p["name"] for p in agg["people"]] == ["张三"]
     assert agg["hot_files"] == []
@@ -228,7 +228,7 @@ async def test_collect_endpoint_backfills(admin_client, seeded, monkeypatch):
 
     days: list[date] = []
 
-    async def fake_collect(db_, group_, day, project_id=None):
+    async def fake_collect(db_, group_, day, system_id=None):
         days.append(day)
         return {"rows": 2, "files": 1, "projects": 1}
 
@@ -251,7 +251,7 @@ async def test_code_stats_endpoint(admin_client, db, seeded):
     day = date(2026, 10, 22)
     db.add(
         DailyStat(
-            group_id=group.id, stat_date=day, project_id=proj.id, person_id=person.id,
+            group_id=group.id, stat_date=day, system_id=proj.id, person_id=person.id,
             gitlab_author="zhangsan@test.cn", commits=5, additions=50, deletions=5,
         )
     )

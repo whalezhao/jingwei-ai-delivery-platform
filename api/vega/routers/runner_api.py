@@ -22,6 +22,7 @@ from ..autoflow import try_autoflow
 from ..db import get_db
 from ..gitlab import GitlabClient, client_ctx
 from ..jobs import _gitlab
+from ..person_links import gitlab_username_for
 from ..models import (
     DevGroup,
     DevTask,
@@ -31,7 +32,7 @@ from ..models import (
     Person,
     PlanEvent,
     PlanReview,
-    Project,
+    System,
     Requirement,
     RequirementDoc,
     RunnerNode,
@@ -425,9 +426,9 @@ async def _finish_egm_review(db: AsyncSession, task: RunnerTask, body: TaskResul
 
 
 async def _notify_review(db: AsyncSession, task: RunnerTask, *, reason: str, head: str, detail: str) -> None:
-    """评审结果要有人接：@ 认领人和项目负责人，避免自动跑完没人看。"""
+    """评审结果要有人接：@ 认领人和系统负责人，避免自动跑完没人看。"""
     req = await db.get(Requirement, task.requirement_id) if task.requirement_id else None
-    project = await db.get(Project, req.project_id) if req else None
+    project = await db.get(System, req.system_id) if req else None
     group = await db.get(DevGroup, project.group_id) if project else None
     if not (req and project and group):
         return
@@ -446,7 +447,7 @@ async def _finish_egm_job(db: AsyncSession, task: RunnerTask, body: TaskResultIn
     rep = await db.get(EgmReport, p.get("egm_job_id")) if p.get("egm_job_id") else None
     if not rep:
         return
-    project = await db.get(Project, rep.project_id)
+    project = await db.get(System, rep.system_id)
     group = await db.get(DevGroup, project.group_id) if project else None
     owners = await project_owners(db, project.id) if project else []
 
@@ -471,7 +472,9 @@ async def _finish_egm_job(db: AsyncSession, task: RunnerTask, body: TaskResultIn
     if rep.kind == "bootstrap" and rep.branch and group and project:
         gl = _gitlab(group)
         if gl:
-            reviewers = [x.gitlab_username for x in owners if x.gitlab_username]
+            reviewers = [
+                u for u in [await gitlab_username_for(db, group, x) for x in owners] if u
+            ]
             try:
                 async with client_ctx() as client:
                     mr = await gl.create_mr(
@@ -502,15 +505,17 @@ async def _finish_dev_task(db: AsyncSession, task: RunnerTask, body: TaskResultI
     if not dev or not req:
         return
     creator = await db.get(Person, dev.creator_id)
-    project = await db.get(Project, req.project_id)
+    project = await db.get(System, req.system_id)
     group = await db.get(DevGroup, project.group_id)
     # 任务创建人之外，项目负责人也要收到失败/MR 通知
     owners = await project_owners(db, project.id)
     # MR 审核人 = 项目负责人（用其绑定的 GitLab 账号），多个负责人都算上；
     # 一个都没有可用的账号再退回任务创建人
-    reviewers = [p.gitlab_username for p in owners if p.gitlab_username]
-    if not reviewers and creator and creator.gitlab_username:
-        reviewers = [creator.gitlab_username]
+    reviewers = [u for u in [await gitlab_username_for(db, group, p) for p in owners] if u]
+    if not reviewers and creator:
+        uname = await gitlab_username_for(db, group, creator)
+        if uname:
+            reviewers = [uname]
 
     if body.status != "done" or body.data.get("status") != "pushed":
         dev.status = "failed"
@@ -588,7 +593,7 @@ _VERDICT_TEXT: dict[str, str] = {"approve": "✅ 可批准", "modify": "⚠️ �
 
 
 async def _notify_review_result(
-    db: AsyncSession, group: DevGroup, project: Project, review: MrReview
+    db: AsyncSession, group: DevGroup, project: System, review: MrReview
 ) -> None:
     """评审结论双通道之一：GitLab 评论之外，octo 同步 @审核人（=任务创建人=需求认领人）。"""
     row = (
@@ -596,7 +601,7 @@ async def _notify_review_result(
             select(DevTask, Requirement, Person)
             .join(Requirement, DevTask.requirement_id == Requirement.id)
             .join(Person, DevTask.creator_id == Person.id)
-            .where(Requirement.project_id == project.id, DevTask.mr_iid == review.mr_iid)
+            .where(Requirement.system_id == project.id, DevTask.mr_iid == review.mr_iid)
         )
     ).first()
     text = (
@@ -620,21 +625,21 @@ async def _finish_mr_review(db: AsyncSession, task: RunnerTask, body: TaskResult
     """runner 初审结论落 MrReview（幂等：占位行入队时已建）→ CI 门禁判定 → MR 审计评论。"""
     p = task.payload or {}
     mr = p.get("mr") or {}
-    project = await db.get(Project, p.get("project_id"))
+    project = await db.get(System, p.get("system_id"))
     if not project or not mr.get("iid"):
         return
     group = await db.get(DevGroup, project.group_id)
 
     review = await db.scalar(
         select(MrReview).where(
-            MrReview.project_id == project.id,
+            MrReview.system_id == project.id,
             MrReview.mr_iid == mr["iid"],
             MrReview.head_sha == mr.get("sha", ""),
         )
     )
     if not review:  # 占位行缺失（异常路径）补建，保证 (project,iid,sha) 必有留痕
         review = MrReview(
-            project_id=project.id,
+            system_id=project.id,
             group_id=group.id,
             mr_iid=mr["iid"],
             head_sha=mr.get("sha", ""),

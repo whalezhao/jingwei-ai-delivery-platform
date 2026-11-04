@@ -14,6 +14,7 @@ import { PAGE } from "../table";
 interface Person {
   id: number;
   name: string;
+  username: string | null;
   avatar: string | null;
   gitlab_username: string | null;
   gitlab_email: string | null;
@@ -30,6 +31,7 @@ interface Person {
 // 研发体系角色：product 认领未定稿需求并写需求，dev 定稿后接管做方案与开发；
 // 其余三个目前只用于标识与展示，不参与认领门禁
 const ROLES: { value: string; label: MsgKey; color: string }[] = [
+  { value: "project_lead", label: "people.role.projectLead", color: "magenta" },
   { value: "pm", label: "people.role.pm", color: "blue" },
   { value: "product", label: "people.role.product", color: "cyan" },
   { value: "tech_lead", label: "people.role.techLead", color: "purple" },
@@ -41,6 +43,7 @@ const ROLE_LABEL: Record<string, MsgKey> = Object.fromEntries(ROLES.map((r) => [
 
 const empty: any = {
   name: "",
+  username: "",
   gitlab_username: "",
   gitlab_email: "",
   password: "",
@@ -60,6 +63,44 @@ export default function People() {
   const [editing, setEditing] = useState<any>(null); // {id?: number, ...}
   const [keyword, setKeyword] = useState("");
   const [form] = Form.useForm();
+  // 个人 GitLab 账号（一个可多个；研发组里选一个用）
+  const [accounts, setAccounts] = useState<any[]>([]);
+  const [accBase, setAccBase] = useState("");
+  const [accToken, setAccToken] = useState("");
+  const [accBusy, setAccBusy] = useState(false);
+
+  const loadAccounts = (pid: number) =>
+    api<any[]>(`/api/people/${pid}/gitlab-accounts`)
+      .then(setAccounts)
+      .catch(() => setAccounts([]));
+
+  const addAccount = async () => {
+    if (!editing?.id || !accBase.trim() || !accToken.trim()) return;
+    setAccBusy(true);
+    try {
+      await api(`/api/people/${editing.id}/gitlab-accounts`, {
+        method: "POST",
+        body: JSON.stringify({ base_url: accBase.trim(), token: accToken.trim() }),
+      });
+      setAccBase("");
+      setAccToken("");
+      await loadAccounts(editing.id);
+    } catch (e: any) {
+      message.error(e.message);
+    } finally {
+      setAccBusy(false);
+    }
+  };
+
+  const delAccount = async (aid: number) => {
+    if (!editing?.id) return;
+    try {
+      await api(`/api/people/${editing.id}/gitlab-accounts/${aid}`, { method: "DELETE" });
+      await loadAccounts(editing.id);
+    } catch (e: any) {
+      message.error(e.message);
+    }
+  };
 
   const load = () => api<Person[]>(`/api/people${groupId ? `?group_id=${groupId}` : ""}`).then(setRows);
   useEffect(() => {
@@ -69,6 +110,10 @@ export default function People() {
   const open = (p?: Person) => {
     // Modal destroyOnHidden：每次打开都会重新挂载 Form，initialValues 取这里的新对象
     setEditing(p ? { ...p, password: "", llm_api_key: "", am_user_key: "" } : { ...empty });
+    setAccBase("");
+    setAccToken("");
+    if (p) loadAccounts(p.id);
+    else setAccounts([]);
   };
 
   const save = async (v: any) => {
@@ -76,7 +121,7 @@ export default function People() {
     // 空 key 不提交，避免把已有配置清掉
     for (const k of ["password", "llm_api_key", "am_user_key"]) if (!body[k]) delete body[k];
     // 非管理员：登录名/管理员标记/角色/重置密码都不许改（表单回传的是只读值，不是修改意图）
-    if (!isAdmin()) for (const k of ["is_admin", "gitlab_username", "password", "roles"]) delete body[k];
+    if (!isAdmin()) for (const k of ["is_admin", "username", "gitlab_username", "password", "roles"]) delete body[k];
     try {
       if (editing.id) await api(`/api/people/${editing.id}`, { method: "PUT", body: JSON.stringify(body) });
       else await api("/api/people", { method: "POST", body: JSON.stringify(body) });
@@ -93,7 +138,7 @@ export default function People() {
   const term = keyword.trim().toLowerCase();
   const shown = term
     ? rows.filter((r) =>
-        [r.name, r.gitlab_username, r.gitlab_email].some((s) => (s || "").toLowerCase().includes(term)),
+        [r.name, r.username, r.gitlab_username, r.gitlab_email].some((s) => (s || "").toLowerCase().includes(term)),
       )
     : rows;
 
@@ -132,6 +177,11 @@ export default function People() {
                   {v}
                 </Space>
               ),
+            },
+            {
+              title: t("people.colUsername"),
+              dataIndex: "username",
+              render: (v) => <span className="mono">{v || "—"}</span>,
             },
             {
               title: t("people.colGitlab"),
@@ -209,6 +259,40 @@ export default function People() {
           <Form.Item name="avatar" label={t("people.avatar")}>
             <AvatarPicker />
           </Form.Item>
+          <Form.Item name="username" label={t("people.username")} tooltip={t("people.usernameTooltip")}>
+            <Input disabled={!isAdmin()} />
+          </Form.Item>
+          {editing?.id && (
+            <Form.Item label={t("people.gitlabAccounts")} tooltip={t("people.gitlabAccountsTooltip")}>
+              <Space direction="vertical" style={{ width: "100%" }}>
+                {accounts.map((a) => (
+                  <Space key={a.id} wrap>
+                    <Tag color={a.has_token ? "green" : "red"}>{a.username}</Tag>
+                    <span className="mono">{a.base_url}</span>
+                    <a className="danger-link" onClick={() => delAccount(a.id)}>
+                      {t("common.delete")}
+                    </a>
+                  </Space>
+                ))}
+                <Space.Compact style={{ width: "100%" }}>
+                  <Input
+                    placeholder={t("people.accountBaseUrl")}
+                    value={accBase}
+                    onChange={(e) => setAccBase(e.target.value)}
+                  />
+                  <Input.Password
+                    placeholder={t("people.accountToken")}
+                    value={accToken}
+                    onChange={(e) => setAccToken(e.target.value)}
+                  />
+                  <Button onClick={addAccount} loading={accBusy} disabled={!isAdmin()}>
+                    {t("people.addAccount")}
+                  </Button>
+                </Space.Compact>
+                <span style={{ fontSize: 12, opacity: 0.65 }}>{t("people.accountHint")}</span>
+              </Space>
+            </Form.Item>
+          )}
           <Form.Item name="gitlab_username" label={t("people.gitlabUsername")}>
             <Input disabled={!!editing?.id} />
           </Form.Item>

@@ -81,7 +81,7 @@ export default function Tasks() {
   const load = () => {
     const p = new URLSearchParams();
     if (groupId) p.set("group_id", String(groupId));
-    if (projectId) p.set("project_id", String(projectId));
+    if (projectId) p.set("system_id", String(projectId));
     if (status) p.set("status", status);
     if (keyword.trim()) p.set("q", keyword.trim());
     return api<Task[]>(`/api/dev-tasks?${p}`).then(setRows);
@@ -94,7 +94,7 @@ export default function Tasks() {
 
   useEffect(() => {
     setProjectId(undefined); // 切组后旧项目筛选可能不属于该组
-    api<any[]>(`/api/projects${groupId ? `?group_id=${groupId}` : ""}`).then(setProjects);
+    api<any[]>(`/api/systems${groupId ? `?group_id=${groupId}` : ""}`).then(setProjects);
   }, [groupId]);
 
   return (

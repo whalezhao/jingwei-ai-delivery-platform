@@ -23,8 +23,8 @@ from ..models import (
     Person,
     PlanMessage,
     PlanVersion,
-    Project,
-    ProjectOwner,
+    System,
+    SystemOwner,
     Requirement,
     RequirementDoc,
 )
@@ -68,7 +68,7 @@ def requirement_graduation(outcomes: list[str | None]) -> str | None:
 @router.get("")
 async def workbench(
     group_id: int | None = None,
-    project_id: int | None = None,
+    system_id: int | None = None,
     db: AsyncSession = Depends(get_db),
     _me: Person = Depends(current_person),
 ) -> dict:
@@ -80,11 +80,11 @@ async def workbench(
         .order_by(DevGroup.id)
     )
 
-    proj_q = select(Project.id)
+    proj_q = select(System.id)
     if group_id:
-        proj_q = proj_q.where(Project.group_id == group_id)
-    if project_id:
-        proj_q = proj_q.where(Project.id == project_id)
+        proj_q = proj_q.where(System.group_id == group_id)
+    if system_id:
+        proj_q = proj_q.where(System.id == system_id)
     pids = list((await db.scalars(proj_q)).all())
     if not pids:
         return {"requirements": [], "default_group_id": default_group_id}
@@ -94,14 +94,14 @@ async def workbench(
     reqs = (
         await db.scalars(
             select(Requirement)
-            .where(Requirement.project_id.in_(pids), Requirement.id.in_(final_req_ids))
+            .where(Requirement.system_id.in_(pids), Requirement.id.in_(final_req_ids))
             .order_by(Requirement.id.desc())
             .limit(50)
         )
     ).all()
     projects = {
         p.id: p
-        for p in (await db.scalars(select(Project).where(Project.id.in_([r.project_id for r in reqs])))).all()
+        for p in (await db.scalars(select(System).where(System.id.in_([r.system_id for r in reqs])))).all()
     }
     group_ids = {p.group_id for p in projects.values()}
     groups = {g.id: g for g in (await db.scalars(select(DevGroup).where(DevGroup.id.in_(group_ids)))).all()}
@@ -116,10 +116,10 @@ async def workbench(
     if projects:
         rows = (
             await db.execute(
-                select(ProjectOwner.project_id, Person.name)
-                .join(Person, ProjectOwner.person_id == Person.id)
-                .where(ProjectOwner.project_id.in_(list(projects)))
-                .order_by(ProjectOwner.id)
+                select(SystemOwner.system_id, Person.name)
+                .join(Person, SystemOwner.person_id == Person.id)
+                .where(SystemOwner.system_id.in_(list(projects)))
+                .order_by(SystemOwner.id)
             )
         ).all()
         for pid, name in rows:
@@ -201,7 +201,7 @@ async def workbench(
                 agent_name[(gid, aid)] = name
                 agent_name_any.setdefault(aid, name)
 
-    def expert(r: Requirement, p: Project, mode: str) -> dict | None:
+    def expert(r: Requirement, p: System, mode: str) -> dict | None:
         if (r.id, mode) not in latest_pick:
             return None  # 该模式还没聊过，不硬凑专家
         aid = latest_pick[(r.id, mode)] or p.am_agent_id
@@ -233,7 +233,7 @@ async def workbench(
 
     # MR 初审/放行：取每个 (project, iid) 最新一条（同 MR 多 sha 重推时旧结论作废）
     mr_keys = {
-        (projects[r.project_id].id, t.mr_iid)
+        (projects[r.system_id].id, t.mr_iid)
         for r in reqs
         for t in by_req.get(r.id, [])
         if t.mr_iid
@@ -243,16 +243,16 @@ async def workbench(
         rows = (
             await db.scalars(
                 select(MrReview)
-                .where(tuple_(MrReview.project_id, MrReview.mr_iid).in_(mr_keys))
+                .where(tuple_(MrReview.system_id, MrReview.mr_iid).in_(mr_keys))
                 .order_by(MrReview.id)
             )
         ).all()
         for m in rows:
-            mrs[(m.project_id, m.mr_iid)] = m
+            mrs[(m.system_id, m.mr_iid)] = m
 
     out = []
     for r in reqs:
-        p = projects[r.project_id]
+        p = projects[r.system_id]
         group = groups[p.group_id]
         req_open = _can_open(r, _me)
         task_items = []
@@ -303,8 +303,8 @@ async def workbench(
                 "can_open": req_open,
                 "claimant_name": claimants.get(r.claimant_id),
                 "created_at": _iso(r.created_at),
-                "project_id": p.id,
-                "project_name": p.name,
+                "system_id": p.id,
+                "system_name": p.name,
                 "group_id": p.group_id,
                 "doc_final": True,  # 只有定稿需求才会走到这里（跟踪初态）
                 "plan_final": r.status in ("confirmed", "archived", "online"),  # 方案定稿节点

@@ -24,10 +24,10 @@ interface Day extends Row {
 interface Stats {
   start: string;
   end: string;
-  totals: Row & { people: number; projects: number };
+  totals: Row & { people: number; systems: number };
   people: (Row & { person_id: number | null; name: string; matched: boolean })[];
-  projects: (Row & { project_id: number; path: string })[];
-  hot_files: (Row & { project_id: number; project: string; path: string })[];
+  systems: (Row & { system_id: number; path: string })[];
+  hot_files: (Row & { system_id: number; system: string; path: string })[];
   daily: Day[];
 }
 
@@ -267,7 +267,7 @@ export default function CodeStats({ groupId, projectId }: { groupId?: number; pr
     const [start, end] = range(kind);
     const p = new URLSearchParams({ start, end });
     if (groupId) p.set("group_id", String(groupId));
-    if (projectId) p.set("project_id", String(projectId));
+    if (projectId) p.set("system_id", String(projectId));
     if (personId) p.set("person_id", String(personId));
     api<Stats>(`/api/code-stats?${p}`)
       .then((d) => alive && setData(d))
@@ -285,7 +285,7 @@ export default function CodeStats({ groupId, projectId }: { groupId?: number; pr
     }
     const [start, end] = range(kind);
     const p = new URLSearchParams({ group_id: String(groupId), start, end });
-    if (projectId) p.set("project_id", String(projectId));
+    if (projectId) p.set("system_id", String(projectId));
     setPulling(true);
     try {
       const d = await api<any>(`/api/code-stats/collect?${p}`, { method: "POST" });
@@ -314,14 +314,14 @@ export default function CodeStats({ groupId, projectId }: { groupId?: number; pr
         [t("codeStats.kpiCommits"), totals ? totals.commits.toLocaleString(loc) : "-", "live"],
         [t("codeStats.kpiAdditions"), totals ? `+${totals.additions.toLocaleString(loc)}` : "-", "ok"],
         [t("codeStats.kpiDeletions"), totals ? `-${totals.deletions.toLocaleString(loc)}` : "-", "bad"],
-        [t("codeStats.kpiProjects"), totals ? String(totals.projects) : "-", ""],
+        [t("codeStats.kpiProjects"), totals ? String(totals.systems) : "-", ""],
       ]
     : [
         [t("codeStats.kpiCommits"), totals ? totals.commits.toLocaleString(loc) : "-", "live"],
         [t("codeStats.kpiAdditions"), totals ? `+${totals.additions.toLocaleString(loc)}` : "-", "ok"],
         [t("codeStats.kpiDeletions"), totals ? `-${totals.deletions.toLocaleString(loc)}` : "-", "bad"],
         [t("codeStats.kpiPeople"), totals ? String(totals.people) : "-", ""],
-        [t("codeStats.kpiProjectCount"), totals ? String(totals.projects) : "-", ""],
+        [t("codeStats.kpiProjectCount"), totals ? String(totals.systems) : "-", ""],
       ];
 
   return (
@@ -379,12 +379,12 @@ export default function CodeStats({ groupId, projectId }: { groupId?: number; pr
       {personId ? (
         <Section
           title={t("codeStats.personProjects")}
-          hint={t("codeStats.projectCountHint", { n: data?.projects.length || 0 })}
+          hint={t("codeStats.projectCountHint", { n: data?.systems.length || 0 })}
         >
           <RankBars
             wide
             emptyText={t("codeStats.noCommits")}
-            items={(data?.projects || []).map((p) => ({ label: p.path, value: p.commits }))}
+            items={(data?.systems || []).map((p) => ({ label: p.path, value: p.commits }))}
           />
         </Section>
       ) : (
@@ -421,13 +421,13 @@ export default function CodeStats({ groupId, projectId }: { groupId?: number; pr
           </div>
           <Section
             title={t("codeStats.distribution")}
-            hint={t("codeStats.distributionHint", { n: data?.projects.length || 0 })}
+            hint={t("codeStats.distributionHint", { n: data?.systems.length || 0 })}
           >
             <RankBars
               wide
               medal
               emptyText={t("codeStats.noCommits")}
-              items={(data?.projects || []).map((p) => ({ label: p.path, value: p.commits }))}
+              items={(data?.systems || []).map((p) => ({ label: p.path, value: p.commits }))}
             />
           </Section>
         </>
@@ -437,7 +437,7 @@ export default function CodeStats({ groupId, projectId }: { groupId?: number; pr
         <Section title={t("codeStats.hotFiles")} hint={t("codeStats.hotFilesHint")}>
           <ResizableTable
             size="small"
-            rowKey={(r) => `${r.project_id}:${r.path}`}
+            rowKey={(r) => `${r.system_id}:${r.path}`}
             loading={loading}
             pagination={PAGE}
             dataSource={data?.hot_files || []}
@@ -454,7 +454,7 @@ export default function CodeStats({ groupId, projectId }: { groupId?: number; pr
               },
               {
                 title: t("codeStats.colProject"),
-                dataIndex: "project",
+                dataIndex: "system",
                 ellipsis: { showTitle: false },
                 render: (v: string) => (
                   <Tooltip title={v} placement="topLeft" mouseEnterDelay={0.15}>

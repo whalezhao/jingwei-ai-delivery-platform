@@ -27,7 +27,7 @@ from ..models import (
     PlanMessage,
     PlanReview,
     PlanVersion,
-    Project,
+    System,
     Requirement,
     RequirementDoc,
     RunnerNode,
@@ -73,13 +73,13 @@ def _join_tags(tags: list[str]) -> str | None:
 def req_to_out(
     r: Requirement,
     claimant: Person | None = None,
-    project: Project | None = None,
+    project: System | None = None,
     proposer: Person | None = None,
 ) -> dict:
     return {
         "id": r.id,
-        "project_id": r.project_id,
-        "project_name": project.name if project else None,
+        "system_id": r.system_id,
+        "system_name": project.name if project else None,
         "code": r.code,
         "title": r.title,
         "description": r.description,
@@ -134,24 +134,24 @@ async def _get_req_open(db: AsyncSession, req_id: int, me: Person) -> Requiremen
 
 @router.get("", response_model=list[RequirementOut])
 async def list_requirements(
-    project_id: int | None = None,
+    system_id: int | None = None,
     group_id: int | None = None,
     status: str | None = None,
     db: AsyncSession = Depends(get_db),
     me: Person = Depends(current_person),
 ) -> list[RequirementOut]:
     q = select(Requirement).order_by(Requirement.id.desc())
-    if project_id:
-        q = q.where(Requirement.project_id == project_id)
+    if system_id:
+        q = q.where(Requirement.system_id == system_id)
     if group_id:
-        q = q.join(Project, Requirement.project_id == Project.id).where(Project.group_id == group_id)
+        q = q.join(System, Requirement.system_id == System.id).where(System.group_id == group_id)
     if status:
         q = q.where(Requirement.status == status)
     rows = (await db.scalars(q)).all()
     projects = {
         p.id: p
         for p in (
-            await db.scalars(select(Project).where(Project.id.in_([r.project_id for r in rows])))
+            await db.scalars(select(System).where(System.id.in_([r.system_id for r in rows])))
         ).all()
     }
     # 一次取全量定稿文档的需求 id，避免 N 次查
@@ -167,7 +167,7 @@ async def list_requirements(
         # 列表照旧全量可见（只读摘要）；can_open / can_claim 告诉前端能不能点进详情、能不能认领
         out.append(
             {
-                **req_to_out(r, claimant, projects.get(r.project_id), proposer),
+                **req_to_out(r, claimant, projects.get(r.system_id), proposer),
                 "can_open": _can_open(r, me),
                 "can_claim": _can_claim(r, me, r.id in finalized),
             }
@@ -182,7 +182,7 @@ async def get_requirement(
     req = await _get_req_open(db, req_id, me)
     claimant = await db.get(Person, req.claimant_id) if req.claimant_id else None
     proposer = await db.get(Person, req.proposer_id) if req.proposer_id else None
-    project = await db.get(Project, req.project_id)
+    project = await db.get(System, req.system_id)
     return {
         **req_to_out(req, claimant, project, proposer),
         "can_open": True,
@@ -194,12 +194,12 @@ async def get_requirement(
 async def create_requirement(
     body: RequirementIn, db: AsyncSession = Depends(get_db), me: Person = Depends(current_person)
 ) -> RequirementOut:
-    project = await db.get(Project, body.project_id)
+    project = await db.get(System, body.system_id)
     if not project:
-        raise HTTPException(404, "项目不存在")
+        raise HTTPException(404, "系统不存在")
     code = await next_requirement_code(db, project.code_prefix)
     req = Requirement(
-        project_id=project.id,
+        system_id=project.id,
         code=code,
         title=body.title,
         description=body.description,
@@ -237,7 +237,7 @@ async def update_requirement(
     await db.commit()
     await db.refresh(req)
     claimant = await db.get(Person, req.claimant_id) if req.claimant_id else None
-    project = await db.get(Project, req.project_id)
+    project = await db.get(System, req.system_id)
     return req_to_out(req, claimant, project)
 
 
@@ -256,7 +256,7 @@ async def update_requirement_tags(
     await db.commit()
     await db.refresh(req)
     claimant = await db.get(Person, req.claimant_id) if req.claimant_id else None
-    project = await db.get(Project, req.project_id)
+    project = await db.get(System, req.system_id)
     return req_to_out(req, claimant, project)
 
 
@@ -588,7 +588,7 @@ async def claim(
     req = await _get_req(db, req_id)
     if req.status not in ("pool",):
         raise HTTPException(400, f"需求当前状态 {req.status} 不可认领")
-    project = await db.get(Project, req.project_id)
+    project = await db.get(System, req.system_id)
     gm = await db.scalar(
         select(GroupMember).where(GroupMember.group_id == project.group_id, GroupMember.person_id == me.id)
     )
@@ -662,7 +662,7 @@ async def _has_final_doc(db: AsyncSession, req_id: int) -> bool:
 async def _plan_context(db: AsyncSession, req: Requirement) -> str:
     """首轮注入的需求上下文（项目信息）。文档不注入文本——runner 会下载原始文件到节点，
     由 claude 自行读取解析（设计约定：平台只做传递，不替模型解析）。"""
-    project = await db.get(Project, req.project_id)
+    project = await db.get(System, req.system_id)
     parts = [
         f"需求：{req.code}《{req.title}》",
         f"项目：{project.path}（默认分支 {project.default_branch}）",
@@ -701,7 +701,7 @@ async def post_plan_message(
     if egm and mode != "plan":
         raise HTTPException(400, "EGM 设计技能只在方案讨论里可用（需求文档定稿后）")
 
-    project = await db.get(Project, req.project_id)
+    project = await db.get(System, req.system_id)
     group = await db.get(DevGroup, project.group_id)
     gm = await db.scalar(
         select(GroupMember).where(GroupMember.group_id == group.id, GroupMember.person_id == req.claimant_id)
@@ -884,7 +884,7 @@ async def _enqueue_plan_review(
     db: AsyncSession, req: Requirement, version: PlanVersion, *, trigger: str
 ) -> PlanReview:
     """建评审行并投 egm_review 任务；手动按钮与「采用即评审」共用同一条链路。"""
-    project = await db.get(Project, req.project_id)
+    project = await db.get(System, req.system_id)
     group = await db.get(DevGroup, project.group_id)
     person = await db.get(Person, req.claimant_id) if req.claimant_id else None
     env = build_claude_env(
@@ -1252,7 +1252,7 @@ async def finalize_plan_version(
 
     # 定稿 → 单任务入池：大任务的并行拆解由主 agent 在执行期自行开子 agent 完成
     # （子 agent 进展经事件的 parent 字段外露），平台不再做需求级任务拆解。
-    project = await db.get(Project, req.project_id)
+    project = await db.get(System, req.system_id)
     group = await db.get(DevGroup, project.group_id)
     from .tasks import enqueue_dev_task
 

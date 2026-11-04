@@ -11,7 +11,17 @@ from ..config import get_settings
 from ..crypto import decrypt
 from ..db import get_db
 from ..llm import am_user_key, build_claude_env, resolve_llm
-from ..models import DevGroup, DevTask, DevTaskEvent, GroupMember, Person, Project, Requirement, RequirementDoc
+from ..models import (
+    DevGroup,
+    DevTask,
+    DevTaskEvent,
+    GroupMember,
+    Person,
+    PersonGitlabAccount,
+    System,
+    Requirement,
+    RequirementDoc,
+)
 from ..numbering import gen_session_id
 from ..queue import enqueue
 from ..schemas import DevTaskOut
@@ -79,7 +89,7 @@ async def _runner_names(db: AsyncSession, task_ids: list[int]) -> dict[int, str]
 @router.get("", response_model=list[DevTaskOut])
 async def list_tasks(
     requirement_id: int | None = None,
-    project_id: int | None = None,
+    system_id: int | None = None,
     group_id: int | None = None,
     status: str | None = None,
     q: str | None = None,
@@ -89,14 +99,14 @@ async def list_tasks(
     stmt = select(DevTask).order_by(DevTask.id.desc())
     if requirement_id:
         stmt = stmt.where(DevTask.requirement_id == requirement_id)
-    if project_id:
-        stmt = stmt.where(DevTask.requirement_id.in_(select(Requirement.id).where(Requirement.project_id == project_id)))
+    if system_id:
+        stmt = stmt.where(DevTask.requirement_id.in_(select(Requirement.id).where(Requirement.system_id == system_id)))
     if group_id:
         stmt = stmt.where(
             DevTask.requirement_id.in_(
                 select(Requirement.id)
-                .join(Project, Requirement.project_id == Project.id)
-                .where(Project.group_id == group_id)
+                .join(System, Requirement.system_id == System.id)
+                .where(System.group_id == group_id)
             )
         )
     if status:
@@ -149,7 +159,7 @@ async def task_detail(
 
     task = await _get_open_task(db, task_id, me)
     req = await db.get(Requirement, task.requirement_id)
-    project = await db.get(Project, req.project_id)
+    project = await db.get(System, req.system_id)
 
     siblings = (
         await db.scalars(select(DevTask).where(DevTask.requirement_id == req.id).order_by(DevTask.id))
@@ -183,7 +193,7 @@ async def task_detail(
             "status": req.status,
             "plan_md": req.plan_md,
         },
-        "project": {"id": project.id, "name": project.name} if project else None,
+        "system": {"id": project.id, "name": project.name} if project else None,
         "final_doc": (
             {"id": final_doc.id, "filename": final_doc.filename, "version": final_doc.version}
             if final_doc
@@ -229,8 +239,34 @@ GIT_RULES = """## Git 门禁（必须遵守）
 """
 
 
+async def _creator_gitlab(
+    db: AsyncSession, group: DevGroup, creator: Person
+) -> tuple[str | None, PersonGitlabAccount | None, str | None]:
+    """本人在本组绑定的 GitLab 身份：返回 (token, account, 错误原因)。
+
+    组机器账号只用于平台级只读操作；开发任务的 push/MR 必须用本人账号，
+    否则多组之间没有权限隔离、提交也会记到机器账号头上。
+    """
+    if not group.gitlab_base_url:
+        return None, None, "研发组未配置 GitLab"
+    gm = await db.scalar(
+        select(GroupMember).where(GroupMember.group_id == group.id, GroupMember.person_id == creator.id)
+    )
+    if not gm or not gm.gitlab_account_id:
+        return None, None, "该成员未绑定本研发组的 GitLab 账号"
+    acc = await db.get(PersonGitlabAccount, gm.gitlab_account_id)
+    if not acc:
+        return None, None, "绑定的 GitLab 账号不存在"
+    if acc.base_url.rstrip("/") != group.gitlab_base_url.rstrip("/"):
+        return None, None, "绑定的 GitLab 账号不属于本组的 GitLab 实例"
+    token = decrypt(get_settings().secret_key, acc.token_enc)
+    if not token:
+        return None, None, "绑定的 GitLab 账号缺少 token"
+    return token, acc, None
+
+
 async def enqueue_dev_task(
-    db: AsyncSession, task: DevTask, req: Requirement, project: Project, group: DevGroup
+    db: AsyncSession, task: DevTask, req: Requirement, project: System, group: DevGroup
 ) -> str | None:
     """构造每任务独立的 prompt/分支并入队（confirm 自动入池与手工派发共用）。
     组 GitLab 未配置时返回 None（任务留 pending，配置好后手工派发）。"""
@@ -238,11 +274,11 @@ async def enqueue_dev_task(
     gm = await db.scalar(
         select(GroupMember).where(GroupMember.group_id == group.id, GroupMember.person_id == creator.id)
     )
-    token = decrypt(get_settings().secret_key, group.gitlab_token_enc)
-    if not (group.gitlab_base_url and token):
+    token, acc, _err = await _creator_gitlab(db, group, creator)
+    if not token:
         return None
 
-    username = creator.gitlab_username or creator.name
+    username = (acc.username if acc else None) or creator.gitlab_username or creator.name
     # 每任务独立分支（t<n}）：同需求多任务并行 push 不会互相覆盖
     n = task.code.rsplit("-", 1)[-1]
     branch = f"feature/{project.code_prefix.lower()}/{username}/{req.code}/t{n}"
@@ -318,11 +354,12 @@ async def dispatch_task(
         raise HTTPException(403, "只有下发人可派发")
 
     req = await db.get(Requirement, task.requirement_id)
-    project = await db.get(Project, req.project_id)
+    project = await db.get(System, req.system_id)
     group = await db.get(DevGroup, project.group_id)
-    token = decrypt(get_settings().secret_key, group.gitlab_token_enc)
-    if not (group.gitlab_base_url and token):
-        raise HTTPException(400, "研发组未配置 GitLab")
+    creator = await db.get(Person, task.creator_id)
+    _token, _acc, err = await _creator_gitlab(db, group, creator)
+    if err:
+        raise HTTPException(400, err)
 
     branch = await enqueue_dev_task(db, task, req, project, group)
     await db.commit()

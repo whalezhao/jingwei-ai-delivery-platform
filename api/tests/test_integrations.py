@@ -19,7 +19,7 @@ async def test_webhook_two_groups_by_secret(client, db, seeded):
 
     def push(token: str) -> dict:
         return dict(
-            json={"project_id": 1, "user_name": "x", "ref": "refs/heads/a", "total_commits_count": 1, "after": "c1"},
+            json={"system_id": 1, "user_name": "x", "ref": "refs/heads/a", "total_commits_count": 1, "after": "c1"},
             headers={"X-Gitlab-Event": "Push Hook", "X-Gitlab-Token": token},
         )
 
@@ -70,7 +70,7 @@ async def test_events_and_notify_logs_paged(client, admin_client, db, seeded):
 
 async def test_log_search_filters(admin_client, db, seeded):
     """q 走服务端过滤：通知查正文/原因，MR 查标题/项目路径，事件查类型。"""
-    from vega.models import MrReview, Project
+    from vega.models import MrReview, System
 
     gid = seeded["group"].id
     db.add_all(
@@ -79,7 +79,7 @@ async def test_log_search_filters(admin_client, db, seeded):
             NotifyLog(group_id=gid, reason="mr_review", content="别的通知", ok=True),
         ]
     )
-    proj = Project(
+    proj = System(
         group_id=gid,
         gitlab_project_id=901,
         path="grp/nightly-target",
@@ -93,11 +93,11 @@ async def test_log_search_filters(admin_client, db, seeded):
     db.add_all(
         [
             MrReview(
-                project_id=proj.id, group_id=gid, mr_iid=1, head_sha="a" * 40,
+                system_id=proj.id, group_id=gid, mr_iid=1, head_sha="a" * 40,
                 title="修复登录", verdict="approve",
             ),
             MrReview(
-                project_id=proj.id, group_id=gid, mr_iid=2, head_sha="b" * 40,
+                system_id=proj.id, group_id=gid, mr_iid=2, head_sha="b" * 40,
                 title="调整样式", verdict="approve",
             ),
         ]

@@ -5,7 +5,7 @@ from __future__ import annotations
 from conftest import login_as
 
 from vega.jobs import MR_CLOSED_MARK
-from vega.models import DevTask, MrReview, PlanMessage, PlanVersion, ProjectOwner, RequirementDoc
+from vega.models import DevTask, MrReview, PlanMessage, PlanVersion, SystemOwner, RequirementDoc
 from vega.routers.workbench import requirement_graduation, task_outcome
 
 
@@ -35,13 +35,13 @@ async def test_workbench_graduation_filter(client, db, seeded):
     client.headers["Authorization"] = f"Bearer {token}"
     pid, proj = seeded["project"].id, seeded["project"].id
     r1 = (
-        await client.post("/api/requirements", json={"project_id": pid, "title": "毕业需求", "description": "d"})
+        await client.post("/api/requirements", json={"system_id": pid, "title": "毕业需求", "description": "d"})
     ).json()["id"]
     r2 = (
-        await client.post("/api/requirements", json={"project_id": proj, "title": "在读需求", "description": "d"})
+        await client.post("/api/requirements", json={"system_id": proj, "title": "在读需求", "description": "d"})
     ).json()["id"]
     # r3：没有定稿文档 → 还没进入跟踪流程
-    await client.post("/api/requirements", json={"project_id": proj, "title": "未定稿需求", "description": "d"})
+    await client.post("/api/requirements", json={"system_id": proj, "title": "未定稿需求", "description": "d"})
 
     # r1：两任务全 done（一个 merged 一个关闭）→ 收尾
     for err in (None, MR_CLOSED_MARK):
@@ -54,7 +54,7 @@ async def test_workbench_graduation_filter(client, db, seeded):
         db.add(RequirementDoc(requirement_id=rid, filename="需求.md", version=1, is_final=True, content=b"x"))
     await db.commit()
 
-    base = f"/api/workbench?project_id={proj}"
+    base = f"/api/workbench?system_id={proj}"
     d = (await client.get(base)).json()
     assert [r["id"] for r in d["requirements"]] == [r2]  # 收尾的退场，未定稿的不进场
     assert "graduated_summary" not in d  # 已毕业名册已下线
@@ -67,13 +67,13 @@ async def test_workbench_expert_attribution(client, db, seeded):
     client.headers["Authorization"] = f"Bearer {token}"
     pid = seeded["project"].id
     rid = (
-        await client.post("/api/requirements", json={"project_id": pid, "title": "专家", "description": "d"})
+        await client.post("/api/requirements", json={"system_id": pid, "title": "专家", "description": "d"})
     ).json()["id"]
     await client.post(f"/api/requirements/{rid}/claim")
     db.add(RequirementDoc(requirement_id=rid, filename="需求.md", version=1, is_final=True, content=b"x"))
     await db.commit()
 
-    base = {"project_id": pid}
+    base = {"system_id": pid}
 
     # 还没聊过 → 两个专家都为空
     row = next(r for r in (await client.get("/api/workbench", params=base)).json()["requirements"] if r["id"] == rid)
@@ -102,9 +102,9 @@ async def test_workbench_project_gates(client, db, seeded):
     proj = seeded["project"]
     proj.audit_prefixes = ["api/"]
     proj.auto_approve_prefixes = ["api/"]
-    db.add(ProjectOwner(project_id=proj.id, person_id=seeded["person"].id))
+    db.add(SystemOwner(system_id=proj.id, person_id=seeded["person"].id))
     rid = (
-        await client.post("/api/requirements", json={"project_id": proj.id, "title": "配置", "description": "d"})
+        await client.post("/api/requirements", json={"system_id": proj.id, "title": "配置", "description": "d"})
     ).json()["id"]
     db.add(RequirementDoc(requirement_id=rid, filename="需求.md", version=2, is_final=True, content=b"x"))
     db.add(PlanVersion(requirement_id=rid, version=3, content="方案", is_final=True))
@@ -112,13 +112,13 @@ async def test_workbench_project_gates(client, db, seeded):
     db.add(task)
     await db.flush()
     db.add(
-        MrReview(project_id=proj.id, group_id=proj.group_id, mr_iid=9, head_sha="a" * 40, verdict="approve")
+        MrReview(system_id=proj.id, group_id=proj.group_id, mr_iid=9, head_sha="a" * 40, verdict="approve")
     )
     await db.commit()
 
     row = next(
         r
-        for r in (await client.get("/api/workbench", params={"project_id": proj.id})).json()["requirements"]
+        for r in (await client.get("/api/workbench", params={"system_id": proj.id})).json()["requirements"]
         if r["id"] == rid
     )
     assert row["doc"]["version"] == 2 and row["doc"]["filename"] == "需求.md"

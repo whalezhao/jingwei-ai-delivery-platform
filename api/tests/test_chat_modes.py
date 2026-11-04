@@ -21,7 +21,7 @@ async def _login(client, db, seeded):
 
 async def _new_req(client, db, seeded, **extra) -> int:
     r = await client.post(
-        "/api/requirements", json={"project_id": seeded["project"].id, "title": "双模式", **extra}
+        "/api/requirements", json={"system_id": seeded["project"].id, "title": "双模式", **extra}
     )
     assert r.status_code == 200, r.text
     req_id = r.json()["id"]

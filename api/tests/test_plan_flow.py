@@ -51,7 +51,7 @@ async def test_plan_turn_loop(admin_client, client, db, seeded, claude_stub):
     _, zhangsan = await login_as(client, db, seeded["person"].gitlab_username)
     token, _ = await login_as(client, db, seeded["person"].gitlab_username)
     client.headers["Authorization"] = f"Bearer {token}"
-    r = await client.post("/api/requirements", json={"project_id": seeded["project"].id, "title": "需求A"})
+    r = await client.post("/api/requirements", json={"system_id": seeded["project"].id, "title": "需求A"})
     req_id = r.json()["id"]
     await client.post(f"/api/requirements/{req_id}/claim")
     # 需求文档定稿后才允许方案讨论（首版上传即定稿）
@@ -168,7 +168,7 @@ async def test_plan_turn_session_rebuild(admin_client, client, db, seeded, claud
 
         token, _ = await login_as(client, db, seeded["person"].gitlab_username)
         client.headers["Authorization"] = f"Bearer {token}"
-        r = await client.post("/api/requirements", json={"project_id": seeded["project"].id, "title": "会话重建"})
+        r = await client.post("/api/requirements", json={"system_id": seeded["project"].id, "title": "会话重建"})
         req_id = r.json()["id"]
         await client.post(f"/api/requirements/{req_id}/claim")
         # 方案讨论要求需求文档已定稿（首版上传即定稿）
@@ -211,7 +211,7 @@ async def test_plan_events_persist_for_replay(admin_client, client, db, seeded):
     token, _ = await login_as(client, db, seeded["person"].gitlab_username)
     client.headers["Authorization"] = f"Bearer {token}"
     req_id = (
-        await client.post("/api/requirements", json={"project_id": seeded["project"].id, "title": "过程回放"})
+        await client.post("/api/requirements", json={"system_id": seeded["project"].id, "title": "过程回放"})
     ).json()["id"]
     await client.post(f"/api/requirements/{req_id}/claim")
 
@@ -290,7 +290,7 @@ async def test_doc_raw_chinese_filename(admin_client, client, db, seeded):
     token, _ = await login_as(client, db, seeded["person"].gitlab_username)
     client.headers["Authorization"] = f"Bearer {token}"
     req_id = (
-        await client.post("/api/requirements", json={"project_id": seeded["project"].id, "title": "带文档"})
+        await client.post("/api/requirements", json={"system_id": seeded["project"].id, "title": "带文档"})
     ).json()["id"]
 
     content = "接入暗号：北极星-42".encode()

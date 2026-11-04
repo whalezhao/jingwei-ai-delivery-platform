@@ -39,7 +39,7 @@ async def test_matching_pipeline(db, seeded, monkeypatch):
         )
     ).all()
 
-    async def fake_ai(group, people, octo_members):
+    async def fake_ai(group, people, octo_members, aliases=None):
         out = {}
         for p in people:
             if p.name == "李四":
@@ -83,7 +83,7 @@ async def test_manual_lock_never_overwritten(db, seeded, monkeypatch):
     # 别的 uid 明明规则可配，但 manual 锁优先
     members2 = {"u1": seeded["person"].gitlab_username, "u9": "张三本人"}
 
-    async def fake_ai(group, people, octo_members):
+    async def fake_ai(group, people, octo_members, aliases=None):
         return {}
 
     monkeypatch.setattr("vega.matching.ai_match", fake_ai)
@@ -160,8 +160,25 @@ async def test_gitlab_username_rebind_releases_previous(admin_client, db, seeded
     assert r.status_code == 200 and r.json()["released"] == "张三"
 
     db.expire_all()
-    assert (await db.get(Person, p1_id)).gitlab_username is None
-    assert (await db.get(Person, p2_id)).gitlab_username == "shared-acct"
+    from sqlalchemy import select
+
+    from vega.models import PersonGitlabAccount
+
+    acc = await db.scalar(
+        select(PersonGitlabAccount).where(
+            PersonGitlabAccount.base_url == "http://gitlab.test",
+            PersonGitlabAccount.username == "shared-acct",
+        )
+    )
+    assert acc and acc.person_id == p2_id
+    gm1 = await db.scalar(
+        select(GroupMember).where(GroupMember.group_id == gid, GroupMember.person_id == p1_id)
+    )
+    assert gm1.gitlab_account_id is None
+    gm2 = await db.scalar(
+        select(GroupMember).where(GroupMember.group_id == gid, GroupMember.person_id == p2_id)
+    )
+    assert gm2.gitlab_account_id == acc.id
 
 
 # ---------- octo 客户端：群列表 + 成员失败原因（成员配对页不再静默 0 人） ----------

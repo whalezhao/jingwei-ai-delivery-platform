@@ -13,7 +13,7 @@ from vega.models import Person, Requirement
 async def _mk_req(client, db, seeded, title: str = "角色需求") -> int:
     token, _ = await login_as(client, db, seeded["person"].gitlab_username)
     client.headers["Authorization"] = f"Bearer {token}"
-    r = await client.post("/api/requirements", json={"project_id": seeded["project"].id, "title": title})
+    r = await client.post("/api/requirements", json={"system_id": seeded["project"].id, "title": title})
     assert r.status_code == 200, r.text
     return r.json()["id"]
 
@@ -23,7 +23,9 @@ async def _add_member(db, group_id: int, name: str, roles: list[str], password: 
     from vega.auth import hash_password
     from vega.models import GroupMember
 
-    p = Person(name=name, gitlab_username=name, roles=roles, password_hash=hash_password(password))
+    p = Person(
+        name=name, username=name, gitlab_username=name, roles=roles, password_hash=hash_password(password)
+    )
     db.add(p)
     await db.flush()
     db.add(GroupMember(group_id=group_id, person_id=p.id))

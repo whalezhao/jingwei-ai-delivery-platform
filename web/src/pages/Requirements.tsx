@@ -12,8 +12,8 @@ import type { MsgKey } from "../i18n";
 
 interface Req {
   id: number;
-  project_id: number;
-  project_name: string | null;
+  system_id: number;
+  system_name: string | null;
   code: string;
   title: string;
   description: string | null;
@@ -47,15 +47,15 @@ const ITER: Record<string, [string, MsgKey]> = {
 
 const SETUP_ITEMS: [keyof Setup, MsgKey, string][] = [
   ["gitlab", "requirements.setupGitlab", "/groups"],
-  ["project", "requirements.setupProject", "/projects"],
+  ["system", "requirements.setupProject", "/systems"],
   ["people", "requirements.setupPeople", "/people"],
-  ["am", "requirements.setupAm", "/projects"],
+  ["am", "requirements.setupAm", "/systems"],
   ["runner", "requirements.setupRunner", "/nodes"],
 ];
 
 interface Setup {
   gitlab: boolean;
-  project: boolean;
+  system: boolean;
   people: boolean;
   am: boolean;
   runner: boolean;
@@ -80,9 +80,9 @@ export default function Requirements() {
   const load = async () => {
     const p = new URLSearchParams();
     if (groupId) p.set("group_id", String(groupId));
-    if (projFilter) p.set("project_id", String(projFilter));
+    if (projFilter) p.set("system_id", String(projFilter));
     setRows(await api<Req[]>(`/api/requirements?${p}`));
-    setProjects(await api<any[]>(`/api/projects${groupId ? `?group_id=${groupId}` : ""}`));
+    setProjects(await api<any[]>(`/api/systems${groupId ? `?group_id=${groupId}` : ""}`));
     if (isAdmin()) setSetup(await api<Setup>("/api/setup"));
   };
   useEffect(() => {
@@ -97,7 +97,7 @@ export default function Requirements() {
     setEditing(r);
     setOpen(true);
     form.setFieldsValue({
-      project_id: r.project_id,
+      system_id: r.system_id,
       title: r.title,
       description: r.description,
     });
@@ -144,7 +144,7 @@ export default function Requirements() {
       (!iterFilter || r.iteration_status === iterFilter) &&
       (!tagFilter || (r.tags || []).includes(tagFilter)) &&
       (!term ||
-        [r.code, r.title, r.description, r.project_name, r.claimant_name, r.proposer_name]
+        [r.code, r.title, r.description, r.system_name, r.claimant_name, r.proposer_name]
           .some((s) => (s || "").toLowerCase().includes(term))),
   );
   const filtering = !!(projFilter || statusFilter || iterFilter || tagFilter || term);
@@ -280,7 +280,7 @@ export default function Requirements() {
             },
             {
               title: t("requirements.colProject"),
-              dataIndex: "project_name",
+              dataIndex: "system_name",
               width: 130,
               ellipsis: true,
               render: (v) => v || "—",
@@ -408,7 +408,7 @@ export default function Requirements() {
         <Form
           form={form}
           layout="vertical"
-          initialValues={{ project_id: projects[0]?.id }}
+          initialValues={{ system_id: projects[0]?.id }}
           onFinish={async (v) => {
             try {
               if (editing) {
@@ -435,7 +435,7 @@ export default function Requirements() {
           }}
         >
           <Form.Item
-            name="project_id"
+            name="system_id"
             label={t("requirements.projectLabel")}
             rules={[{ required: true }]}
             tooltip={t("requirements.projectTooltip")}
