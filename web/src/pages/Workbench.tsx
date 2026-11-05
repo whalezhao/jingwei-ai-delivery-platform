@@ -54,6 +54,7 @@ interface Req {
   id: number;
   code: string;
   title: string;
+  req_type: "requirement" | "bug";
   status: string;
   can_open: boolean;
   claimant_name: string | null;
@@ -161,7 +162,8 @@ const NODE_LABEL: Record<NodeKey, MsgKey> = {
 /** 项目配置决定轨道长度：评审/CI 看 audit_prefixes，自动合并看 auto_approve_prefixes；
  *  缺哪段就在 MR 建好后交给负责人（octo 通知），不再画空节点。 */
 function nodeKeys(r: Req): NodeKey[] {
-  const keys: NodeKey[] = ["doc", "plan", "dev"];
+  // Bug 没有需求文档阶段，轨道从方案开始
+  const keys: NodeKey[] = r.req_type === "bug" ? ["plan", "dev"] : ["doc", "plan", "dev"];
   if (r.review_on) keys.push("review", "ci");
   if (r.review_on && r.merge_on) keys.push("merge");
   else keys.push("notify");
@@ -201,7 +203,8 @@ function taskStage(task: Task, r: Req): NodeKey {
  */
 function reqNodes(r: Req): { key: NodeKey; label: MsgKey; state: St }[] {
   const keys = nodeKeys(r);
-  const state: Record<string, St> = { doc: "ok", plan: r.plan_final ? "ok" : "live" };
+  const state: Record<string, St> = { plan: r.plan_final ? "ok" : "live" };
+  if (r.req_type !== "bug") state.doc = "ok";
   const open = r.tasks.filter((task) => !task.outcome && task.status !== "failed");
   if (r.plan_final && open.length) {
     const at = (task: Task) => keys.indexOf(taskStage(task, r));

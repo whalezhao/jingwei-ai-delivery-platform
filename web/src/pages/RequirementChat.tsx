@@ -1290,7 +1290,11 @@ export default function RequirementChat() {
 
   // 阶段由文档/方案是否定稿决定；提到 SSE effect 之前，effect 才能依赖它按模式重连
   const chatMode: "requirement" | "plan" | null =
-    req && req.status === "claimed" ? (docs.some((d) => d.is_final) ? "plan" : "requirement") : null;
+    req && req.status === "claimed"
+      ? req.req_type === "bug" || docs.some((d) => d.is_final)
+        ? "plan"
+        : "requirement"
+      : null;
 
   const reload = async () => {
     // 被他人认领后详情只对认领人开放：后端 403 就停在这里给出提示，
@@ -1686,9 +1690,12 @@ export default function RequirementChat() {
   const planFinal = ["confirmed", "archived", "online"].includes(req.status);
   const examples = examplesFor(chatMode ?? "plan");
   // 池中却认领不了 = 角色不对：文档已定稿该开发上，没定稿该产品上
-  const claimHint = docs.some((d) => d.is_final)
-    ? t("reqChat.claimHintFinalized")
-    : t("reqChat.claimHintUnfinalized");
+  const claimHint =
+    req.req_type === "bug"
+      ? t("reqChat.claimHintBug")
+      : docs.some((d) => d.is_final)
+        ? t("reqChat.claimHintFinalized")
+        : t("reqChat.claimHintUnfinalized");
 
   /** 附件卡片的图标（按文件名后缀）。 */
   const fileIcon = (name: string): "markdown" | "word" | "default" =>
@@ -1863,6 +1870,7 @@ export default function RequirementChat() {
           {/* 左：文件列表（需求文档多版本 + 方案版本）+ 任务池 + 需求信息 */}
           <Col xs={24} lg={5}>
             <div className="panel rc-files">
+              {req.req_type !== "bug" && (<>
               <h4>
                 {t("reqChat.docSection")}{" "}
                 {!planFinal && (
@@ -1912,6 +1920,7 @@ export default function RequirementChat() {
                   <span className="rc-file-ver">v{d.version}</span>
                 </div>
               ))}
+              </>)}
               {planVers.length > 0 && (
                 <>
                   <h4 style={{ marginTop: 12 }}>{t("reqChat.planVersions")}</h4>
@@ -1963,6 +1972,9 @@ export default function RequirementChat() {
               <h4>{t("reqChat.reqInfo")}</h4>
               <Descriptions size="small" column={1}>
                 <Descriptions.Item label={t("reqChat.fDesc")}>{req.description || "—"}</Descriptions.Item>
+                <Descriptions.Item label={t("reqChat.fType")}>
+                  {req.req_type === "bug" ? t("requirements.typeBug") : t("requirements.typeRequirement")}
+                </Descriptions.Item>
                 <Descriptions.Item label={t("reqChat.fProject")}>{req.system_name || `#${req.system_id}`}</Descriptions.Item>
                 <Descriptions.Item label={t("reqChat.fClaimant")}>{req.claimant_name || "—"}</Descriptions.Item>
                 <Descriptions.Item label={t("reqChat.fProposer")}>{req.proposer_name || "—"}</Descriptions.Item>

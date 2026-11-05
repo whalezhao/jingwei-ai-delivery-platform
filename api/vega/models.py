@@ -238,6 +238,8 @@ class Requirement(Base):
     code: Mapped[str] = mapped_column(String(64), unique=True)  # REQ-PMS-2610-007
     title: Mapped[str] = mapped_column(String(256))
     description: Mapped[str | None] = mapped_column(Text)
+    # requirement / bug：Bug 没有需求文档，认领后直接进入方案讨论
+    req_type: Mapped[str] = mapped_column(String(16), default="requirement")
     # pool / claimed / planned / confirmed / archived / online（已上线）
     status: Mapped[str] = mapped_column(String(16), default="pool", index=True)
     # 迭代版本标签，逗号分隔（如 V2.3,V2.4）；迭代状态不落库，由 status==online 推导成「正式」

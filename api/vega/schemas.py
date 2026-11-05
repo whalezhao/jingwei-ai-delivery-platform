@@ -264,6 +264,7 @@ class RequirementIn(BaseModel):
     system_id: int
     title: str
     description: str | None = None
+    req_type: Literal["requirement", "bug"] = "requirement"
 
 
 class RequirementUpdate(BaseModel):
@@ -286,6 +287,7 @@ class RequirementOut(BaseModel):
     code: str
     title: str
     description: str | None
+    req_type: str = "requirement"
     status: str
     # formal（正式）/ iterating（迭代中）：已上线自动算正式
     iteration_status: str = "iterating"

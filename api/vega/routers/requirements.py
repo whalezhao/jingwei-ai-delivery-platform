@@ -83,6 +83,7 @@ def req_to_out(
         "code": r.code,
         "title": r.title,
         "description": r.description,
+        "req_type": r.req_type,
         "status": r.status,
         # 迭代中 → 已上线自动转正式；不落库，避免与 status 不一致
         "iteration_status": "formal" if r.status == "online" else "iterating",
@@ -109,7 +110,9 @@ def _can_claim(req: Requirement, me: Person, has_final_doc: bool) -> bool:
         return False
     if me.is_admin:
         return True
-    return ("dev" if has_final_doc else "product") in (me.roles or [])
+    # Bug 没有需求文档阶段，认领就要开发；普通需求按文档是否定稿分两段
+    need = "dev" if (req.req_type == "bug" or has_final_doc) else "product"
+    return need in (me.roles or [])
 
 
 def _can_open(req: Requirement, me: Person) -> bool:
@@ -203,6 +206,7 @@ async def create_requirement(
         code=code,
         title=body.title,
         description=body.description,
+        req_type=body.req_type,
     )
     db.add(req)
     await db.commit()
@@ -314,6 +318,7 @@ async def upload_doc(
     me: Person = Depends(current_person),
 ) -> dict:
     req = await _get_req(db, req_id)
+    _reject_bug_doc(req)
     # 池中没人认领过的需求允许直接上传（录需求的一种方式）；已被认领或已由产品定稿
     # 移交出去之后，只能认领人自己传——否则别人可以往别人手里的需求塞文档
     if req.claimant_id != me.id and (req.claimant_id is not None or req.proposer_id is not None) and not me.is_admin:
@@ -352,6 +357,7 @@ async def finalize_doc(
     「需求提出人」，此后不再能打开详情。身兼开发的定稿人不必来回交接，认领权留在自己手上。
     """
     req = await _get_req(db, req_id)
+    _reject_bug_doc(req)
     if req.claimant_id != me.id and not me.is_admin:
         raise HTTPException(403, "只有认领人可定稿文档")
     if req.status in ("confirmed", "archived", "online"):
@@ -390,6 +396,7 @@ async def unfinalize_doc(
     需求讨论本来就是产品那一段的活。
     """
     req = await _get_req(db, req_id)
+    _reject_bug_doc(req)
     if me.id not in (req.claimant_id, req.proposer_id) and not me.is_admin:
         raise HTTPException(403, "只有认领人或提出人可撤回定稿")
     if req.status not in ("pool", "claimed"):
@@ -415,6 +422,7 @@ async def create_doc_from_ai(
 ) -> dict:
     """人点「采用为文档」：把需求讨论里 AI 给出的正文落成新版本（非定稿）。"""
     req = await _get_req(db, req_id)
+    _reject_bug_doc(req)
     if req.claimant_id != me.id and not me.is_admin:
         raise HTTPException(403, "只有认领人可采用文档")
     if req.status in ("confirmed", "archived", "online"):
@@ -595,13 +603,16 @@ async def claim(
     if not gm and not me.is_admin:
         raise HTTPException(403, "只有该研发组成员可认领")
 
-    # 两段式：需求文档没定稿前是产品的活（写需求），定稿之后交回池子给开发（做方案开发）
+    # Bug 没有需求文档阶段，直接由开发认领做方案；普通需求按文档定稿分两段
     if not me.is_admin:
-        need, why = (
-            ("dev", "需求已定稿，只能由开发认领")
-            if await _has_final_doc(db, req.id)
-            else ("product", "需求未定稿，只能由产品认领")
-        )
+        if req.req_type == "bug":
+            need, why = "dev", "Bug 直接进入方案阶段，只能由开发认领"
+        else:
+            need, why = (
+                ("dev", "需求已定稿，只能由开发认领")
+                if await _has_final_doc(db, req.id)
+                else ("product", "需求未定稿，只能由产品认领")
+            )
         if need not in (me.roles or []):
             raise HTTPException(403, why)
 
@@ -623,7 +634,7 @@ _PLAN_RULE = """[输出约定]
 <!-- vega:ask:begin -->
 {"question": "要问的问题", "options": [{"label": "选项名", "desc": "一句说明"}]}
 <!-- vega:ask:end -->
-需求文档已定稿，本轮只讨论方案，不再修改需求文档。
+本轮只讨论技术方案，不涉及需求文档。
 讨论、确认、反问不要写进方案标记；本轮没有方案/问题就不要写对应标记。"""
 
 
@@ -634,7 +645,7 @@ _EGM_RULE = """[EGM 设计模式]
 {"question": "要问的问题", "options": [{"label": "选项名", "desc": "一句说明"}]}
 <!-- vega:ask:end -->
 不要再输出 vega:plan 标记块——平台会直接把 design_draft.md 作为可采用的方案卡片。
-需求文档已定稿，本轮只讨论方案，不再修改需求文档。"""
+本轮只讨论技术方案，不涉及需求文档。"""
 
 
 _DOC_RULE = """[输出约定]
@@ -659,12 +670,18 @@ async def _has_final_doc(db: AsyncSession, req_id: int) -> bool:
     )
 
 
+def _reject_bug_doc(req: Requirement) -> None:
+    """Bug 没有需求文档阶段，文档相关接口一律拒绝。"""
+    if req.req_type == "bug":
+        raise HTTPException(400, "Bug 没有需求文档，直接进行方案设计")
+
+
 async def _plan_context(db: AsyncSession, req: Requirement) -> str:
     """首轮注入的需求上下文（项目信息）。文档不注入文本——runner 会下载原始文件到节点，
     由 claude 自行读取解析（设计约定：平台只做传递，不替模型解析）。"""
     project = await db.get(System, req.system_id)
     parts = [
-        f"需求：{req.code}《{req.title}》",
+        f"{'Bug' if req.req_type == 'bug' else '需求'}：{req.code}《{req.title}》",
         f"项目：{project.path}（默认分支 {project.default_branch}）",
     ]
     if req.description:
@@ -686,10 +703,12 @@ async def post_plan_message(
     if req.status in ("confirmed", "archived", "online"):
         raise HTTPException(400, "需求已定稿")
 
-    # 需求文档定稿前只能聊需求（AI 可改文档）；定稿后才能聊方案
-    allowed = "plan" if await _has_final_doc(db, req.id) else "requirement"
+    # Bug 直接聊方案；普通需求在文档定稿前只能聊需求（AI 可改文档）
+    allowed = "plan" if (req.req_type == "bug" or await _has_final_doc(db, req.id)) else "requirement"
     mode = body.mode or allowed
     if mode != allowed:
+        if req.req_type == "bug":
+            raise HTTPException(400, "Bug 没有需求文档，请直接进行方案讨论")
         raise HTTPException(
             400,
             "需求文档已定稿，请切换到方案讨论"

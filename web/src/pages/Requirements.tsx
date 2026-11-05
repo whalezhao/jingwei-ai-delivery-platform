@@ -17,6 +17,7 @@ interface Req {
   code: string;
   title: string;
   description: string | null;
+  req_type: "requirement" | "bug";
   status: string;
   iteration_status: string;
   tags: string[];
@@ -43,6 +44,11 @@ const STATUS: Record<string, [string, MsgKey]> = {
 const ITER: Record<string, [string, MsgKey]> = {
   iterating: ["blue", "requirements.iter.iterating"],
   formal: ["green", "requirements.iter.formal"],
+};
+
+const TYPE: Record<string, [string, MsgKey]> = {
+  requirement: ["blue", "requirements.typeRequirement"],
+  bug: ["orange", "requirements.typeBug"],
 };
 
 const SETUP_ITEMS: [keyof Setup, MsgKey, string][] = [
@@ -98,6 +104,7 @@ export default function Requirements() {
     setOpen(true);
     form.setFieldsValue({
       system_id: r.system_id,
+      req_type: r.req_type,
       title: r.title,
       description: r.description,
     });
@@ -261,6 +268,15 @@ export default function Requirements() {
               render: (v) => <span className="mono">{v}</span>,
             },
             {
+              title: t("requirements.colType"),
+              dataIndex: "req_type",
+              width: 80,
+              render: (v) => {
+                const pair = TYPE[v];
+                return <Tag color={pair?.[0] ?? "default"}>{pair ? t(pair[1]) : v}</Tag>;
+              },
+            },
+            {
               title: t("requirements.colTitle"),
               dataIndex: "title",
               ellipsis: true,
@@ -408,7 +424,7 @@ export default function Requirements() {
         <Form
           form={form}
           layout="vertical"
-          initialValues={{ system_id: projects[0]?.id }}
+          initialValues={{ system_id: projects[0]?.id, req_type: "requirement" }}
           onFinish={async (v) => {
             try {
               if (editing) {
@@ -448,6 +464,15 @@ export default function Requirements() {
                 value: p.id,
                 label: `${p.path}（${p.code_prefix}）`,
               }))}
+            />
+          </Form.Item>
+          <Form.Item name="req_type" label={t("requirements.typeLabel")}>
+            <Select
+              disabled={!!editing}
+              options={[
+                { value: "requirement", label: t("requirements.typeRequirement") },
+                { value: "bug", label: t("requirements.typeBug") },
+              ]}
             />
           </Form.Item>
           <Form.Item name="title" label={t("requirements.titleLabel")} rules={[{ required: true }]}>

@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import select, tuple_
+from sqlalchemy import or_, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth import current_person
@@ -89,12 +89,15 @@ async def workbench(
     if not pids:
         return {"requirements": [], "default_group_id": default_group_id}
 
-    # 跟踪初态是「需求定稿」：没有定稿文档的需求还没进流程，不展示
+    # 跟踪初态是「需求定稿」；Bug 没有需求文档，建单即进入跟踪
     final_req_ids = select(RequirementDoc.requirement_id).where(RequirementDoc.is_final.is_(True))
     reqs = (
         await db.scalars(
             select(Requirement)
-            .where(Requirement.system_id.in_(pids), Requirement.id.in_(final_req_ids))
+            .where(
+                Requirement.system_id.in_(pids),
+                or_(Requirement.id.in_(final_req_ids), Requirement.req_type == "bug"),
+            )
             .order_by(Requirement.id.desc())
             .limit(50)
         )
@@ -299,6 +302,7 @@ async def workbench(
                 "id": r.id,
                 "code": r.code,
                 "title": r.title,
+                "req_type": r.req_type,
                 "status": r.status,
                 "can_open": req_open,
                 "claimant_name": claimants.get(r.claimant_id),
