@@ -1205,22 +1205,22 @@ a.wb-chip:hover {
   border-color: #1677ff;
   color: #1677ff;
 }
-/* 输入框下方：团队/专家选择器（每轮随请求头发给后端） */
-.rc-sender-foot {
+/* 输入框底部工具条：附件 / 团队专家 / EGM，都是小按钮，悬浮出面板 */
+.rc-sender-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.rc-assets {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin-top: 4px;
+  gap: 8px;
+  width: 240px;
 }
-.rc-sender-tip {
+.rc-assets-tip {
   font-size: 12px;
   line-height: 1.4;
   color: rgba(0, 0, 0, 0.45);
-}
-.rc-sender-foot-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
 }
 .rc-ask-label {
   font-weight: 600;
@@ -1500,9 +1500,9 @@ a.wb-chip.live:hover {
   gap: 6px;
 }
 /* 思考链占满整行：气泡默认按内容收缩，链会被挤成一条窄柱 */
-.rc-proc-bubble,
-.rc-proc-bubble .ant-bubble-body,
-.rc-proc-bubble .ant-bubble-content {
+.rc-turn-bubble,
+.rc-turn-bubble .ant-bubble-body,
+.rc-turn-bubble .ant-bubble-content {
   width: 100%;
   max-width: 100%;
 }

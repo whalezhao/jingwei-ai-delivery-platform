@@ -59,7 +59,7 @@ def _payload(req_id: int, url: str | None = None) -> dict:
 async def _run_turn(monkeypatch, runner: Runner, payload: dict) -> dict:
     seen: dict = {}
 
-    async def fake_run_claude(args, env, *, cwd=None, prompt=None):
+    async def fake_run_claude(args, env, *, cwd=None, prompt=None, partial=False):
         seen["cwd"] = cwd
         yield {"kind": "result", "text": "答"}
 

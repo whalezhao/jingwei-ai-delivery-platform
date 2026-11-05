@@ -4,12 +4,13 @@
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 
 from sqlalchemy import select
 
 from vega.config import get_settings
 from vega.crypto import decrypt
-from vega.models import Requirement, RunnerTask
+from vega.models import Requirement, RunnerNode, RunnerTask, utcnow
 
 
 async def _login(client, db, seeded):
@@ -472,3 +473,29 @@ async def test_finalize_doc_requires_claimant_and_claimed(admin_client, client, 
     assert (
         await client.post(f"/api/requirements/{req_id}/docs/{doc['id']}/finalize")
     ).status_code == 400
+
+
+async def test_plan_message_rejected_without_online_runner(admin_client, client, db, seeded):
+    """没有在线 Runner 时直接拒发：否则消息永远 queued，前端一直显示「已等待」。"""
+    await _login(client, db, seeded)
+    req_id = await _new_req(client, db, seeded)
+
+    for n in (await db.scalars(select(RunnerNode))).all():
+        n.last_heartbeat = utcnow() - timedelta(minutes=5)
+    await db.commit()
+    r = await client.post(f"/api/requirements/{req_id}/plan/messages", json={"content": "在吗"})
+    assert r.status_code == 409 and "没有在线" in r.json()["detail"]
+
+    # 粘住的节点离线：别的节点在线也领不走，同样不能收
+    dead = RunnerNode(
+        name="node-dead", token_hash="dead", status="online", last_heartbeat=utcnow() - timedelta(minutes=5)
+    )
+    db.add(dead)
+    await db.flush()
+    req = await db.get(Requirement, req_id)
+    req.plan_runner_id = dead.id
+    live = await db.scalar(select(RunnerNode).where(RunnerNode.name == "node-default"))
+    live.last_heartbeat = utcnow()
+    await db.commit()
+    r = await client.post(f"/api/requirements/{req_id}/plan/messages", json={"content": "在吗"})
+    assert r.status_code == 409 and "绑定" in r.json()["detail"]

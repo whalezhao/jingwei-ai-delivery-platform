@@ -44,7 +44,7 @@ async def test_mr_review_runs_in_own_worktree(tmp_path, monkeypatch):
 
     seen: dict = {}
 
-    async def fake_run_claude(args, env, *, cwd=None, prompt=None):
+    async def fake_run_claude(args, env, *, cwd=None, prompt=None, partial=False):
         # 评审期间：目录存在，且就在被审的那个提交上
         seen["cwd"] = cwd
         seen["head"] = _rev(Path(cwd), "HEAD")

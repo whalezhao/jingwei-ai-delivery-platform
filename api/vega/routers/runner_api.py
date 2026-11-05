@@ -30,6 +30,7 @@ from ..models import (
     EgmReport,
     MrReview,
     Person,
+    PlanAttachment,
     PlanEvent,
     PlanReview,
     System,
@@ -98,6 +99,11 @@ async def next_task(
     async def alive() -> bool:
         return not await request.is_disconnected()
 
+    # 长轮询本身就是存活信号：刚启动、还没发第一次心跳的节点也能立刻接单
+    node.last_heartbeat = utcnow()
+    node.status = "online"
+    await db.commit()
+
     claimed = await claim_next(node.id, wait_s=min(wait, 50.0), alive=alive)
     if not claimed:
         return {"task": None}
@@ -141,6 +147,25 @@ async def get_doc_raw(
     return Response(
         doc.content,
         media_type="application/octet-stream",
+        headers={"content-disposition": f"attachment; filename*=UTF-8''{fn}"},
+    )
+
+
+@router.get("/requirements/{req_id}/attachments/{att_id}/raw")
+async def get_attachment_raw(
+    req_id: int,
+    att_id: int,
+    node: RunnerNode = Depends(_auth_node),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """runner 下载对话附件原始字节（图片由节点上的 claude 直接 Read）。"""
+    att = await db.get(PlanAttachment, att_id)
+    if not att or att.requirement_id != req_id:
+        raise HTTPException(404, "附件不存在")
+    fn = quote(att.filename)
+    return Response(
+        att.content,
+        media_type=att.mime or "application/octet-stream",
         headers={"content-disposition": f"attachment; filename*=UTF-8''{fn}"},
     )
 
@@ -217,12 +242,22 @@ async def post_events(
         if task.dev_task_id and _is_token_tick(evt):
             continue
         kind = evt.get("kind")
+        if kind in ("text_delta", "thinking_delta"):
+            # 增量帧：主会话正文进打字机气泡，思考（及子代理增量）进过程链。
+            # 整块事件随后还会到，带 streamed 标记，直播这里跳过避免重复
+            if kind == "text_delta" and not evt.get("parent"):
+                _pub(task.requirement_id, {"type": "plan_text", "text": evt.get("text", ""), "mode": plan_mode})
+            elif not task.dev_task_id:
+                _pub(task.requirement_id, {"type": "plan_raw", "event": evt, "mode": plan_mode})
+            continue
         if kind == "text" and not evt.get("parent"):
-            # plan 直播气泡只吃主会话文本；子 agent 输出走 dev_raw 泳道
-            _pub(task.requirement_id, {"type": "plan_text", "text": evt.get("text", ""), "mode": plan_mode})
+            # plan 直播气泡只吃主会话文本；逐帧下发过的整块不再重复
+            if not evt.get("streamed"):
+                _pub(task.requirement_id, {"type": "plan_text", "text": evt.get("text", ""), "mode": plan_mode})
         elif kind == "text" and not task.dev_task_id:
             # 子 agent 正文不并进主气泡，交给前端挂到派发它的 Agent 节点里
-            _pub(task.requirement_id, {"type": "plan_raw", "event": evt, "mode": plan_mode})
+            if not evt.get("streamed"):
+                _pub(task.requirement_id, {"type": "plan_raw", "event": evt, "mode": plan_mode})
         elif kind == "raw":
             # 原始流事件：开发任务走 live 频道；plan 任务（thinking_tokens 计量、
             # task_progress 子代理进度）走 plan 频道，前端渲染思考块+子代理进展
@@ -235,7 +270,10 @@ async def post_events(
             _pub(task.requirement_id, {"type": "dev_raw", "task_id": task_id, "event": evt})
         elif kind in ("thinking", "tool_use", "tool_result"):
             # plan 会话过程（含子 agent，事件自带 parent）直播；前端按 parent 分包，
-            # 主链只留一个 Agent 节点，子事件嵌在里面
+            # 主链只留一个 Agent 节点，子事件嵌在里面。
+            # 逐帧下发过的思考块只落库回放，直播跳过避免长出第二个节点
+            if kind == "thinking" and evt.get("streamed"):
+                continue
             _pub(task.requirement_id, {"type": "plan_raw", "event": evt, "mode": plan_mode})
     return {"ok": True}
 

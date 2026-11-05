@@ -3,6 +3,7 @@
 输出 stream-json 解析为归一化事件流：
   {kind: "text", text}          — assistant 文本
   {kind: "thinking", text}      — 思考过程
+  {kind: "text_delta"/"thinking_delta", text} — 逐帧增量（partial 模式）
   {kind: "tool_use", id, name, input} — 工具调用（id 用于子 agent 归属）
   {kind: "tool_result", content, is_error} — 工具结果
   {kind: "result", text, is_error} — 终态全文
@@ -45,12 +46,16 @@ async def run_claude(
     *,
     cwd: str | None = None,
     prompt: str | None = None,
+    partial: bool = False,
 ) -> AsyncIterator[dict]:
     """spawn claude -p …，逐行解析 stream-json 并归一化产出。"""
     s = get_settings()
     # effort 是解析链（人员→组→兜底）的产物，随 claude_env 下发；pop 掉避免混进子进程 env
     effort = env_extra.pop("VEGA_CLAUDE_EFFORT", "")
     argv = [s.claude_bin, "-p", "--output-format", "stream-json", "--verbose"]
+    if partial:
+        # 不加这个 CLI 只在整块生成完后才吐 assistant 事件，前端只能整段浮现
+        argv.append("--include-partial-messages")
     if effort:
         argv += ["--effort", effort]
     argv += args
@@ -69,6 +74,8 @@ async def run_claude(
         env=env,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        # Read 图片的工具结果是单行超长 base64，默认 64KiB 行上限会 ValueError 打断整轮
+        limit=32 * 1024 * 1024,
     )
 
     async def drain_stderr() -> str:
@@ -76,6 +83,8 @@ async def run_claude(
 
     stderr_task = asyncio.create_task(drain_stderr())
     terminal = ""  # 最后一次 result 事件的摘要：退出码非 0 时它是真正的死因（stderr 常只有无关告警）
+    # 本消息已经逐帧下发的块类型：整块事件仍产出（落库回放要用），但标 streamed 让直播端去重
+    streamed: set[tuple[str, str]] = set()
     assert proc.stdout
     try:
         async for line in proc.stdout:
@@ -93,9 +102,11 @@ async def run_claude(
                 for block in evt.get("message", {}).get("content", []):
                     t = block.get("type")
                     if t == "text" and block.get("text"):
-                        yield {"kind": "text", "text": _cap(block["text"]), "parent": parent}
+                        flag = {"streamed": True} if (parent, "text") in streamed else {}
+                        yield {"kind": "text", "text": _cap(block["text"]), "parent": parent, **flag}
                     elif t == "thinking" and block.get("thinking"):
-                        yield {"kind": "thinking", "text": _cap(block["thinking"]), "parent": parent}
+                        flag = {"streamed": True} if (parent, "thinking") in streamed else {}
+                        yield {"kind": "thinking", "text": _cap(block["thinking"]), "parent": parent, **flag}
                     elif t == "tool_use":
                         yield {
                             "kind": "tool_use",
@@ -116,6 +127,23 @@ async def run_claude(
                             "is_error": bool(block.get("is_error")),
                             "parent": parent,
                         }
+            elif kind == "stream_event":
+                # partial 模式的原生 SSE 帧。子代理目前不走增量（parent 恒空），
+                # 所以增量只当主会话；未知帧（message_start 等）直接吞掉，别当 raw 落库
+                inner = evt.get("event") or {}
+                it = inner.get("type")
+                if it in ("message_start", "message_stop"):
+                    streamed.discard((parent, "text"))
+                    streamed.discard((parent, "thinking"))
+                elif it == "content_block_delta":
+                    d = inner.get("delta") or {}
+                    dt = d.get("type")
+                    if dt == "text_delta" and d.get("text"):
+                        streamed.add((parent, "text"))
+                        yield {"kind": "text_delta", "text": d["text"], "parent": parent}
+                    elif dt == "thinking_delta" and d.get("thinking"):
+                        streamed.add((parent, "thinking"))
+                        yield {"kind": "thinking_delta", "text": d["thinking"], "parent": parent}
             elif kind == "result":
                 terminal = json.dumps(
                     {k: evt.get(k) for k in ("subtype", "terminal_reason", "num_turns", "errors")},

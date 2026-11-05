@@ -20,18 +20,24 @@ export default function AmSelect({
   placeholder,
   value,
   onChange,
+  onLabelChange,
   size,
   style,
   prefix,
+  getPopupContainer,
 }: {
   kind: "team" | "agent";
   teamId?: string; // kind=agent 时生效
   placeholder?: string;
   value?: string | null;
   onChange?: (v: string | undefined) => void;
+  // 选项页要在按钮上显示选中的名字：值可能是历史回放（非点选），只能由列表解析
+  onLabelChange?: (name: string | undefined) => void;
   size?: "small" | "middle" | "large";
   style?: CSSProperties;
   prefix?: ReactNode;
+  // 放进 Popover 时指回容器：下拉在弹层内部展开，鼠标移过去不会触发弹层 mouseleave
+  getPopupContainer?: (triggerNode: HTMLElement) => HTMLElement;
 }) {
   const { t } = useTranslation();
   const [options, setOptions] = useState<AmItem[]>([]);
@@ -63,6 +69,11 @@ export default function AmSelect({
     if (value && (kind === "team" || teamId)) load(true);
   }, [value, kind, teamId, load]);
 
+  const selectedName = fallback ? (value ?? undefined) : options.find((o) => o.id === value)?.name;
+  useEffect(() => {
+    onLabelChange?.(selectedName);
+  }, [selectedName, onLabelChange]);
+
   if (fallback) {
     return (
       <Input
@@ -87,6 +98,7 @@ export default function AmSelect({
       onChange={onChange}
       value={value ?? undefined}
       optionFilterProp="label"
+      getPopupContainer={getPopupContainer}
       options={options.map((o) => ({
         value: o.id,
         label: o.description ? `${o.name}（${o.description.slice(0, 20)}）` : o.name,

@@ -353,6 +353,26 @@ class PlanMessage(Base):
     created_at: Mapped[datetime] = mapped_column(TZDateTime, default=utcnow)
 
 
+class PlanAttachment(Base):
+    """需求对话的附件：上传后暂挂，随消息发出时绑定 message_id。
+
+    平台只存原始字节并转给 runner，解析（含图片）交给节点上的 claude。
+    """
+
+    __tablename__ = "plan_attachment"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    requirement_id: Mapped[int] = mapped_column(ForeignKey("requirement.id"), index=True)
+    message_id: Mapped[int | None] = mapped_column(ForeignKey("plan_message.id"), index=True)
+    uploaded_by: Mapped[int] = mapped_column(ForeignKey("person.id"))
+    filename: Mapped[str] = mapped_column(String(256))
+    mime: Mapped[str] = mapped_column(String(128), default="application/octet-stream")
+    # 列表/回放只取元数据，不把图片字节一起读进内存
+    size: Mapped[int] = mapped_column(Integer, default=0)
+    content: Mapped[bytes] = mapped_column(LargeBinary)
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, default=utcnow)
+
+
 class PlanEvent(Base):
     """plan 会话过程留痕（思考/工具链/子代理进度）：SSE 只广播，刷新后要能回放思考链。
 

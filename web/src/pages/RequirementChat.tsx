@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import Page from "../Page";
-import { Bubble, FileCard, Prompts, Sender } from "@ant-design/x";
+import { Attachments, Bubble, FileCard, Prompts, Sender } from "@ant-design/x";
 import ThoughtChain from "@ant-design/x/es/thought-chain";
 import type { ThoughtChainItemType } from "@ant-design/x/es/thought-chain";
 import {
@@ -12,6 +12,7 @@ import {
   Col,
   Descriptions,
   Drawer,
+  Dropdown,
   Empty,
   Modal,
   Popconfirm,
@@ -28,6 +29,7 @@ import {
 import { ProCard } from "@ant-design/pro-components";
 import {
   ApartmentOutlined,
+  AuditOutlined,
   BulbOutlined,
   CheckCircleFilled,
   CheckOutlined,
@@ -44,14 +46,18 @@ import {
   InboxOutlined,
   LoadingOutlined,
   MessageOutlined,
+  PaperClipOutlined,
   QuestionCircleOutlined,
   RobotOutlined,
   SearchOutlined,
   StopOutlined,
+  TeamOutlined,
   ToolOutlined,
   UserOutlined,
 } from "@ant-design/icons";
+import type { MenuProps } from "antd";
 import Markdown from "react-markdown";
+import type { UploadFile } from "antd";
 import { useTranslation } from "react-i18next";
 import AmSelect from "../components/AmSelect";
 import DocPreview from "../components/DocPreview";
@@ -68,7 +74,12 @@ interface Msg {
   agent_id?: string | null;
   /** 该轮 AI 的思考/工具过程（后端随消息回放，刷新后思考链不丢） */
   events?: any[];
+  /** 该轮用户上传的附件（后端回放；乐观气泡先用本地文件名） */
+  attachments?: { id: number; filename: string; mime?: string }[];
 }
+
+const MAX_ATTACHMENTS = 10;
+const MAX_ATTACHMENT_MB = 10;
 
 /** 问答选择框（Claude ask 的前端呈现）：一个问题 + 若干可点选项，悬在输入框上方。 */
 interface Ask {
@@ -1263,6 +1274,10 @@ export default function RequirementChat() {
   const [preview, setPreview] = useState<Preview>(null);
   const [err, setErr] = useState("");
   const [input, setInput] = useState("");
+  // 未发送的附件：点发送时先逐个上传，再把 id 绑到这条消息上
+  const [files, setFiles] = useState<UploadFile[]>([]);
+  const attRef = useRef<any>(null);
+  const assetsRef = useRef<HTMLDivElement>(null);
   const [ask, setAsk] = useState<Ask | null>(null);
   // 本轮 plan 会话过程（主会话思考/工具事件，SSE plan_raw 实时流入；下一轮发送时清空）
   const [liveEvts, setLiveEvts] = useState<any[]>([]);
@@ -1278,6 +1293,9 @@ export default function RequirementChat() {
   // 输入框里的团队/专家：每轮随消息下发，切换后下一轮的 claude 请求头即生效
   const [teamId, setTeamId] = useState<string | null>(null);
   const [agentId, setAgentId] = useState<string | null>(null);
+  // 列表里解析出的名字：选过专家后按钮直接显示专家名，不再只是"团队 / 专家"
+  const [teamName, setTeamName] = useState<string>();
+  const [agentName, setAgentName] = useState<string>();
   // 主区（需求对话）与右侧 AI 栏之间的分隔条：宽度可拖，记住上次位置
   const [dockW, setDockW] = useState<number>(() => {
     const v = Number(localStorage.getItem("vega.dockW"));
@@ -1415,6 +1433,20 @@ export default function RequirementChat() {
                     const i = list.findIndex((s) => s.key === item.key);
                     return i >= 0 ? list.map((s, j) => (j === i ? item : s)) : [...list, item];
                   });
+                } else if (e.kind === "text_delta" || e.kind === "thinking_delta") {
+                  // 增量帧并进同 parent 的上一个同类节点：一个 token 一个节点会把链撑爆
+                  const kind = e.kind === "text_delta" ? "text" : "thinking";
+                  const p = e.parent || "";
+                  setLiveEvts((l) => {
+                    let i = l.length - 1;
+                    while (i >= 0 && (l[i].parent || "") !== p) i--;
+                    if (i >= 0 && l[i].live && l[i].kind === kind) {
+                      const next = l.slice();
+                      next[i] = { ...next[i], text: (next[i].text || "") + (e.text || "") };
+                      return next;
+                    }
+                    return [...l, { kind, text: e.text || "", parent: p, live: true }];
+                  });
                 } else {
                   // 归一化块（thinking / tool_use / tool_result）自带 kind；system 事件
                   //（task_started / hook_* / api_retry …）只有 type/subtype，补 raw 才能进链
@@ -1467,6 +1499,23 @@ export default function RequirementChat() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reqId, chatMode, streamNonce]);
 
+  /** 逐个上传待发附件；任何一个失败就整轮不发，已传的留作下次重试（会重复，但不会丢内容）。 */
+  const uploadFiles = async (list: UploadFile[]): Promise<number[]> => {
+    const ids: number[] = [];
+    for (const f of list) {
+      const raw = f.originFileObj as File | undefined;
+      if (!raw) continue;
+      const fd = new FormData();
+      fd.append("file", raw, f.name);
+      const d = await api<{ id: number }>(`/api/requirements/${reqId}/plan/attachments`, {
+        method: "POST",
+        body: fd,
+      });
+      ids.push(d.id);
+    }
+    return ids;
+  };
+
   const send = async (
     text: string,
     egm?: "brainstorm" | "draft" | "resolve",
@@ -1477,8 +1526,26 @@ export default function RequirementChat() {
     setLiveEvts([]);
     setSubs([]);
     setThinkTokens(0);
+    const sending = files;
+    let attachmentIds: number[] = [];
+    if (sending.length) {
+      try {
+        attachmentIds = await uploadFiles(sending);
+      } catch (e: any) {
+        setErr(e.message); // 附件没传成，消息不发，输入框内容保留
+        return;
+      }
+    }
     const optimisticId = -Date.now();
-    setMsgs((m) => [...m, { id: optimisticId, role: "user", content: text }]);
+    setMsgs((m) => [
+      ...m,
+      {
+        id: optimisticId,
+        role: "user",
+        content: text,
+        attachments: sending.map((f) => ({ id: 0, filename: f.name })),
+      },
+    ]);
     setBusy(true);
     busyRef.current = true;
     try {
@@ -1486,6 +1553,7 @@ export default function RequirementChat() {
         method: "POST",
         body: JSON.stringify({
           content: text,
+          attachment_ids: attachmentIds,
           mode: chatMode,
           team_id: teamId,
           agent_id: agentId,
@@ -1493,6 +1561,8 @@ export default function RequirementChat() {
           review_id: reviewId,
         }),
       });
+      // 发送成功后只清掉这一批，期间新加的附件保留
+      setFiles((prev) => prev.filter((f) => !sending.some((s) => s.uid === f.uid)));
     } catch (e: any) {
       // 服务端拒收（如另一标签页已把阶段推进）时收回乐观气泡
       setMsgs((m) => m.filter((x) => x.id !== optimisticId));
@@ -1708,68 +1778,123 @@ export default function RequirementChat() {
   // 评审是独立任务：主对话的 busy 不亮，靠 running 的评审记录判断这批事件还在跑
   const reviewRunning = reviews.some((r) => r.status === "running");
   const liveTurn = !!(busy || streaming || (reviewRunning && liveEvts.length > 0));
-  // 消息 → 气泡：带过程事件的 AI 回复前面插入该轮的思考链（顺序与直播一致）
+  // EGM 能力收进输入框旁的悬浮下拉：每项一个独立图标，不再占一整行
+  const latestDoneReview = reviews.find((r) => r.status === "done");
+  const egmMenu: MenuProps["items"] = [
+    {
+      key: "brainstorm",
+      icon: <BulbOutlined />,
+      label: t("reqChat.brainstorm"),
+      disabled: busy,
+      onClick: () => send(t("reqChat.brainstormPrompt"), "brainstorm"),
+    },
+    {
+      key: "draft",
+      icon: <EditOutlined />,
+      label: t("reqChat.draft"),
+      disabled: busy,
+      onClick: () => send(t("reqChat.draftPrompt"), "draft"),
+    },
+    { type: "divider" },
+    {
+      key: "review",
+      icon: <AuditOutlined />,
+      label: t("reqChat.startReview"),
+      disabled: !planVers.length || reviewBusy,
+      onClick: runReview,
+    },
+    {
+      key: "revise",
+      icon: <ToolOutlined />,
+      label: t("reqChat.reviseByVerdict"),
+      disabled: busy || !latestDoneReview,
+      onClick: () => latestDoneReview && send(t("reqChat.revisePrompt"), "resolve", latestDoneReview.id),
+    },
+    {
+      key: "reports",
+      icon: <FileTextOutlined />,
+      label: (
+        <Badge
+          dot={reviews.some((r) => r.status === "done" && r.blockers > 0)}
+          offset={[6, -2]}
+          title={t("reqChat.hasBlockers")}
+        >
+          {t("reqChat.reports")}
+          {reviews.length ? ` (${reviews.length})` : ""}
+        </Badge>
+      ),
+      onClick: () => setReviewOpen(true),
+    },
+  ];
+  // 消息 → 气泡：一轮 AI 回复只占一个气泡，思考链在上、回答在下（同 Claude 等主流对话形态）
   const bubbles: any[] = [];
   msgs.forEach((m) => {
-    if (m.role === "assistant" && m.events?.length) {
-      bubbles.push({
-        key: `__proc-${m.id}`,
-        role: "process",
-        content: <TurnChain evts={m.events} prefix={`m${m.id}`} />,
-      });
-    }
+    const body =
+      m.role === "assistant" ? (
+        <AssistantBody
+          text={m.content}
+          onAdopt={chatMode === "plan" ? adoptPlan : undefined}
+          onAdoptDoc={chatMode === "requirement" ? adoptDoc : undefined}
+          onPick={
+            chatable && !busy && !streaming && m.id === lastAskId ? (label) => send(label) : undefined
+          }
+        />
+      ) : (
+        <div>
+          {m.content}
+          {!!m.attachments?.length && (
+            <div style={{ marginTop: 6, display: "flex", gap: 4, flexWrap: "wrap" }}>
+              {m.attachments.map((a, i) => (
+                <Tag key={`${a.id}-${a.filename}-${i}`} icon={<PaperClipOutlined />}>
+                  {a.filename}
+                </Tag>
+              ))}
+            </div>
+          )}
+        </div>
+      );
     bubbles.push({
       key: String(m.id),
       role: m.role,
       content:
-        m.role === "assistant" ? (
-          <AssistantBody
-            text={m.content}
-            onAdopt={chatMode === "plan" ? adoptPlan : undefined}
-            onAdoptDoc={chatMode === "requirement" ? adoptDoc : undefined}
-            onPick={
-              chatable && !busy && !streaming && m.id === lastAskId
-                ? (label) => send(label)
-                : undefined
-            }
-          />
+        m.role === "assistant" && m.events?.length ? (
+          <>
+            <TurnChain evts={m.events} prefix={`m${m.id}`} />
+            {body}
+          </>
         ) : (
-          m.content
+          body
         ),
     });
   });
-  // 等待首字节：骨架加载泡（Bubble loading）；流式回复：打字机逐字浮现
-  if (busy && !streaming)
-    bubbles.push({
-      key: "__loading",
-      role: "assistant",
-      content: "",
-      loading: true,
-      loadingRender: () => <LoadingWait />,
-    });
-  if (streaming)
-    bubbles.push({
-      key: "__streaming",
-      role: "assistant",
-      content: streaming,
-      // 内容已经整块到手，打字机只是过场：约 375 字/秒，长回复不拖几十秒
-      typing: { effect: "typing", step: 6, interval: 16 },
-    });
 
-  // 本轮实时思考链：插在用户提问之后、正在生成的回复之前；
+  // 本轮直播：等待首字节 / 流式回答 / 实时思考链同处一个气泡，答案直接长在链下面；
   // 本轮结束（plan_done）后清空实时态，改由落库事件随消息回放，刷新也不丢
-  if (liveEvts.length > 0 || subs.length > 0) {
-    bubbles.splice(busy || streaming ? bubbles.length - 1 : bubbles.length, 0, {
-      key: "__process",
-      role: "process",
+  if (busy || streaming || liveEvts.length > 0 || subs.length > 0) {
+    bubbles.push({
+      key: "__live",
+      role: "assistant",
       content: (
-        <TurnChain
-          evts={liveEvts}
-          prefix="live"
-          live={liveTurn}
-          subs={subs}
-          thinkTokens={thinkTokens}
-        />
+        <>
+          {(liveEvts.length > 0 || subs.length > 0) && (
+            <TurnChain
+              evts={liveEvts}
+              prefix="live"
+              live={liveTurn}
+              subs={subs}
+              thinkTokens={thinkTokens}
+            />
+          )}
+          {streaming ? (
+            <AssistantBody
+              text={streaming}
+              onAdopt={chatMode === "plan" ? adoptPlan : undefined}
+              onAdoptDoc={chatMode === "requirement" ? adoptDoc : undefined}
+            />
+          ) : (
+            busy && <LoadingWait />
+          )}
+        </>
       ),
     });
   }
@@ -2152,14 +2277,18 @@ export default function RequirementChat() {
           <div className="rc-dock-head">
             <span>{t("reqChat.aiChat")}</span>
             {chatMode && (
-              // 阶段由文档/方案是否定稿决定，另一侧不可用即当前阶段
+              // 阶段由文档/方案是否定稿决定，另一侧不可用即当前阶段；Bug 没有需求阶段，不显示需求讨论
               <Segmented
                 size="small"
                 value={chatMode}
-                options={[
-                  { label: t("reqChat.tabReq"), value: "requirement", disabled: chatMode !== "requirement" },
-                  { label: t("reqChat.tabPlan"), value: "plan", disabled: chatMode !== "plan" },
-                ]}
+                options={
+                  req.req_type === "bug"
+                    ? [{ label: t("reqChat.tabPlan"), value: "plan", disabled: chatMode !== "plan" }]
+                    : [
+                        { label: t("reqChat.tabReq"), value: "requirement", disabled: chatMode !== "requirement" },
+                        { label: t("reqChat.tabPlan"), value: "plan", disabled: chatMode !== "plan" },
+                      ]
+                }
               />
             )}
             <Tag color={st?.[0] ?? "default"}>{st ? t(st[1]) : req.status}</Tag>
@@ -2266,17 +2395,10 @@ export default function RequirementChat() {
                       variant: "filled",
                       avatar: <Avatar icon={<UserOutlined />} style={{ background: "#1677ff" }} />,
                     },
-                    process: {
-                      placement: "start",
-                      variant: "borderless",
-                      // 气泡默认按内容收缩，思考链会被挤成一条窄柱
-                      rootClassName: "rc-proc-bubble",
-                      // 每轮链各自成泡（content 已是 TurnChain 元素），不套统一渲染
-                      contentRender: (c: any) => c,
-                    },
                     assistant: {
                       placement: "start",
                       variant: "outlined",
+                      rootClassName: "rc-turn-bubble",
                       avatar: (
                         <Avatar
                           icon={<RobotOutlined />}
@@ -2284,17 +2406,8 @@ export default function RequirementChat() {
                         />
                       ),
                       header: <span className="rc-bubble-name">Vega AI</span>,
-                      // 历史消息在 bubbles 里已渲染成元素；流式气泡仍是字符串，现算
-                      contentRender: (c: any) =>
-                        typeof c === "string" ? (
-                          <AssistantBody
-                            text={c}
-                            onAdopt={chatMode === "plan" ? adoptPlan : undefined}
-                            onAdoptDoc={chatMode === "requirement" ? adoptDoc : undefined}
-                          />
-                        ) : (
-                          c
-                        ),
+                      // 内容已是渲染好的元素（含思考链 + 正文），原样交给气泡
+                      contentRender: (c: any) => c,
                       styles: { content: { fontSize: 13, lineHeight: 1.7 } },
                     },
                   }}
@@ -2328,43 +2441,6 @@ export default function RequirementChat() {
                   ))}
                 </div>
               )}
-              {chatMode === "plan" && (
-                <Space size={6} wrap style={{ marginTop: 8 }}>
-                  <Button size="small" disabled={busy} onClick={() => send(t("reqChat.brainstormPrompt"), "brainstorm")}>
-                    {t("reqChat.brainstorm")}
-                  </Button>
-                  <Button size="small" disabled={busy} onClick={() => send(t("reqChat.draftPrompt"), "draft")}>
-                    {t("reqChat.draft")}
-                  </Button>
-                  <Button
-                    size="small"
-                    icon={<EgmMark />}
-                    loading={reviewBusy}
-                    disabled={!planVers.length}
-                    onClick={runReview}
-                  >
-                    {t("reqChat.startReview")}
-                  </Button>
-                  <Badge
-                    dot={reviews.some((r) => r.status === "done" && r.blockers > 0)}
-                    title={t("reqChat.hasBlockers")}
-                  >
-                    <Button
-                      size="small"
-                      disabled={busy || !reviews.some((r) => r.status === "done")}
-                      onClick={() => {
-                        const latest = reviews.find((r) => r.status === "done");
-                        if (latest) send(t("reqChat.revisePrompt"), "resolve", latest.id);
-                      }}
-                    >
-                      {t("reqChat.reviseByVerdict")}
-                    </Button>
-                  </Badge>
-                  <Button size="small" type="text" onClick={() => setReviewOpen(true)}>
-                    {t("reqChat.reports")}{reviews.length ? ` (${reviews.length})` : ""}
-                  </Button>
-                </Space>
-              )}
               <Sender
                 style={{ marginTop: 8 }}
                 loading={busy}
@@ -2376,35 +2452,115 @@ export default function RequirementChat() {
                     ? t("reqChat.placeholderReq")
                     : t("reqChat.placeholderPlan")
                 }
+                header={
+                  <Attachments
+                    ref={attRef}
+                    items={files}
+                    beforeUpload={(f) => {
+                      if (f.size > MAX_ATTACHMENT_MB * 1024 * 1024) {
+                        message.error(t("reqChat.attachTooLarge", { name: f.name, mb: MAX_ATTACHMENT_MB }));
+                        return Upload.LIST_IGNORE;
+                      }
+                      return false;
+                    }}
+                    onChange={({ fileList }) => setFiles(fileList.slice(0, MAX_ATTACHMENTS))}
+                    maxCount={MAX_ATTACHMENTS}
+                    accept="image/*,.md,.markdown,.txt,.docx,.pdf,.log,.json,.csv,.xls,.xlsx,.zip"
+                    style={files.length ? undefined : { display: "none" }}
+                  />
+                }
+                onPasteFile={(list) => {
+                  const add = Array.from(list).filter((f) => {
+                    if (f.size > MAX_ATTACHMENT_MB * 1024 * 1024) {
+                      message.error(t("reqChat.attachTooLarge", { name: f.name, mb: MAX_ATTACHMENT_MB }));
+                      return false;
+                    }
+                    return true;
+                  });
+                  if (!add.length) return;
+                  setFiles((prev) =>
+                    [
+                      ...prev,
+                      ...add.map((f) => ({
+                        uid: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+                        name: f.name || "screenshot.png",
+                        status: "done" as const,
+                        originFileObj: f as any,
+                      })),
+                    ].slice(0, MAX_ATTACHMENTS),
+                  );
+                }}
                 onSubmit={(text) => {
                   send(text);
                   setInput("");
                 }}
                 footer={
-                  <div className="rc-sender-foot">
-                    <div className="rc-sender-tip">{t("reqChat.senderTip")}</div>
-                    <div className="rc-sender-foot-row">
-                      <AmSelect
-                        kind="team"
-                        style={{ flex: 1, minWidth: 0 }}
-                        prefix={<ApartmentOutlined />}
-                        value={teamId}
-                        onChange={(v) => {
-                          setTeamId(v ?? null);
-                          setAgentId(null); // 专家属于团队：换团队后旧专家不再适用
-                        }}
-                        placeholder={t("reqChat.teamDefault")}
-                      />
-                      <AmSelect
-                        kind="agent"
-                        teamId={teamId ?? undefined}
-                        style={{ flex: 1, minWidth: 0 }}
-                        prefix={<RobotOutlined />}
-                        value={agentId}
-                        onChange={(v) => setAgentId(v ?? null)}
-                        placeholder={t("reqChat.agentDefault")}
-                      />
-                    </div>
+                  <div className="rc-sender-tools">
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<PaperClipOutlined />}
+                      title={t("reqChat.attach")}
+                      aria-label={t("reqChat.attach")}
+                      disabled={busy}
+                      onClick={() => attRef.current?.select({ multiple: true })}
+                    />
+                    <Popover
+                      trigger={["hover", "click"]}
+                      placement="topLeft"
+                      title={t("reqChat.assets")}
+                      // 内容常驻挂载并跟随父级刷新（fresh 未进 antd 类型，但会透传给 trigger）：
+                      // 回放的历史团队/专家要立刻解析成名字显示在按钮上
+                      forceRender
+                      {...({ fresh: true } as any)}
+                      content={
+                        <div className="rc-assets" ref={assetsRef}>
+                          <AmSelect
+                            kind="team"
+                            size="small"
+                            style={{ width: 240 }}
+                            prefix={<ApartmentOutlined />}
+                            value={teamId}
+                            onLabelChange={setTeamName}
+                            onChange={(v) => {
+                              setTeamId(v ?? null);
+                              setAgentId(null); // 专家属于团队：换团队后旧专家不再适用
+                            }}
+                            placeholder={t("reqChat.teamDefault")}
+                            getPopupContainer={() => assetsRef.current || document.body}
+                          />
+                          <AmSelect
+                            kind="agent"
+                            size="small"
+                            teamId={teamId ?? undefined}
+                            style={{ width: 240 }}
+                            prefix={<RobotOutlined />}
+                            value={agentId}
+                            onLabelChange={setAgentName}
+                            onChange={(v) => setAgentId(v ?? null)}
+                            placeholder={t("reqChat.agentDefault")}
+                            getPopupContainer={() => assetsRef.current || document.body}
+                          />
+                          <div className="rc-assets-tip">{t("reqChat.senderTip")}</div>
+                        </div>
+                      }
+                    >
+                      <Button
+                        size="small"
+                        type={teamId || agentId ? "primary" : "default"}
+                        ghost={!!(teamId || agentId)}
+                        icon={<TeamOutlined />}
+                      >
+                        {agentName || teamName || t("reqChat.assets")}
+                      </Button>
+                    </Popover>
+                    {chatMode === "plan" && (
+                      <Dropdown menu={{ items: egmMenu }} trigger={["hover", "click"]} placement="topLeft">
+                        <Button size="small" icon={<EgmMark />}>
+                          {t("reqChat.egm")}
+                        </Button>
+                      </Dropdown>
+                    )}
                   </div>
                 }
               />

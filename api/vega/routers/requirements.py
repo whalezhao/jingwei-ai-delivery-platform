@@ -3,9 +3,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import timedelta
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, UploadFile
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,6 +24,7 @@ from ..models import (
     DevTaskEvent,
     GroupMember,
     Person,
+    PlanAttachment,
     PlanEvent,
     PlanMessage,
     PlanReview,
@@ -50,6 +52,7 @@ from ..schemas import (
     RequirementUpdate,
 )
 from . import person_to_out
+from .nodes import HEARTBEAT_OFFLINE_S
 
 log = logging.getLogger(__name__)
 
@@ -300,6 +303,7 @@ async def delete_requirement(
         await db.execute(delete(DevTask).where(DevTask.id.in_(task_ids)))
     # plan_event 同时挂 requirement 和 runner_task：按任一维度删都会漏，先按需求删干净
     await db.execute(delete(PlanEvent).where(PlanEvent.requirement_id == req.id))
+    await db.execute(delete(PlanAttachment).where(PlanAttachment.requirement_id == req.id))
     if msg_ids:
         await db.execute(delete(PlanMessage).where(PlanMessage.id.in_(msg_ids)))
     await db.execute(delete(PlanVersion).where(PlanVersion.requirement_id == req.id))
@@ -689,6 +693,67 @@ async def _plan_context(db: AsyncSession, req: Requirement) -> str:
     return "\n".join(parts)
 
 
+@router.post("/{req_id}/plan/attachments")
+async def upload_plan_attachment(
+    req_id: int,
+    file: UploadFile,
+    db: AsyncSession = Depends(get_db),
+    me: Person = Depends(current_person),
+) -> dict:
+    """先上传拿 id，发消息时用 attachment_ids 绑到那一轮；未绑定的附件不下发 runner。"""
+    req = await _get_req(db, req_id)
+    if req.claimant_id != me.id and not me.is_admin:
+        raise HTTPException(403, "只有认领人可上传附件")
+    if req.status in ("confirmed", "archived", "online"):
+        raise HTTPException(400, "需求已定稿")
+    name = (file.filename or "attachment").replace("\\", "/").rsplit("/", 1)[-1] or "attachment"
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(400, "空文件")
+    if len(raw) > _MAX_ATTACHMENT_BYTES:
+        raise HTTPException(400, f"单个附件不能超过 {_MAX_ATTACHMENT_BYTES // 1024 // 1024}MB")
+    pending = await db.scalar(
+        select(func.count())
+        .select_from(PlanAttachment)
+        .where(
+            PlanAttachment.requirement_id == req.id,
+            PlanAttachment.uploaded_by == me.id,
+            PlanAttachment.message_id.is_(None),
+        )
+    )
+    if (pending or 0) >= _MAX_ATTACHMENTS:
+        raise HTTPException(400, f"一次最多 {_MAX_ATTACHMENTS} 个附件")
+    att = PlanAttachment(
+        requirement_id=req.id,
+        uploaded_by=me.id,
+        filename=name,
+        mime=file.content_type or "application/octet-stream",
+        size=len(raw),
+        content=raw,
+    )
+    db.add(att)
+    await db.commit()
+    await db.refresh(att)
+    return _attachment_out(att)
+
+
+async def _ensure_online_runner(db: AsyncSession, req: Requirement) -> None:
+    """没有在线 Runner 就拒发：任务只会一直 queued，前端「已等待 N 秒」永远不结束。
+    心跳 30s 一次，90s 没心跳视为离线（与节点列表同一口径）。"""
+    cutoff = utcnow() - timedelta(seconds=HEARTBEAT_OFFLINE_S)
+    q = select(RunnerNode.id).where(RunnerNode.last_heartbeat > cutoff)
+    if req.plan_runner_id:  # 粘住的节点不在线时别的节点也领不走
+        q = q.where(RunnerNode.id == req.plan_runner_id)
+    if await db.scalar(q.limit(1)) is not None:
+        return
+    raise HTTPException(
+        409,
+        "需求绑定的 Runner 节点已离线，消息未发送"
+        if req.plan_runner_id
+        else "没有在线的 Runner 节点，消息未发送",
+    )
+
+
 @router.post("/{req_id}/plan/messages")
 async def post_plan_message(
     req_id: int,
@@ -727,6 +792,34 @@ async def post_plan_message(
     )
     person = await db.get(Person, req.claimant_id)
 
+    # 附件必须是自己刚上传、还没被别的消息用掉的；随消息绑定后 runner 才会拿到。
+    # 只查元数据：图片字节留给 runner 按需下载，别在发消息时全读进内存。
+    atts = []
+    if body.attachment_ids:
+        ids = list(dict.fromkeys(body.attachment_ids))
+        if len(ids) > _MAX_ATTACHMENTS:
+            raise HTTPException(400, f"一次最多 {_MAX_ATTACHMENTS} 个附件")
+        atts = (
+            await db.execute(
+                select(
+                    PlanAttachment.id,
+                    PlanAttachment.requirement_id,
+                    PlanAttachment.message_id,
+                    PlanAttachment.uploaded_by,
+                    PlanAttachment.filename,
+                    PlanAttachment.mime,
+                    PlanAttachment.size,
+                )
+                .where(PlanAttachment.id.in_(ids))
+                .order_by(PlanAttachment.id)
+            )
+        ).all()
+        if len(atts) != len(ids):
+            raise HTTPException(400, "附件不存在")
+        for a in atts:
+            if a.requirement_id != req.id or a.message_id is not None or a.uploaded_by != me.id:
+                raise HTTPException(400, "附件无效或已发送")
+
     # 换团队/专家 = 换上下文：新开一条会话，并把该模式之前的聊天记录整体带过去
     # （历史来自已落库的消息，前端照常显示，不删不改）
     cur_team = body.team_id or None
@@ -754,6 +847,8 @@ async def post_plan_message(
         req.req_session_id = None
         req.plan_session_id = None
         node_lost = True
+
+    await _ensure_online_runner(db, req)
 
     # 两种讨论各用一条 session；团队/专家由输入框逐轮指定，留空回退项目/研发组
     if mode == "requirement":
@@ -821,16 +916,22 @@ async def post_plan_message(
     # 方案讨论只下发定稿版；需求讨论只给最新一版（多版同名文件在节点上会互相覆盖）
     docs = [d for d in all_docs if d.is_final] if mode == "plan" else all_docs[-1:]
     # 用户消息带 mode：前端按模式隔离历史；团队/专家一并留痕，刷新后输入框恢复上次选择
-    db.add(
-        PlanMessage(
-            requirement_id=req.id,
-            role="user",
-            content=body.content,
-            mode=mode,
-            team_id=body.team_id or None,
-            agent_id=body.agent_id or None,
-        )
+    msg = PlanMessage(
+        requirement_id=req.id,
+        role="user",
+        content=body.content,
+        mode=mode,
+        team_id=body.team_id or None,
+        agent_id=body.agent_id or None,
     )
+    db.add(msg)
+    await db.flush()
+    if atts:
+        await db.execute(
+            update(PlanAttachment)
+            .where(PlanAttachment.id.in_([a.id for a in atts]))
+            .values(message_id=msg.id)
+        )
 
     payload = {
         "requirement_id": req.id,
@@ -839,6 +940,9 @@ async def post_plan_message(
         "prompt": prompt,
         "mode": mode,
         "docs": [{"id": d.id, "filename": d.filename} for d in docs],
+        "attachments": [
+            {"id": a.id, "filename": a.filename, "mime": a.mime, "size": a.size} for a in atts
+        ],
     }
     if egm:
         payload["egm"] = egm
@@ -1106,6 +1210,7 @@ async def clear_plan_session(
     )
     if ids:
         await db.execute(delete(PlanEvent).where(PlanEvent.message_id.in_(ids)))
+        await db.execute(delete(PlanAttachment).where(PlanAttachment.message_id.in_(ids)))
         await db.execute(delete(PlanMessage).where(PlanMessage.id.in_(ids)))
     if body.mode == "requirement":
         req.req_session_id = None
@@ -1123,6 +1228,40 @@ def _evt_out(e: PlanEvent) -> dict:
     if (e.payload or {}).get("kind"):
         return e.payload
     return {**e.payload, "kind": "raw", "event": e.payload}
+
+
+_MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
+_MAX_ATTACHMENTS = 10
+
+
+def _attachment_out(a: PlanAttachment) -> dict:
+    return {"id": a.id, "filename": a.filename, "mime": a.mime, "size": a.size}
+
+
+async def _attachments_by_message(
+    db: AsyncSession, req_id: int, msg_ids: list[int]
+) -> dict[int, list[dict]]:
+    if not msg_ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(
+                PlanAttachment.id,
+                PlanAttachment.message_id,
+                PlanAttachment.filename,
+                PlanAttachment.mime,
+                PlanAttachment.size,
+            )
+            .where(PlanAttachment.requirement_id == req_id, PlanAttachment.message_id.in_(msg_ids))
+            .order_by(PlanAttachment.id)
+        )
+    ).all()
+    out: dict[int, list[dict]] = {}
+    for r in rows:
+        out.setdefault(r.message_id, []).append(
+            {"id": r.id, "filename": r.filename, "mime": r.mime, "size": r.size}
+        )
+    return out
 
 
 async def _events_by_message(db: AsyncSession, req_id: int, msg_ids: list[int]) -> dict[int, list[dict]]:
@@ -1156,6 +1295,7 @@ async def list_plan_messages(
         stmt = stmt.where(PlanMessage.mode == mode)
     rows = (await db.scalars(stmt.order_by(PlanMessage.id))).all()
     events = await _events_by_message(db, req_id, [m.id for m in rows])
+    atts = await _attachments_by_message(db, req_id, [m.id for m in rows])
     return [
         {
             "id": m.id,
@@ -1167,6 +1307,7 @@ async def list_plan_messages(
             "created_at": str(m.created_at),
             # 该轮思考/工具过程：前端按消息重放思考链（刷新后不丢）
             "events": events.get(m.id, []),
+            "attachments": atts.get(m.id, []),
         }
         for m in rows
     ]
@@ -1176,15 +1317,17 @@ async def list_plan_messages(
 async def plan_stream(
     req_id: int,
     mode: Literal["requirement", "plan"] | None = Query(None),
-    db: AsyncSession = Depends(get_db),
-    me: Person = Depends(current_person),
+    authorization: str = Header(default=""),
 ) -> StreamingResponse:
     """SSE：先回放历史，再实时推 runner 回传的事件。mode 用于隔离两种讨论的历史与直播。
 
-    回放用一次性 session，查完即关：SSE 长连接能开几个小时，若整条连接都占着
-    数据库连接，多开几个页面就会把连接池耗尽，所有接口一起卡住。
+    这里不能用请求级 db 依赖：FastAPI 的 yield 依赖要等响应流结束才关闭，
+    SSE 一开几个小时，那条会话就会一直 idle in transaction 并攥着表锁（生产上卡过 DDL）。
+    鉴权与回放都各用一次性 session，查完即关。
     """
-    await _get_req_open(db, req_id, me)  # 权限在建流前判，否则前端拿到 200 才慢慢发现没数据
+    async with sessionmaker()() as db:
+        me = await current_person(authorization=authorization, db=db)
+        await _get_req_open(db, req_id, me)  # 权限在建流前判，否则前端拿到 200 才慢慢发现没数据
 
     async def gen():
         q = bus.subscribe(req_id)
@@ -1195,8 +1338,19 @@ async def plan_stream(
                     stmt = stmt.where(PlanMessage.mode == mode)
                 rows = (await db.scalars(stmt.order_by(PlanMessage.id))).all()
                 events = await _events_by_message(db, req_id, [m.id for m in rows])
+                atts = await _attachments_by_message(db, req_id, [m.id for m in rows])
                 record = [
-                    (m.id, m.role, m.content, m.mode, m.team_id, m.agent_id, events.get(m.id, []))
+                    {
+                        "type": "message",
+                        "id": m.id,
+                        "role": m.role,
+                        "content": m.content,
+                        "mode": m.mode,
+                        "team_id": m.team_id,
+                        "agent_id": m.agent_id,
+                        "events": events.get(m.id, []),
+                        "attachments": atts.get(m.id, []),
+                    }
                     for m in rows
                 ]
                 # 断线/刷新时本轮可能还在跑：已产生的过程事件也补发，否则重连后
@@ -1223,8 +1377,8 @@ async def plan_stream(
                             )
                         ).all()
                         pending = [_evt_out(e) for e in erows]
-            for mid, role, content, m_mode, m_team, m_agent, evts in record:
-                yield f"data: {json.dumps({'type': 'message', 'id': mid, 'role': role, 'content': content, 'mode': m_mode, 'team_id': m_team, 'agent_id': m_agent, 'events': evts}, ensure_ascii=False)}\n\n"
+            for rec in record:
+                yield f"data: {json.dumps(rec, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'ready', 'pending_events': pending}, ensure_ascii=False)}\n\n"
             while True:
                 try:

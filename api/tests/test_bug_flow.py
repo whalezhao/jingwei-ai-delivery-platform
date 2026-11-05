@@ -10,6 +10,7 @@ from vega.models import (
     DevTaskEvent,
     GroupMember,
     Person,
+    PlanAttachment,
     PlanEvent,
     PlanMessage,
     PlanReview,
@@ -30,7 +31,16 @@ async def req_cleanup(db):
     task_ids = (await db.scalars(select(DevTask.id).where(DevTask.requirement_id.in_(ids)))).all()
     if task_ids:
         await db.execute(delete(DevTaskEvent).where(DevTaskEvent.dev_task_id.in_(task_ids)))
-    for model in (DevTask, PlanEvent, PlanReview, PlanMessage, PlanVersion, RunnerTask, RequirementDoc):
+    for model in (
+        DevTask,
+        PlanAttachment,
+        PlanEvent,
+        PlanReview,
+        PlanMessage,
+        PlanVersion,
+        RunnerTask,
+        RequirementDoc,
+    ):
         await db.execute(delete(model).where(model.requirement_id.in_(ids)))
     await db.execute(delete(Requirement).where(Requirement.id.in_(ids)))
     await db.commit()
@@ -103,3 +113,51 @@ async def test_bug_skips_doc_stage(admin_client, client, db, seeded, req_cleanup
     assert r.status_code == 200, r.text
     rows = [x for x in r.json()["requirements"] if x["id"] == req_id]
     assert rows and rows[0]["req_type"] == "bug"
+
+
+async def test_plan_message_carries_attachment(admin_client, db, seeded, req_cleanup):
+    r = await admin_client.post(
+        "/api/requirements", json={"system_id": seeded["project"].id, "title": "带附件的需求"}
+    )
+    assert r.status_code == 200, r.text
+    req_id = r.json()["id"]
+    req_cleanup.append(req_id)
+    r = await admin_client.post(f"/api/requirements/{req_id}/claim")
+    assert r.status_code == 200, r.text
+
+    png = b"\x89PNG\r\n\x1a\n" + b"x" * 32
+    r = await admin_client.post(
+        f"/api/requirements/{req_id}/plan/attachments",
+        files={"file": ("shot.png", png, "image/png")},
+    )
+    assert r.status_code == 200, r.text
+    att = r.json()
+    assert (att["filename"], att["mime"], att["size"]) == ("shot.png", "image/png", len(png))
+
+    r = await admin_client.post(
+        f"/api/requirements/{req_id}/plan/messages",
+        json={"content": "看截图", "attachment_ids": [att["id"]]},
+    )
+    assert r.status_code == 200, r.text
+
+    # 附件随任务下发 runner（runner 按 id 下载原始字节）
+    task = await db.scalar(
+        select(RunnerTask)
+        .where(RunnerTask.requirement_id == req_id, RunnerTask.type == "plan_turn")
+        .order_by(RunnerTask.id.desc())
+    )
+    assert task and task.payload["attachments"][0]["id"] == att["id"]
+    assert task.payload["attachments"][0]["filename"] == "shot.png"
+
+    # 历史回放同样带附件，刷新后气泡里的文件名不丢
+    r = await admin_client.get(f"/api/requirements/{req_id}/plan/messages")
+    assert r.status_code == 200, r.text
+    user_msg = [m for m in r.json() if m["role"] == "user"][-1]
+    assert user_msg["attachments"][0]["filename"] == "shot.png"
+
+    # 已经被消息用掉的附件不能再绑第二轮
+    r = await admin_client.post(
+        f"/api/requirements/{req_id}/plan/messages",
+        json={"content": "再用一次", "attachment_ids": [att["id"]]},
+    )
+    assert r.status_code == 400, r.text

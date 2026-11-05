@@ -21,7 +21,8 @@ async def _rpc(method: str, body: dict, key: str) -> dict:
     s = get_settings()
     headers = {"X-Tdai-Service-Id": s.am_space_id, "X-Tdai-User-Key": key}
     try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
+        # hub 是内网服务，别走系统 HTTP 代理（mihomo 转发该请求直接回空 502）
+        async with httpx.AsyncClient(timeout=8.0, trust_env=False) as client:
             r = await client.post(
                 f"{s.am_hub_base_url}/api/v1/meta/{method}",
                 json={"user_key": key, **body},

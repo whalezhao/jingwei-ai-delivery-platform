@@ -57,7 +57,7 @@ def _egm_payload(req_id: int, **kw) -> dict:
 
 
 async def _fake_claude(monkeypatch, runner: Runner, seen: dict, on_run=None):
-    async def fake_run_claude(args, env, *, cwd=None, prompt=None):
+    async def fake_run_claude(args, env, *, cwd=None, prompt=None, partial=False):
         seen["args"] = args
         seen["cwd"] = cwd
         seen["prompt"] = prompt

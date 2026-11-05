@@ -307,6 +307,8 @@ class RequirementOut(BaseModel):
 
 class PlanMessageIn(BaseModel):
     content: str = Field(min_length=1)
+    # 先调附件上传接口拿 id，再随消息一起提交；未发消息的附件不会被 runner 看到
+    attachment_ids: list[int] = Field(default_factory=list)
     # 缺省按需求文档是否定稿推导；显式传值必须与当前阶段一致
     mode: Literal["requirement", "plan"] | None = None
     # 输入框里选的团队/专家；空 = 回退项目/研发组配置。每轮随请求头切换

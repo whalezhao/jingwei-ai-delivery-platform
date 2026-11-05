@@ -352,3 +352,71 @@ async def test_list_nodes_naive_heartbeat(admin_client, db):
     assert r.status_code == 200, r.text
     row = next(n for n in r.json() if n["name"] == "hb-naive-node")
     assert row["status"] == "offline"
+
+
+async def test_run_claude_parses_huge_single_line(tmp_path, monkeypatch):
+    """Read 图片的工具结果是单行超长 base64：默认 64KiB 行上限会 ValueError 打断整轮。"""
+    import sys
+
+    stub = tmp_path / "claude-big"
+    stub.write_text(
+        f"#!{sys.executable}\n"
+        "import json\n"
+        "print(json.dumps({'type': 'user', 'message': {'content': [{'type': 'tool_result', "
+        "'tool_use_id': 't1', 'content': 'x' * 200000}]}}), flush=True)\n"
+        "print(json.dumps({'type': 'result', 'result': 'ok', 'is_error': False}), flush=True)\n",
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+    monkeypatch.setattr(get_settings(), "claude_bin", str(stub))
+
+    from vega.claude import run_claude
+
+    evts = [e async for e in run_claude([], {}, prompt="hi")]
+    assert evts[0]["kind"] == "tool_result" and evts[0]["content"].startswith("xxx")
+    assert len(evts[0]["content"]) < 10_000  # 入库前仍按 8k 截断
+    assert evts[1]["kind"] == "result" and evts[1]["text"] == "ok"
+
+
+async def test_run_claude_partial_deltas(tmp_path, monkeypatch):
+    """partial 模式：增量帧逐条产出，整块事件带 streamed 标记供直播去重。"""
+    import sys
+
+    stub = tmp_path / "claude-partial"
+    stub.write_text(
+        f"#!{sys.executable}\n"
+        "import json, sys\n"
+        "assert '--include-partial-messages' in sys.argv, sys.argv\n"
+        "def out(x): print(json.dumps(x), flush=True)\n"
+        "out({'type': 'stream_event', 'event': {'type': 'message_start', 'message': {}}})\n"
+        "out({'type': 'stream_event', 'event': {'type': 'content_block_delta', "
+        "'delta': {'type': 'thinking_delta', 'thinking': '想'}}})\n"
+        "out({'type': 'stream_event', 'event': {'type': 'content_block_delta', "
+        "'delta': {'type': 'thinking_delta', 'thinking': '一下'}}})\n"
+        "out({'type': 'stream_event', 'event': {'type': 'content_block_delta', "
+        "'delta': {'type': 'text_delta', 'text': '答'}}})\n"
+        "out({'type': 'assistant', 'message': {'content': ["
+        "{'type': 'thinking', 'thinking': '想一下'}, {'type': 'text', 'text': '答'}]}})\n"
+        "out({'type': 'stream_event', 'event': {'type': 'message_stop'}})\n"
+        "out({'type': 'result', 'result': '答', 'is_error': False})\n",
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+    monkeypatch.setattr(get_settings(), "claude_bin", str(stub))
+
+    from vega.claude import run_claude
+
+    evts = [e async for e in run_claude([], {}, prompt="hi", partial=True)]
+    assert [e["kind"] for e in evts] == [
+        "thinking_delta",
+        "thinking_delta",
+        "text_delta",
+        "thinking",
+        "text",
+        "result",
+    ]
+    assert evts[0]["text"] == "想" and evts[1]["text"] == "一下"
+    assert evts[2]["text"] == "答"
+    # 整块事件仍然产出（回放落库用），流式标记让直播端跳过
+    assert evts[3]["text"] == "想一下" and evts[3]["streamed"] is True
+    assert evts[4]["text"] == "答" and evts[4]["streamed"] is True

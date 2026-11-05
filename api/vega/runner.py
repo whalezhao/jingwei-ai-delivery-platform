@@ -229,9 +229,12 @@ class Runner:
 
     async def _emit(self, task_id: int, event: dict) -> None:
         self.pending_events.setdefault(task_id, []).append(event)
-        # 思考/工具/正文都立即下发（前端打字机与思考链要跟手）；只有逐 token 的
-        # thinking_tokens 是高频计量噪声，按条数 + 时间攒批
-        tick = event.get("kind") == "raw" and (event.get("event") or {}).get("subtype") == "thinking_tokens"
+        # 思考/工具/正文都立即下发（前端打字机与思考链要跟手）；逐 token 的
+        # thinking_tokens 与增量帧是高频噪声，按条数 + 时间攒批（0.3s 一帧）
+        kind = event.get("kind")
+        tick = kind in ("text_delta", "thinking_delta") or (
+            kind == "raw" and (event.get("event") or {}).get("subtype") == "thinking_tokens"
+        )
         await self._flush_events(task_id, force=not tick)
 
     async def _result(self, task_id: int, status: str, error: str | None = None, data: dict | None = None) -> None:
@@ -330,6 +333,34 @@ class Runner:
         listing = "\n".join(f"- {p}" for p in paths)
         return f"{prompt}\n\n[需求文档已下载到本机（原始文件），请自行读取解析：]\n{listing}"
 
+    async def _attachment_paths(self, payload: dict) -> list[str]:
+        """下载本轮用户附件；文件名前缀附件 id，避免多轮同名截图相互覆盖。"""
+        atts = payload.get("attachments") or []
+        if not atts:
+            return []
+        base = (self.workdir or _workdir()) / "attachments" / f"req-{payload['requirement_id']}"
+        base.mkdir(parents=True, exist_ok=True)
+        paths: list[str] = []
+        for a in atts:
+            name = (a.get("filename") or "").replace("\\", "/").rsplit("/", 1)[-1]
+            if not name:
+                continue
+            dest = base / f"{a['id']}-{name}"
+            r = await self.client.get(
+                f"/api/runner/requirements/{payload['requirement_id']}/attachments/{a['id']}/raw"
+            )
+            r.raise_for_status()
+            dest.write_bytes(r.content)
+            paths.append(str(dest))
+        return paths
+
+    @staticmethod
+    def _with_attachments(prompt: str, paths: list[str]) -> str:
+        if not paths:
+            return prompt
+        listing = "\n".join(f"- {p}" for p in paths)
+        return f"{prompt}\n\n[用户本轮上传的附件已下载到本机（图片可直接查看，其他文件请自行读取）：]\n{listing}"
+
     async def _query_dir(self, payload: dict) -> str:
         """只读问答的工作目录：有仓库就进常驻基线（图按绝对路径索引，worktree 借不过来），
         拉不下来退到需求文档目录——绝不继承 runner 的启动目录（那里有 .env）。"""
@@ -411,6 +442,7 @@ class Runner:
         raise RuntimeError(f"EGM 轮次写脏了基线仓库（已复原已跟踪文件）：{paths}")
 
     async def _exec_plan_turn(self, task_id: int, payload: dict) -> None:
+        payload["prompt"] = self._with_attachments(payload["prompt"], await self._attachment_paths(payload))
         payload["prompt"] = self._with_docs(payload["prompt"], await self._docs_paths(payload))
         payload["cwd"] = await self._query_dir(payload)
         resume = payload.get("resume", False)
@@ -444,7 +476,9 @@ class Runner:
     async def _run_plan_claude(self, task_id: int, args: list[str], payload: dict) -> str:
         chunks: list[str] = []
         final_text = ""
-        async for evt in run_claude(args, payload["claude_env"], cwd=payload.get("cwd"), prompt=payload["prompt"]):
+        async for evt in run_claude(
+            args, payload["claude_env"], cwd=payload.get("cwd"), prompt=payload["prompt"], partial=True
+        ):
             # 只累积主会话文本：子 agent（parent 非空）的输出不进 plan 定稿内容
             if evt["kind"] == "text" and not evt.get("parent"):
                 chunks.append(evt["text"])

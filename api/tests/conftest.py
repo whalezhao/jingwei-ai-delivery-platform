@@ -32,10 +32,13 @@ os.environ.update(
 os.environ.pop("NO_PROXY", None)
 os.environ.pop("no_proxy", None)
 
+from sqlalchemy import select  # noqa: E402
+
 from vega.auth import bootstrap_admin  # noqa: E402
 from vega.db import init_db, sessionmaker  # noqa: E402
 from vega.main import app  # noqa: E402
 from vega.config import get_settings  # noqa: E402
+from vega.models import RunnerNode, utcnow  # noqa: E402
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -43,6 +46,21 @@ async def _init_db():
     await init_db()
     async with sessionmaker()() as db:
         await bootstrap_admin(db)
+    yield
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _online_runner(_init_db):
+    """默认留一个在线节点：发对话消息时后端会拒收「没有在线 Runner」的请求。
+    每个用例刷新心跳，避免整套测试跑超 90s 后节点被判离线。"""
+    async with sessionmaker()() as s:
+        node = await s.scalar(select(RunnerNode).where(RunnerNode.name == "node-default"))
+        if node is None:
+            s.add(RunnerNode(name="node-default", token_hash="default", status="online", last_heartbeat=utcnow()))
+        else:
+            node.status = "online"
+            node.last_heartbeat = utcnow()
+        await s.commit()
     yield
 
 
