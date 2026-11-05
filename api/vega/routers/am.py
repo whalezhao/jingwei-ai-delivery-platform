@@ -20,13 +20,20 @@ router = APIRouter(prefix="/api/am", tags=["agent-memory"])
 async def _rpc(method: str, body: dict, key: str) -> dict:
     s = get_settings()
     headers = {"X-Tdai-Service-Id": s.am_space_id, "X-Tdai-User-Key": key}
-    async with httpx.AsyncClient(timeout=8.0) as client:
-        r = await client.post(
-            f"{s.am_hub_base_url}/api/v1/meta/{method}",
-            json={"user_key": key, **body},
-            headers=headers,
-        )
-    data = r.json()  # hub 业务错误也回 JSON {code, message}
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            r = await client.post(
+                f"{s.am_hub_base_url}/api/v1/meta/{method}",
+                json={"user_key": key, **body},
+                headers=headers,
+            )
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"连不上 agent-memory：{e}") from e
+    # hub 业务错误也回 JSON {code, message}；网关 502 等会回非 JSON，别当 500 抛
+    try:
+        data = r.json()
+    except ValueError as e:
+        raise HTTPException(502, f"agent-memory {method} 返回异常（HTTP {r.status_code}）") from e
     if r.status_code != 200 or data.get("code") != 0:
         raise HTTPException(502, f"agent-memory {method} 失败：{data.get('message') or r.status_code}")
     return data.get("data") or {}
