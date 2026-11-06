@@ -1210,6 +1210,27 @@ a.wb-chip:hover {
   display: flex;
   align-items: center;
   gap: 8px;
+  width: 100%;
+}
+/* 输入框内部右下角（发送按钮下方）的上下文环，悬浮看用量明细 */
+.rc-ctx-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  color: #8c8c8c;
+  font-size: 12px;
+}
+.rc-ctx-pop {
+  font-size: 12px;
+  line-height: 1.8;
+}
+.rc-ctx-title {
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+.rc-ctx-sub {
+  color: #8c8c8c;
 }
 .rc-assets {
   display: flex;

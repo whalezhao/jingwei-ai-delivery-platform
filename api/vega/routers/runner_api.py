@@ -217,7 +217,7 @@ async def post_events(
         )
         for evt in body.events:
             kind = evt.get("kind")
-            if kind in ("thinking", "tool_use", "tool_result") and not evt.get("parent"):
+            if kind in ("thinking", "tool_use", "tool_result", "usage") and not evt.get("parent"):
                 payload = evt
             elif kind == "raw" and (evt.get("event") or {}).get("subtype") not in _PLAN_NOISE:
                 # 原始事件按前端 plan_raw 的形状存内层 event，回放与直播同构。
@@ -265,6 +265,18 @@ async def post_events(
                 _pub(task.requirement_id, {"type": "dev_raw", "task_id": task_id, "event": evt.get("event", {})})
             else:
                 _pub(task.requirement_id, {"type": "plan_raw", "event": evt.get("event", {}), "mode": plan_mode})
+        elif kind == "usage":
+            # 上下文环只服务需求对话：评审是独立零上下文的会话，不能覆盖主对话的用量
+            if not task.dev_task_id and task.type == "plan_turn":
+                _pub(
+                    task.requirement_id,
+                    {
+                        "type": "plan_usage",
+                        "usage": evt.get("usage") or {},
+                        "window": evt.get("window") or 0,
+                        "mode": plan_mode,
+                    },
+                )
         elif kind != "result" and task.dev_task_id:
             # thinking / tool_use / tool_result：开发任务的过程细节也走 live 频道
             _pub(task.requirement_id, {"type": "dev_raw", "task_id": task_id, "event": evt})

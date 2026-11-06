@@ -243,8 +243,18 @@ async def test_plan_events_persist_for_replay(admin_client, client, db, seeded):
             "kind": "raw",
             "event": {"type": "system", "subtype": "compact_boundary", "compact_metadata": {"trigger": "auto", "pre_tokens": 90000}},
         },
+        {
+            "kind": "usage",
+            "usage": {"input": 100, "cache_read": 2000, "cache_create": 30, "output": 456},
+            "window": 128144,
+            "parent": "",
+        },
         {"kind": "result", "text": "最终执行计划全文", "is_error": False},
     ]
+    # 上下文环的直播帧：SSE 之外先直接盯 bus，确认 usage 会转成 plan_usage
+    from vega.bus import bus
+
+    q = bus.subscribe(req_id)
     async with _runner_client(app, node_token) as rc:
         r = await rc.post(f"/api/runner/tasks/{task_id}/events", json={"events": events})
         assert r.status_code == 200, r.text
@@ -258,7 +268,14 @@ async def test_plan_events_persist_for_replay(admin_client, client, db, seeded):
         await db.scalars(select(PlanEvent).where(PlanEvent.runner_task_id == task_id).order_by(PlanEvent.seq))
     ).all()
     # result 不入库；thinking_tokens 是直播计量噪声，也不入库
-    assert [e.kind for e in rows] == ["thinking", "tool_use", "tool_result", "raw", "raw", "raw"]
+    assert [e.kind for e in rows] == ["thinking", "tool_use", "tool_result", "raw", "raw", "raw", "usage"]
+    live = []
+    while not q.empty():
+        live.append(q.get_nowait())
+    bus.unsubscribe(req_id, q)
+    usage_pub = [e for e in live if e.get("type") == "plan_usage"]
+    assert usage_pub and usage_pub[0]["usage"]["cache_read"] == 2000
+    assert usage_pub[0]["window"] == 128144 and usage_pub[0]["mode"] == "plan"
     assert rows[3].payload["subtype"] == "task_progress"  # raw 存内层事件，回放形状与直播一致
     assert all(e.message_id is not None for e in rows)
     msg = await db.get(PlanMessage, rows[0].message_id)
@@ -276,6 +293,7 @@ async def test_plan_events_persist_for_replay(admin_client, client, db, seeded):
         ("raw", "task_progress"),
         ("raw", "task_started"),
         ("raw", "compact_boundary"),
+        ("usage", "usage"),
     ]
     assert evs[1]["name"] == "Bash"
 

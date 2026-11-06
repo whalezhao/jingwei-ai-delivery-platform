@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import Page from "../Page";
-import { Attachments, Bubble, FileCard, Prompts, Sender } from "@ant-design/x";
+import { Attachments, Bubble, FileCard, Prompts, Sender, Suggestion } from "@ant-design/x";
 import ThoughtChain from "@ant-design/x/es/thought-chain";
 import type { ThoughtChainItemType } from "@ant-design/x/es/thought-chain";
 import {
@@ -17,6 +17,7 @@ import {
   Modal,
   Popconfirm,
   Popover,
+  Progress,
   Row,
   Segmented,
   Space,
@@ -64,6 +65,9 @@ import DocPreview from "../components/DocPreview";
 import { rawNode } from "../eventNodes";
 import { api, token } from "../api";
 import i18n, { type MsgKey } from "../i18n";
+
+/** token 数缩写：34.2k / 128k。 */
+const fmtTok = (n: number) => (n >= 1000 ? `${+(n / 1000).toFixed(1)}k` : String(n));
 
 interface Msg {
   id: number;
@@ -1279,6 +1283,16 @@ export default function RequirementChat() {
   const attRef = useRef<any>(null);
   const assetsRef = useRef<HTMLDivElement>(null);
   const [ask, setAsk] = useState<Ask | null>(null);
+  // claude 上下文用量（plan_usage 直播帧 / 历史回放里的 usage 事件）；null = 本轮还没跑过
+  const [ctxUsage, setCtxUsage] = useState<{
+    input: number;
+    cache_read: number;
+    cache_create: number;
+    output: number;
+    window: number;
+  } | null>(null);
+  // 输入框里的 "/" 快捷指令：null 关闭；有值时按下标过滤面盘
+  const [slash, setSlash] = useState<string | null>(null);
   // 本轮 plan 会话过程（主会话思考/工具事件，SSE plan_raw 实时流入；下一轮发送时清空）
   const [liveEvts, setLiveEvts] = useState<any[]>([]);
   const [thinkTokens, setThinkTokens] = useState(0);
@@ -1371,6 +1385,8 @@ export default function RequirementChat() {
     setThinkTokens(0);
     setErr("");
     setAsk(null);
+    setCtxUsage(null);
+    setSlash(null);
     setBusy(false);
     busyRef.current = false;
     // SSE：连接 → 历史回放（ready 前的 message 全量重建）→ 实时事件。
@@ -1395,6 +1411,20 @@ export default function RequirementChat() {
               else if (evt.type === "ready") {
                 setMsgs(replay);
                 setErr("");
+                // 上下文环：回放里最后一条 usage 事件即本模式最新的用量
+                let lastUsage: any = null;
+                for (let i = replay.length - 1; i >= 0 && !lastUsage; i--) {
+                  const evs = replay[i].events || [];
+                  for (let j = evs.length - 1; j >= 0; j--) {
+                    if (evs[j]?.kind === "usage") {
+                      lastUsage = evs[j];
+                      break;
+                    }
+                  }
+                }
+                setCtxUsage(
+                  lastUsage ? { ...lastUsage.usage, window: lastUsage.window || 0 } : null,
+                );
                 if (!pickerRestored) {
                   pickerRestored = true;
                   const lastUser = [...replay].reverse().find((m) => m.role === "user");
@@ -1418,6 +1448,9 @@ export default function RequirementChat() {
                   busyRef.current = true;
                   // 本轮已经跑出来的过程事件随 ready 补发：重连/刷新后思考链不空白
                   const pend: any[] = Array.isArray(evt.pending_events) ? evt.pending_events : [];
+                  // 本轮对象已经跑出 usage（比如刚结束、还没落成消息）也立刻恢复圆环
+                  const pendUsage = [...pend].reverse().find((e) => e?.kind === "usage");
+                  if (pendUsage) setCtxUsage({ ...pendUsage.usage, window: pendUsage.window || 0 });
                   setLiveEvts(pend.filter((e) => e && e.kind));
                   setSubs(pend.filter((e) => e && e.subtype === "task_progress").map(subItem));
                 }
@@ -1452,6 +1485,8 @@ export default function RequirementChat() {
                   //（task_started / hook_* / api_retry …）只有 type/subtype，补 raw 才能进链
                   setLiveEvts((l) => [...l, e.kind ? e : { ...e, kind: "raw" }]);
                 }
+              } else if (evt.type === "plan_usage") {
+                setCtxUsage({ ...(evt.usage || {}), window: evt.window || 0 });
               } else if (evt.type === "plan_text") {
                 streamingAcc += evt.text;
                 setStreaming(streamingAcc);
@@ -1523,6 +1558,7 @@ export default function RequirementChat() {
   ) => {
     setErr("");
     setAsk(null); // 直接发言视为「继续聊」，收起选择框
+    setSlash(null);
     setLiveEvts([]);
     setSubs([]);
     setThinkTokens(0);
@@ -1826,6 +1862,61 @@ export default function RequirementChat() {
       onClick: () => setReviewOpen(true),
     },
   ];
+  // "/" 快捷指令：只留 EGM 四件事（这个对话只做需求/方案/技术方案讨论与评审），
+  // 执行的是与下拉菜单同一批 handler；只在 plan 模式、空闲时可用
+  const slashDefs = [
+    {
+      key: "brainstorm",
+      icon: <BulbOutlined />,
+      label: t("reqChat.brainstorm"),
+      ok: !busy,
+      run: () => send(t("reqChat.brainstormPrompt"), "brainstorm"),
+    },
+    {
+      key: "draft",
+      icon: <EditOutlined />,
+      label: t("reqChat.draft"),
+      ok: !busy,
+      run: () => send(t("reqChat.draftPrompt"), "draft"),
+    },
+    {
+      key: "review",
+      icon: <AuditOutlined />,
+      label: t("reqChat.startReview"),
+      ok: !!planVers.length && !reviewBusy,
+      run: runReview,
+    },
+    {
+      key: "revise",
+      icon: <ToolOutlined />,
+      label: t("reqChat.reviseByVerdict"),
+      ok: !!latestDoneReview,
+      run: () => latestDoneReview && send(t("reqChat.revisePrompt"), "resolve", latestDoneReview.id),
+    },
+  ];
+  const slashReady = chatMode === "plan" && chatable && !busy && !streaming && !reviewRunning;
+  const slashItems =
+    slashReady && slash !== null
+      ? slashDefs
+          .filter(
+            (d) =>
+              d.ok &&
+              (!slash ||
+                d.key.includes(slash.toLowerCase()) ||
+                d.label.toLowerCase().includes(slash.toLowerCase())),
+          )
+          .map((d) => ({ value: d.key, label: d.label, icon: d.icon }))
+      : [];
+  const runSlash = (key: string) => {
+    setSlash(null);
+    setInput("");
+    slashDefs.find((d) => d.key === key)?.run();
+  };
+  // 上下文环：input 不含缓存部分，四项相加才是实际占用的上下文
+  const ctxUsed = ctxUsage
+    ? ctxUsage.input + ctxUsage.cache_read + ctxUsage.cache_create + ctxUsage.output
+    : 0;
+  const ctxPct = ctxUsage?.window ? Math.min(100, Math.round((ctxUsed / ctxUsage.window) * 100)) : 0;
   // 消息 → 气泡：一轮 AI 回复只占一个气泡，思考链在上、回答在下（同 Claude 等主流对话形态）
   const bubbles: any[] = [];
   msgs.forEach((m) => {
@@ -2441,12 +2532,32 @@ export default function RequirementChat() {
                   ))}
                 </div>
               )}
+              <Suggestion
+                items={slashItems}
+                open={slash !== null && slashItems.length > 0}
+                onOpenChange={(o) => {
+                  if (!o) setSlash(null);
+                }}
+                onSelect={(v) => runSlash(v)}
+              >
+                {({ onKeyDown }) => (
               <Sender
                 style={{ marginTop: 8 }}
                 loading={busy}
                 onCancel={stop}
                 value={input}
-                onChange={setInput}
+                onChange={(v) => {
+                  setInput(v);
+                  // 开头或空白后的 "/" 唤起快捷指令；只取到下一个空白为止
+                  const m = /(?:^|\s)\/(\S*)$/.exec(v);
+                  setSlash(m ? m[1] : null);
+                }}
+                onKeyDown={(e) => {
+                  const res = onKeyDown(e) as unknown;
+                  // 面板打开时回车选中首项：列表随输入过滤，首项即键盘默认高亮项
+                  if (res === false && slashItems.length) runSlash(slashItems[0].value);
+                  return res as any;
+                }}
                 placeholder={
                   chatMode === "requirement"
                     ? t("reqChat.placeholderReq")
@@ -2561,9 +2672,58 @@ export default function RequirementChat() {
                         </Button>
                       </Dropdown>
                     )}
+                    {/* 上下文环放在输入框内部右下角：发送按钮下方 */}
+                    <div className="rc-ctx-row">
+                      <Popover
+                        trigger={["hover", "click"]}
+                        placement="topRight"
+                        // 标题写进 content 而不是 Popover.title：避免与浏览器原生的 title 提示叠成两层
+                        content={
+                          <div className="rc-ctx-pop">
+                            <div className="rc-ctx-title">{t("reqChat.context")}</div>
+                            {ctxUsage ? (
+                              <>
+                                <div>
+                                  {t("reqChat.contextUsed", {
+                                    used: fmtTok(ctxUsed),
+                                    total: fmtTok(ctxUsage.window),
+                                    pct: ctxPct,
+                                  })}
+                                </div>
+                                <div className="rc-ctx-sub">
+                                  {t("reqChat.contextBreakdown", {
+                                    input: fmtTok(ctxUsage.input),
+                                    read: fmtTok(ctxUsage.cache_read),
+                                    write: fmtTok(ctxUsage.cache_create),
+                                    output: fmtTok(ctxUsage.output),
+                                  })}
+                                </div>
+                              </>
+                            ) : (
+                              <div className="rc-ctx-sub">{t("reqChat.contextNone")}</div>
+                            )}
+                          </div>
+                        }
+                      >
+                        <Progress
+                          type="circle"
+                          // size ≤ 20 时 antd 会给圆环套一个自带 Tooltip（空标题成黑气泡），22 可避开
+                          size={22}
+                          strokeWidth={14}
+                          percent={ctxPct}
+                          strokeColor={
+                            ctxPct >= 85 ? "#ff4d4f" : ctxPct >= 60 ? "#faad14" : "#1677ff"
+                          }
+                          format={() => null}
+                        />
+                      </Popover>
+                      {ctxUsage && <span className="rc-ctx-pct">{ctxPct}%</span>}
+                    </div>
                   </div>
                 }
               />
+                )}
+              </Suggestion>
             </>
           ) : (
             <div className="chat-empty">

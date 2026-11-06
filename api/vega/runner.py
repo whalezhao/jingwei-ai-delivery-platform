@@ -594,6 +594,16 @@ class Runner:
         # -f：共享基线是只读副本，但 serena/手工调试会在里面留下改动和未跟踪文件；
         # 不清掉的话 checkout 直接 Abort，所有 EGM/开发任务一起失败。
         _git("checkout", "-q", "--detach", "-f", f"refs/heads/{payload['default_branch']}", cwd=repo)
+        # serena MCP 启动即在 cwd 写 .serena/，macOS 会写 .DS_Store：不算模型越界，
+        # 写进本地 exclude，否则 _assert_baseline_clean 每轮 EGM 都误判（复原也清不掉未跟踪文件）
+        excl = repo / ".git" / "info" / "exclude"
+        try:
+            lines = excl.read_text(encoding="utf-8").splitlines()
+            add = [p for p in (".serena/", ".DS_Store") if p not in lines]
+            if add:
+                excl.write_text("\n".join([*lines, *add]) + "\n", encoding="utf-8")
+        except OSError:
+            log.warning("写本地 git exclude 失败", exc_info=True)
         # 迁移到 vega-workspace 后的仓库不在 daemon 配置里，这里兜住（已挂则跳过）
         self._daemon_register(repo)
         self._crg_sync_bg(repo)

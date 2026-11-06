@@ -40,6 +40,17 @@ def _tool_result_text(content) -> str:  # noqa: ANN001 — claude 输出两种�
     return str(content or "")
 
 
+def _usage(u: dict | None) -> dict[str, int]:
+    """Anthropic usage → 上下文环要的四个计数（缺字段按 0）。"""
+    u = u or {}
+    return {
+        "input": int(u.get("input_tokens") or 0),
+        "cache_read": int(u.get("cache_read_input_tokens") or 0),
+        "cache_create": int(u.get("cache_creation_input_tokens") or 0),
+        "output": int(u.get("output_tokens") or 0),
+    }
+
+
 async def run_claude(
     args: list[str],
     env_extra: dict[str, str],
@@ -85,6 +96,9 @@ async def run_claude(
     terminal = ""  # 最后一次 result 事件的摘要：退出码非 0 时它是真正的死因（stderr 常只有无关告警）
     # 本消息已经逐帧下发的块类型：整块事件仍产出（落库回放要用），但标 streamed 让直播端去重
     streamed: set[tuple[str, str]] = set()
+    # 最后一次 API 调用的 input/usage：一轮里可能有多次（工具来回），最后一条才是
+    # 当前上下文占用量；message_delta 补上最终的 output_tokens
+    usage: dict[str, int] = {}
     assert proc.stdout
     try:
         async for line in proc.stdout:
@@ -135,6 +149,12 @@ async def run_claude(
                 if it in ("message_start", "message_stop"):
                     streamed.discard((parent, "text"))
                     streamed.discard((parent, "thinking"))
+                    if it == "message_start":
+                        usage = _usage((inner.get("message") or {}).get("usage"))
+                elif it == "message_delta":
+                    out = (inner.get("usage") or {}).get("output_tokens")
+                    if out is not None and usage:
+                        usage["output"] = int(out)
                 elif it == "content_block_delta":
                     d = inner.get("delta") or {}
                     dt = d.get("type")
@@ -149,6 +169,16 @@ async def run_claude(
                     {k: evt.get(k) for k in ("subtype", "terminal_reason", "num_turns", "errors")},
                     ensure_ascii=False,
                 )[:500]
+                # 上下文用量：优先 partial 流里最后一次 message_start（准确反映本轮
+                # 结束时的占用），没有 partial（开发任务等）时退回 result.usage
+                used = usage if any(usage.values()) else _usage(evt.get("usage"))
+                if any(used.values()):
+                    yield {
+                        "kind": "usage",
+                        "usage": used,
+                        "window": s.claude_max_context_tokens,
+                        "parent": parent,
+                    }
                 yield {
                     "kind": "result",
                     "text": evt.get("result", ""),

@@ -248,11 +248,15 @@ async def test_ensure_project_repo_resets_dirty_baseline(tmp_path, monkeypatch):
     (repo / "README.md").write_text("手工改")
     (repo / ".serena" / "project.yml").write_text("本地覆盖")
     (repo / "stray.txt").write_text("x")
+    (repo / ".DS_Store").write_text("x")
 
     assert await r._ensure_project_repo(payload) == repo
     assert (repo / "README.md").read_text() == "v1"
     assert (repo / ".serena" / "project.yml").read_text() == "tracked"
     assert (repo / "stray.txt").read_text() == "x"  # 不挡路的未跟踪文件不动（-f 只覆盖冲突项）
+    # MCP/系统噪声写进本地 exclude，不算基线脏；真·散落文件仍要暴露给 EGM 断言
+    st = _git("status", "--porcelain", cwd=str(repo))
+    assert ".DS_Store" not in st and "stray.txt" in st
 
 
 def test_octo_mention_offsets():
@@ -420,3 +424,32 @@ async def test_run_claude_partial_deltas(tmp_path, monkeypatch):
     # 整块事件仍然产出（回放落库用），流式标记让直播端跳过
     assert evts[3]["text"] == "想一下" and evts[3]["streamed"] is True
     assert evts[4]["text"] == "答" and evts[4]["streamed"] is True
+
+
+async def test_run_claude_emits_usage_before_result(tmp_path, monkeypatch):
+    """上下文环要的用量：取最后一次 message_start 的 input/缓存，message_delta 补 output。"""
+    import sys
+
+    stub = tmp_path / "claude-usage"
+    stub.write_text(
+        f"#!{sys.executable}\n"
+        "import json\n"
+        "def out(x): print(json.dumps(x), flush=True)\n"
+        "out({'type': 'stream_event', 'event': {'type': 'message_start', 'message': "
+        "{'usage': {'input_tokens': 100, 'cache_read_input_tokens': 2000, "
+        "'cache_creation_input_tokens': 30, 'output_tokens': 1}}}})\n"
+        "out({'type': 'stream_event', 'event': {'type': 'message_delta', "
+        "'usage': {'output_tokens': 456}}})\n"
+        "out({'type': 'result', 'result': 'ok', 'is_error': False})\n",
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+    monkeypatch.setattr(get_settings(), "claude_bin", str(stub))
+
+    from vega.claude import run_claude
+
+    evts = [e async for e in run_claude([], {}, prompt="hi", partial=True)]
+    assert [e["kind"] for e in evts] == ["usage", "result"]
+    assert evts[0]["usage"] == {"input": 100, "cache_read": 2000, "cache_create": 30, "output": 456}
+    assert evts[0]["window"] == get_settings().claude_max_context_tokens
+    assert evts[0]["parent"] == ""
