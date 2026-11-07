@@ -189,7 +189,7 @@ export function MultiSelectInput({
 
     if (event.key === "Backspace" && !context.query && context.values.length) {
       event.preventDefault();
-      context.remove(context.values.at(-1) ?? "");
+      context.remove(context.values[context.values.length - 1] ?? "");
     } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       if (!context.open) {

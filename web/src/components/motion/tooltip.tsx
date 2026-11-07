@@ -491,7 +491,7 @@ export function TooltipTrigger({ asChild = false, children, ref, ...props }: Too
   );
 
   useEffect(() => {
-    if (process.env.NODE_ENV !== "production" && child && !attached.current) {
+    if (import.meta.env.DEV && child && !attached.current) {
       console.warn(
         "TooltipTrigger: the child did not attach a ref, so the tooltip has nothing to listen to. Render a DOM element or a component that passes `ref` through.",
       );
