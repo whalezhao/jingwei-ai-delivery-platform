@@ -1,14 +1,26 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Button, Divider, Empty, Form, Input, Modal, Popconfirm, Select, Space, Tag, Typography, message } from "antd";
+import { CheckCircle2, Circle, Plus, Search } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import ResizableTable from "../ResizableTable";
-import { CheckCircleFilled, CheckCircleOutlined, PlusOutlined } from "@ant-design/icons";
 import { api, isAdmin } from "../api";
 import { useGroup } from "../group";
 import Page from "../Page";
-import { PAGE } from "../table";
 import type { MsgKey } from "../i18n";
+import { pct, qa, type QaSummary } from "../qa";
+import DataTable, { type DataTableColumn } from "../ui/DataTable";
+import Badge, { type BadgeTone } from "../ui/Badge";
+import SearchSelect from "../ui/SearchSelect";
+import TagInput from "../ui/TagInput";
+import Textarea from "../ui/Textarea";
+import { confirm } from "../ui/confirm";
+import { Field, useForm } from "../ui/form";
+import { toast } from "../ui/toast";
+import { Button } from "../components/motion/button/index";
+import {
+  CenterMorphModal,
+  CenterMorphModalContent,
+} from "../components/motion/center-morph-modal";
+import { Input } from "../components/motion/input";
 
 interface Req {
   id: number;
@@ -33,22 +45,22 @@ interface Req {
   can_open: boolean;
 }
 
-const STATUS: Record<string, [string, MsgKey]> = {
-  pool: ["default", "requirements.status.pool"],
-  claimed: ["processing", "requirements.status.claimed"],
+const STATUS: Record<string, [BadgeTone, MsgKey]> = {
+  pool: ["neutral", "requirements.status.pool"],
+  claimed: ["info", "requirements.status.claimed"],
   confirmed: ["success", "requirements.status.confirmed"],
-  archived: ["default", "requirements.status.archived"],
-  online: ["cyan", "requirements.status.online"],
+  archived: ["neutral", "requirements.status.archived"],
+  online: ["violet", "requirements.status.online"],
 };
 
-const ITER: Record<string, [string, MsgKey]> = {
-  iterating: ["blue", "requirements.iter.iterating"],
-  formal: ["green", "requirements.iter.formal"],
+const ITER: Record<string, [BadgeTone, MsgKey]> = {
+  iterating: ["info", "requirements.iter.iterating"],
+  formal: ["success", "requirements.iter.formal"],
 };
 
-const TYPE: Record<string, [string, MsgKey]> = {
-  requirement: ["blue", "requirements.typeRequirement"],
-  bug: ["orange", "requirements.typeBug"],
+const TYPE: Record<string, [BadgeTone, MsgKey]> = {
+  requirement: ["info", "requirements.typeRequirement"],
+  bug: ["warning", "requirements.typeBug"],
 };
 
 const SETUP_ITEMS: [keyof Setup, MsgKey, string][] = [
@@ -67,13 +79,41 @@ interface Setup {
   runner: boolean;
 }
 
+const QA_ST: Record<string, [BadgeTone, MsgKey]> = {
+  queued: ["neutral", "qa.status.queued"],
+  running: ["info", "qa.status.running"],
+  completed: ["success", "qa.status.completed"],
+  completed_with_failures: ["warning", "qa.status.completed_with_failures"],
+  failed: ["danger", "qa.status.failed"],
+  cancelled: ["neutral", "qa.status.cancelled"],
+};
+
+function TestCell({ s }: { s?: QaSummary }) {
+  const { t } = useTranslation();
+  if (!s || s.status === "none") return <span className="text-muted-foreground">—</span>;
+  const pair = QA_ST[s.status];
+  return (
+    <Badge tone={pair?.[0] ?? "neutral"}>
+      {pair ? t(pair[1]) : s.status}
+      {s.pass_rate != null ? ` · ${pct(s.pass_rate)}` : ""}
+    </Badge>
+  );
+}
+
+const emptyForm = {
+  system_id: undefined as number | undefined,
+  req_type: "requirement" as "requirement" | "bug",
+  title: "",
+  description: "",
+};
+
 export default function Requirements() {
   const { t } = useTranslation();
   const nav = useNavigate();
-  const { groupId } = useGroup();
+  const { groupId, projectId, groups, systems } = useGroup();
   const [rows, setRows] = useState<Req[]>([]);
-  const [projects, setProjects] = useState<any[]>([]);
-  const [projFilter, setProjFilter] = useState<number | undefined>();
+  const [tests, setTests] = useState<Record<number, QaSummary>>({});
+  const [systemFilter, setSystemFilter] = useState<number | undefined>();
   const [statusFilter, setStatusFilter] = useState<string | undefined>();
   const [iterFilter, setIterFilter] = useState<string | undefined>();
   const [tagFilter, setTagFilter] = useState<string | undefined>();
@@ -81,64 +121,124 @@ export default function Requirements() {
   const [setup, setSetup] = useState<Setup | null>(null);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Req | null>(null);
-  const [form] = Form.useForm();
+  const [tagging, setTagging] = useState<Req | null>(null);
+  const [tagDraft, setTagDraft] = useState<string[]>([]);
+  const form = useForm(emptyForm);
 
   const load = async () => {
     const p = new URLSearchParams();
     if (groupId) p.set("group_id", String(groupId));
-    if (projFilter) p.set("system_id", String(projFilter));
-    setRows(await api<Req[]>(`/api/requirements?${p}`));
-    setProjects(await api<any[]>(`/api/systems${groupId ? `?group_id=${groupId}` : ""}`));
+    if (projectId) p.set("project_id", String(projectId));
+    if (systemFilter) p.set("system_id", String(systemFilter));
+    const data = await api<Req[]>(`/api/requirements?${p}`);
+    setRows(data);
     if (isAdmin()) setSetup(await api<Setup>("/api/setup"));
+    // QA 未部署/不可达时不阻塞需求列表，测试列显示 —
+    const ids = data.map((r) => r.id).join(",");
+    if (ids)
+      qa<QaSummary[]>(`/api/requirement-test-summaries?ids=${ids}`)
+        .then((list) => setTests(Object.fromEntries(list.map((s) => [s.requirement_id, s]))))
+        .catch(() => setTests({}));
   };
   useEffect(() => {
     load();
-  }, [projFilter, groupId]);
-  // 切组后旧的项目筛选可能已不属于该组，清掉
+  }, [groupId, projectId, systemFilter]);
+  // 全局条件变了，表格内的系统筛选可能已不在范围内
   useEffect(() => {
-    setProjFilter(undefined);
-  }, [groupId]);
+    setSystemFilter(undefined);
+  }, [groupId, projectId]);
 
   const openEdit = (r: Req) => {
     setEditing(r);
-    setOpen(true);
-    form.setFieldsValue({
+    form.reset({
       system_id: r.system_id,
       req_type: r.req_type,
       title: r.title,
-      description: r.description,
+      description: r.description ?? "",
     });
+    setOpen(true);
   };
 
-  const saveTags = async (r: Req, tags: string[]) => {
+  const openCreate = () => {
+    setEditing(null);
+    form.reset({ ...emptyForm, system_id: scopedSystems[0]?.id });
+    setOpen(true);
+  };
+
+  const save = async () => {
+    if (!form.validate({ title: { required: true, message: t("common.required") } }))
+      return;
+    const v = form.values;
     try {
-      const updated = await api<Req>(`/api/requirements/${r.id}/tags`, {
-        method: "PUT",
-        body: JSON.stringify({ tags }),
-      });
-      setRows((prev) => prev.map((x) => (x.id === r.id ? updated : x)));
+      if (editing) {
+        await api(`/api/requirements/${editing.id}`, {
+          method: "PUT",
+          body: JSON.stringify({
+            title: v.title,
+            description: v.description || null,
+          }),
+        });
+        toast.success(t("requirements.saved"));
+        setOpen(false);
+        setEditing(null);
+        load();
+      } else {
+        const r = await api<Req>("/api/requirements", {
+          method: "POST",
+          body: JSON.stringify({
+            system_id: v.system_id,
+            req_type: v.req_type,
+            title: v.title,
+            description: v.description || null,
+          }),
+        });
+        toast.success(t("requirements.created", { code: r.code }));
+        setOpen(false);
+        nav(`/reqs/${r.id}`);
+      }
     } catch (e: any) {
-      message.error(e.message);
+      toast.error(e.message);
+    }
+  };
+
+  const saveTags = async () => {
+    if (!tagging) return;
+    try {
+      const updated = await api<Req>(`/api/requirements/${tagging.id}/tags`, {
+        method: "PUT",
+        body: JSON.stringify({ tags: tagDraft }),
+      });
+      setRows((prev) => prev.map((x) => (x.id === tagging.id ? updated : x)));
+      setTagging(null);
+    } catch (e: any) {
+      toast.error(e.message);
     }
   };
 
   const remove = async (r: Req) => {
+    const ok = await confirm({
+      title: t("requirements.deleteConfirm"),
+      description: t("requirements.deleteDesc"),
+      confirmText: t("requirements.delete"),
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await api(`/api/requirements/${r.id}`, { method: "DELETE" });
-      message.success(t("requirements.deleted", { code: r.code }));
+      toast.success(t("requirements.deleted", { code: r.code }));
       setRows((prev) => prev.filter((x) => x.id !== r.id));
     } catch (e: any) {
-      message.error(e.message);
+      toast.error(e.message);
     }
   };
 
   const claim = async (r: Req) => {
     try {
       await api(`/api/requirements/${r.id}/claim`, { method: "POST" });
-      message.success(t("requirements.claimed"));
+      toast.success(t("requirements.claimed"));
       nav(`/reqs/${r.id}`);
     } catch (e: any) {
-      message.error(e.message);
+      toast.error(e.message);
     }
   };
 
@@ -154,22 +254,184 @@ export default function Requirements() {
         [r.code, r.title, r.description, r.system_name, r.claimant_name, r.proposer_name]
           .some((s) => (s || "").toLowerCase().includes(term))),
   );
-  const filtering = !!(projFilter || statusFilter || iterFilter || tagFilter || term);
+  const filtering = !!(
+    projectId ||
+    groupId ||
+    systemFilter ||
+    statusFilter ||
+    iterFilter ||
+    tagFilter ||
+    term
+  );
+  // 表格内系统筛选和新建需求都只看当前项目/研发组下的系统
+  const scopedSystems = systems.filter(
+    (s) =>
+      (!groupId || s.group_id === groupId) &&
+      (!projectId || groups.find((g) => g.id === s.group_id)?.project_id === projectId)
+  );
+
+  const columns: DataTableColumn<Req>[] = [
+    {
+      title: t("requirements.colCode"),
+      dataIndex: "code",
+      width: 235,
+      render: (v) => <span className="font-mono text-[12px]">{v}</span>,
+    },
+    {
+      title: t("requirements.colType"),
+      dataIndex: "req_type",
+      width: 100,
+      render: (v) => {
+        const pair = TYPE[v];
+        return <Badge tone={pair?.[0] ?? "neutral"}>{pair ? t(pair[1]) : v}</Badge>;
+      },
+    },
+    {
+      title: t("requirements.colTitle"),
+      dataIndex: "title",
+      // 定宽列总和已超过窄屏容器，不声明宽度会被压到 64px
+      width: 240,
+      render: (v, r) =>
+        r.can_open ? (
+          <span className="truncate">{v}</span>
+        ) : (
+          <span className="truncate text-muted-foreground">{v}</span>
+        ),
+    },
+    {
+      title: t("requirements.colProject"),
+      dataIndex: "system_name",
+      width: 130,
+      render: (v) => <span className="truncate">{v || "—"}</span>,
+    },
+    {
+      title: t("requirements.colStatus"),
+      dataIndex: "status",
+      width: 110,
+      render: (v) => {
+        const pair = STATUS[v];
+        return <Badge tone={pair?.[0] ?? "neutral"}>{pair ? t(pair[1]) : v}</Badge>;
+      },
+    },
+    {
+      title: t("qa.req.colTest"),
+      width: 150,
+      render: (_, r) => <TestCell s={tests[r.id]} />,
+    },
+    {
+      title: t("requirements.colIter"),
+      dataIndex: "iteration_status",
+      width: 100,
+      render: (v) => {
+        const pair = ITER[v];
+        return <Badge tone={pair?.[0] ?? "neutral"}>{pair ? t(pair[1]) : v}</Badge>;
+      },
+    },
+    {
+      title: t("requirements.colTag"),
+      dataIndex: "tags",
+      width: 150,
+      // 定高行放不下内联标签编辑器：这里只做摘要，点开弹窗编辑
+      render: (v: string[] | undefined, r) =>
+        !r.can_open ? (
+          <span className="truncate text-muted-foreground">{(v || []).join("、") || "—"}</span>
+        ) : (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setTagDraft(v || []);
+              setTagging(r);
+            }}
+            className="w-full truncate text-left text-[12px] text-muted-foreground transition-colors hover:text-foreground"
+          >
+            {(v || []).join("、") || t("requirements.tagPlaceholder")}
+          </button>
+        ),
+    },
+    {
+      title: t("requirements.colClaimant"),
+      dataIndex: "claimant_name",
+      width: 110,
+      render: (v, r) =>
+        v ? (
+          <span className="truncate">{v}</span>
+        ) : r.proposer_name ? (
+          // 定稿后认领权已交还开发，产品留痕为提出人
+          <span className="truncate text-muted-foreground">
+            {t("requirements.proposedBy", { name: r.proposer_name })}
+          </span>
+        ) : (
+          "—"
+        ),
+    },
+    {
+      title: t("requirements.colActions"),
+      width: 150,
+      render: (_, r) => (
+        <div className="flex items-center gap-2 text-[12px]">
+          {r.can_claim ? (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                claim(r);
+              }}
+              className="whitespace-nowrap text-primary hover:underline"
+            >
+              {t("requirements.claim")}
+            </button>
+          ) : r.can_open ? (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                nav(`/reqs/${r.id}`);
+              }}
+              className="whitespace-nowrap text-primary hover:underline"
+            >
+              {r.status === "claimed" ? t("requirements.continueDiscuss") : t("requirements.view")}
+            </button>
+          ) : null}
+          {r.can_open &&
+            r.status !== "confirmed" &&
+            r.status !== "archived" &&
+            r.status !== "online" && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  openEdit(r);
+                }}
+                className="whitespace-nowrap text-primary hover:underline"
+              >
+                {t("requirements.edit")}
+              </button>
+            )}
+          {(isAdmin() || r.claimant_id === Number(localStorage.getItem("vega_me"))) && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                remove(r);
+              }}
+              className="whitespace-nowrap text-destructive hover:underline"
+            >
+              {t("requirements.delete")}
+            </button>
+          )}
+        </div>
+      ),
+    },
+  ];
 
   return (
     <Page
       title={t("nav.requirements")}
       desc={t("requirements.desc")}
       actions={
-        <Button
-          type="primary"
-          icon={<PlusOutlined />}
-          onClick={() => {
-            setEditing(null);
-            setOpen(true);
-            form.resetFields();
-          }}
-        >
+        <Button size="sm" className="rounded-lg" onClick={openCreate}>
+          <Plus className="size-4" />
           {t("requirements.new")}
         </Button>
       }
@@ -179,310 +441,204 @@ export default function Requirements() {
           <div className="setup-head">{t("requirements.setupHead")}</div>
           <div className="setup-items">
             {SETUP_ITEMS.map(([k, label, to]) => (
-              <a key={k} className={"setup-item" + (setup[k] ? " done" : "")} onClick={() => nav(to)}>
+              <button key={k} type="button" className={"setup-item" + (setup[k] ? " done" : "")} onClick={() => nav(to)}>
                 {setup[k] ? (
-                  <CheckCircleFilled style={{ color: "#52c41a" }} />
+                  <CheckCircle2 className="size-4 text-success" />
                 ) : (
-                  <CheckCircleOutlined style={{ color: "rgba(0,0,0,0.25)" }} />
+                  <Circle className="size-4 text-muted-foreground" />
                 )}
                 {t(label)}
-              </a>
+              </button>
             ))}
           </div>
         </div>
       )}
-      <div className="page-card">
-        <div style={{ marginBottom: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <Input.Search
-            style={{ width: 240 }}
-            allowClear
-            placeholder={t("requirements.searchPlaceholder")}
-            onSearch={(v) => setKeyword(v)}
-            onChange={(e) => !e.target.value && setKeyword("")}
-          />
-          <Select
-            style={{ width: 280 }}
-            allowClear
-            showSearch
-            optionFilterProp="label"
-            placeholder={t("requirements.filterProject")}
-            value={projFilter}
-            onChange={setProjFilter}
-            options={projects.map((p) => ({ value: p.id, label: `${p.path}（${p.code_prefix}）` }))}
-          />
-          <Select
-            style={{ width: 150 }}
-            allowClear
-            showSearch
-            optionFilterProp="label"
-            placeholder={t("requirements.filterStatus")}
-            value={statusFilter}
-            onChange={setStatusFilter}
-            options={Object.entries(STATUS).map(([v, pair]) => ({ value: v, label: t(pair[1]) }))}
-          />
-          <Select
-            style={{ width: 150 }}
-            allowClear
-            showSearch
-            optionFilterProp="label"
-            placeholder={t("requirements.filterIter")}
-            value={iterFilter}
-            onChange={setIterFilter}
-            options={Object.entries(ITER).map(([v, pair]) => ({ value: v, label: t(pair[1]) }))}
-          />
-          <Select
-            style={{ width: 170 }}
-            allowClear
-            showSearch
-            optionFilterProp="label"
-            placeholder={t("requirements.filterTag")}
-            value={tagFilter}
-            onChange={setTagFilter}
-            options={tagOptions.map((tag) => ({ value: tag, label: tag }))}
-          />
-        </div>
-        <ResizableTable<Req>
-          rowKey="id"
-          dataSource={shown}
-          pagination={PAGE}
-          rowClassName={() => "row-click"}
-          onRow={(r) => ({
-            onClick: () => (r.can_open ? nav(`/reqs/${r.id}`) : message.info(t("requirements.cannotOpen"))),
-          })}
-          locale={{
-            emptyText: (
-              <Empty
-                description={filtering ? t("requirements.emptyFiltered") : t("requirements.empty")}
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-                style={{ padding: "32px 0" }}
-              >
-                <Typography.Text type="secondary">{t("requirements.emptyHint")}</Typography.Text>
-              </Empty>
-            ),
-          }}
-          columns={[
-            {
-              title: t("requirements.colCode"),
-              dataIndex: "code",
-              width: 235,
-              render: (v) => <span className="mono">{v}</span>,
-            },
-            {
-              title: t("requirements.colType"),
-              dataIndex: "req_type",
-              width: 80,
-              render: (v) => {
-                const pair = TYPE[v];
-                return <Tag color={pair?.[0] ?? "default"}>{pair ? t(pair[1]) : v}</Tag>;
-              },
-            },
-            {
-              title: t("requirements.colTitle"),
-              dataIndex: "title",
-              ellipsis: true,
-              render: (v, r) =>
-                r.can_open ? (
-                  <a
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      nav(`/reqs/${r.id}`);
-                    }}
-                  >
-                    {v}
-                  </a>
-                ) : (
-                  <span className="muted">{v}</span>
-                ),
-            },
-            {
-              title: t("requirements.colProject"),
-              dataIndex: "system_name",
-              width: 130,
-              ellipsis: true,
-              render: (v) => v || "—",
-            },
-            {
-              title: t("requirements.colStatus"),
-              dataIndex: "status",
-              width: 110,
-              render: (v) => {
-                const pair = STATUS[v];
-                return <Tag color={pair?.[0] ?? "default"}>{pair ? t(pair[1]) : v}</Tag>;
-              },
-            },
-            {
-              title: t("requirements.colIter"),
-              dataIndex: "iteration_status",
-              width: 100,
-              render: (v) => {
-                const pair = ITER[v];
-                return <Tag color={pair?.[0] ?? "default"}>{pair ? t(pair[1]) : v}</Tag>;
-              },
-            },
-            {
-              title: t("requirements.colTag"),
-              dataIndex: "tags",
-              width: 150,
-              render: (v: string[] | undefined, r) =>
-                // 无权打开详情的人也不该能改标签（后端同样会拒）
-                !r.can_open ? (
-                  <span className="muted">{(v || []).join("、") || "—"}</span>
-                ) : (
-                  <div onClick={(e) => e.stopPropagation()}>
-                    <Select
-                      mode="tags"
-                      size="small"
-                      variant="borderless"
-                      style={{ width: "100%" }}
-                      placeholder={t("requirements.tagPlaceholder")}
-                      value={v || []}
-                      tokenSeparators={[",", "，"]}
-                      onChange={(tags: string[]) => saveTags(r, tags)}
-                    />
-                  </div>
-                ),
-            },
-            {
-              title: t("requirements.colClaimant"),
-              dataIndex: "claimant_name",
-              width: 110,
-              render: (v, r) =>
-                v ? (
-                  v
-                ) : r.proposer_name ? (
-                  // 定稿后认领权已交还开发，产品留痕为提出人
-                  <span className="muted">{t("requirements.proposedBy", { name: r.proposer_name })}</span>
-                ) : (
-                  "—"
-                ),
-            },
-            {
-              title: t("requirements.colActions"),
-              width: 150,
-              render: (_, r) => (
-                <Space size={0} split={<Divider type="vertical" />}>
-                  {r.can_claim ? (
-                    <a
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        claim(r);
-                      }}
-                    >
-                      {t("requirements.claim")}
-                    </a>
-                  ) : r.can_open ? (
-                    <a
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        nav(`/reqs/${r.id}`);
-                      }}
-                    >
-                      {r.status === "claimed" ? t("requirements.continueDiscuss") : t("requirements.view")}
-                    </a>
-                  ) : null}
-                  {r.can_open &&
-                    r.status !== "confirmed" &&
-                    r.status !== "archived" &&
-                    r.status !== "online" && (
-                      <a
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          openEdit(r);
-                        }}
-                      >
-                        {t("requirements.edit")}
-                      </a>
-                    )}
-                  {(isAdmin() || r.claimant_id === Number(localStorage.getItem("vega_me"))) && (
-                    <Popconfirm
-                      title={t("requirements.deleteConfirm")}
-                      description={t("requirements.deleteDesc")}
-                      okButtonProps={{ danger: true }}
-                      onConfirm={() => remove(r)}
-                    >
-                      <a className="danger-link" onClick={(e) => e.stopPropagation()}>
-                        {t("requirements.delete")}
-                      </a>
-                    </Popconfirm>
-                  )}
-                </Space>
-              ),
-            },
-          ]}
+
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <Input
+          value={keyword}
+          onChange={setKeyword}
+          placeholder={t("requirements.searchPlaceholder")}
+          leftIcon={<Search />}
+          classNames={{ field: "rounded-lg" }}
+          className="w-[240px]"
+        />
+        <SearchSelect
+          value={systemFilter}
+          onChange={(v) => setSystemFilter(v == null ? undefined : Number(v))}
+          placeholder={t("requirements.filterSystem")}
+          clearable
+          options={scopedSystems.map((s) => ({ value: s.id, label: `${s.path}（${s.code_prefix}）` }))}
+          className="w-[260px]"
+        />
+        <SearchSelect
+          value={statusFilter}
+          onChange={(v) => setStatusFilter(v == null ? undefined : String(v))}
+          placeholder={t("requirements.filterStatus")}
+          clearable
+          options={Object.entries(STATUS).map(([v, pair]) => ({ value: v, label: t(pair[1]) }))}
+          className="w-[150px]"
+        />
+        <SearchSelect
+          value={iterFilter}
+          onChange={(v) => setIterFilter(v == null ? undefined : String(v))}
+          placeholder={t("requirements.filterIter")}
+          clearable
+          options={Object.entries(ITER).map(([v, pair]) => ({ value: v, label: t(pair[1]) }))}
+          className="w-[150px]"
+        />
+        <SearchSelect
+          value={tagFilter}
+          onChange={(v) => setTagFilter(v == null ? undefined : String(v))}
+          placeholder={t("requirements.filterTag")}
+          clearable
+          options={tagOptions.map((tag) => ({ value: tag, label: tag }))}
+          className="w-[170px]"
         />
       </div>
-      <Modal
+
+      <DataTable<Req>
+        rowKey="id"
+        dataSource={shown}
+        columns={columns}
+        onRowClick={(r) =>
+          r.can_open ? nav(`/reqs/${r.id}`) : toast.info(t("requirements.cannotOpen"))
+        }
+        emptyText={
+          <div className="py-10 text-center">
+            <p className="m-0 text-sm text-foreground">
+              {filtering ? t("requirements.emptyFiltered") : t("requirements.empty")}
+            </p>
+            <p className="m-0 mt-1 text-xs text-muted-foreground">
+              {t("requirements.emptyHint")}
+            </p>
+          </div>
+        }
+      />
+
+      <CenterMorphModal
         open={open}
-        title={editing ? t("requirements.editTitle") : t("requirements.createTitle")}
-        onCancel={() => {
-          setOpen(false);
-          setEditing(null);
+        onOpenChange={(next) => {
+          if (!next) {
+            setOpen(false);
+            setEditing(null);
+          }
         }}
-        onOk={() => form.submit()}
-        destroyOnClose
       >
-        <Form
-          form={form}
-          layout="vertical"
-          initialValues={{ system_id: projects[0]?.id, req_type: "requirement" }}
-          onFinish={async (v) => {
-            try {
-              if (editing) {
-                await api(`/api/requirements/${editing.id}`, {
-                  method: "PUT",
-                  body: JSON.stringify({
-                    title: v.title,
-                    description: v.description ?? null,
-                  }),
-                });
-                message.success(t("requirements.saved"));
-                setOpen(false);
-                setEditing(null);
-                load();
-              } else {
-                const r = await api<Req>("/api/requirements", { method: "POST", body: JSON.stringify(v) });
-                message.success(t("requirements.created", { code: r.code }));
-                setOpen(false);
-                nav(`/reqs/${r.id}`);
-              }
-            } catch (e: any) {
-              message.error(e.message);
-            }
-          }}
+        <CenterMorphModalContent
+          ariaLabel={
+            editing ? t("requirements.editTitle") : t("requirements.createTitle")
+          }
+          className="max-w-[560px]"
         >
-          <Form.Item
-            name="system_id"
-            label={t("requirements.projectLabel")}
-            rules={[{ required: true }]}
-            tooltip={t("requirements.projectTooltip")}
-          >
-            <Select
-              disabled={!!editing}
-              showSearch
-              optionFilterProp="label"
-              options={projects.map((p) => ({
-                value: p.id,
-                label: `${p.path}（${p.code_prefix}）`,
-              }))}
-            />
-          </Form.Item>
-          <Form.Item name="req_type" label={t("requirements.typeLabel")}>
-            <Select
-              disabled={!!editing}
-              options={[
-                { value: "requirement", label: t("requirements.typeRequirement") },
-                { value: "bug", label: t("requirements.typeBug") },
-              ]}
-            />
-          </Form.Item>
-          <Form.Item name="title" label={t("requirements.titleLabel")} rules={[{ required: true }]}>
-            <Input />
-          </Form.Item>
-          <Form.Item name="description" label={t("requirements.descLabel")}>
-            <Input.TextArea rows={4} />
-          </Form.Item>
-        </Form>
-      </Modal>
+          <div className="p-6">
+            <h2 className="m-0 text-lg font-semibold tracking-[-0.01em] text-foreground">
+              {editing ? t("requirements.editTitle") : t("requirements.createTitle")}
+            </h2>
+            <div className="mt-5 flex flex-col gap-4">
+              <Field
+                label={t("requirements.projectLabel")}
+                tip={t("requirements.projectTooltip")}
+                error={form.errors.system_id}
+              >
+                <SearchSelect
+                  value={form.values.system_id}
+                  onChange={(v) => form.set("system_id", v == null ? undefined : Number(v))}
+                  disabled={!!editing}
+                  options={scopedSystems.map((s) => ({
+                    value: s.id,
+                    label: `${s.path}（${s.code_prefix}）`,
+                  }))}
+                  placeholder={t("requirements.projectLabel")}
+                />
+              </Field>
+              <Field label={t("requirements.typeLabel")}>
+                <SearchSelect
+                  value={form.values.req_type}
+                  onChange={(v) =>
+                    form.set("req_type", (v as "requirement" | "bug") || "requirement")
+                  }
+                  disabled={!!editing}
+                  options={[
+                    { value: "requirement", label: t("requirements.typeRequirement") },
+                    { value: "bug", label: t("requirements.typeBug") },
+                  ]}
+                />
+              </Field>
+              <Input
+                label={t("requirements.titleLabel")}
+                value={form.values.title}
+                onChange={(v) => form.set("title", v)}
+                error={form.errors.title}
+                classNames={{ field: "rounded-lg" }}
+              />
+              <Textarea
+                label={t("requirements.descLabel")}
+                rows={4}
+                value={form.values.description}
+                onChange={(v) => form.set("description", v)}
+              />
+            </div>
+            <div className="mt-6 flex justify-end gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="rounded-lg"
+                onClick={() => {
+                  setOpen(false);
+                  setEditing(null);
+                }}
+              >
+                {t("common.cancel")}
+              </Button>
+              <Button size="sm" className="rounded-lg" onClick={save}>
+                {t("common.save")}
+              </Button>
+            </div>
+          </div>
+        </CenterMorphModalContent>
+      </CenterMorphModal>
+
+      <CenterMorphModal
+        open={!!tagging}
+        onOpenChange={(next) => {
+          if (!next) setTagging(null);
+        }}
+      >
+        <CenterMorphModalContent
+          ariaLabel={t("requirements.colTag")}
+          className="max-w-[460px]"
+        >
+          <div className="p-6">
+            <h2 className="m-0 text-lg font-semibold tracking-[-0.01em] text-foreground">
+              {t("requirements.colTag")}
+            </h2>
+            <p className="m-0 mt-1 font-mono text-[12px] text-muted-foreground">
+              {tagging?.code}
+            </p>
+            <div className="mt-4">
+              <TagInput
+                value={tagDraft}
+                onChange={setTagDraft}
+                placeholder={t("requirements.tagPlaceholder")}
+              />
+            </div>
+            <div className="mt-6 flex justify-end gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="rounded-lg"
+                onClick={() => setTagging(null)}
+              >
+                {t("common.cancel")}
+              </Button>
+              <Button size="sm" className="rounded-lg" onClick={saveTags}>
+                {t("common.save")}
+              </Button>
+            </div>
+          </div>
+        </CenterMorphModalContent>
+      </CenterMorphModal>
     </Page>
   );
 }

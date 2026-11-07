@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import Markdown from "react-markdown";
-import { Spin } from "antd";
+import { Loader } from "./motion/loader";
 import { api } from "../api";
 import i18n from "../i18n";
 
@@ -57,7 +57,12 @@ export default function DocPreview({ reqId, doc }: { reqId: number; doc: DocMeta
   }, [reqId, doc.id, doc.filename]);
 
   if (err) return <div className="md-body">{err}</div>;
-  if (md === null && html === null && text === null) return <Spin style={{ padding: 24, display: "block" }} />;
+  if (md === null && html === null && text === null)
+    return (
+      <div className="p-6">
+        <Loader size={24} />
+      </div>
+    );
   if (md !== null) return (
     <div className="md-body">
       <Markdown>{md}</Markdown>

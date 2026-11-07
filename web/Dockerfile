@@ -3,6 +3,9 @@
 # 国内构建可传 --build-arg NPM_REGISTRY=https://registry.npmmirror.com
 FROM node:22-slim AS build
 ARG NPM_REGISTRY=https://registry.npmjs.org
+# 测试域（aster API）的对外 origin；不设则页面里的 QA 请求走同源（会 404）
+ARG VITE_QA_API_BASE=""
+ENV VITE_QA_API_BASE=${VITE_QA_API_BASE}
 WORKDIR /app
 COPY web/package.json web/pnpm-lock.yaml web/pnpm-workspace.yaml ./
 RUN npm config set registry ${NPM_REGISTRY} \

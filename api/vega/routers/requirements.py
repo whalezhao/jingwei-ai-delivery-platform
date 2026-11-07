@@ -142,6 +142,7 @@ async def _get_req_open(db: AsyncSession, req_id: int, me: Person) -> Requiremen
 async def list_requirements(
     system_id: int | None = None,
     group_id: int | None = None,
+    project_id: int | None = None,
     status: str | None = None,
     db: AsyncSession = Depends(get_db),
     me: Person = Depends(current_person),
@@ -151,6 +152,14 @@ async def list_requirements(
         q = q.where(Requirement.system_id == system_id)
     if group_id:
         q = q.join(System, Requirement.system_id == System.id).where(System.group_id == group_id)
+    if project_id:
+        q = q.where(
+            Requirement.system_id.in_(
+                select(System.id)
+                .join(DevGroup, DevGroup.id == System.group_id)
+                .where(DevGroup.project_id == project_id)
+            )
+        )
     if status:
         q = q.where(Requirement.status == status)
     rows = (await db.scalars(q)).all()

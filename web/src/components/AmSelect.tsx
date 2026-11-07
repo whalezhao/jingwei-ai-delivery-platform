@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
-import { Input, Select, message } from "antd";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
+import { toast } from "../ui/toast";
+import SearchSelect from "../ui/SearchSelect";
+import { Input } from "./motion/input";
 
 interface AmItem {
   id: string;
@@ -24,7 +26,6 @@ export default function AmSelect({
   size,
   style,
   prefix,
-  getPopupContainer,
 }: {
   kind: "team" | "agent";
   teamId?: string; // kind=agent 时生效
@@ -36,73 +37,76 @@ export default function AmSelect({
   size?: "small" | "middle" | "large";
   style?: CSSProperties;
   prefix?: ReactNode;
-  // 放进 Popover 时指回容器：下拉在弹层内部展开，鼠标移过去不会触发弹层 mouseleave
+  // beUI 下拉 portal 到 body，无需 antd 的挂载容器；保留入参兼容旧调用
   getPopupContainer?: (triggerNode: HTMLElement) => HTMLElement;
 }) {
   const { t } = useTranslation();
   const [options, setOptions] = useState<AmItem[]>([]);
   const [fallback, setFallback] = useState(false);
 
-  const load = useCallback(
-    async (open: boolean) => {
-      if (!open) return;
-      if (kind === "agent" && !teamId) {
-        message.info(t("amSelect.chooseTeamFirst"));
-        return;
-      }
-      try {
-        const url =
-          kind === "team" ? "/api/am/teams" : `/api/am/agents?team_id=${encodeURIComponent(teamId || "")}`;
-        setOptions(await api<AmItem[]>(url));
-        // 上一次失败降级成手输框后，重新展开还能回到下拉（hub 恢复后自愈）
-        setFallback(false);
-      } catch (e: any) {
-        message.error(t("amSelect.loadFailed", { error: e.message }));
-        setFallback(true);
-      }
-    },
-    [kind, teamId, t],
-  );
+  const fetchOptions = useCallback(async () => {
+    try {
+      const url =
+        kind === "team"
+          ? "/api/am/teams"
+          : `/api/am/agents?team_id=${encodeURIComponent(teamId || "")}`;
+      setOptions(await api<AmItem[]>(url));
+      // 上一次失败降级成手输框后，重新展开还能回到下拉（hub 恢复后自愈）
+      setFallback(false);
+    } catch (e: any) {
+      toast.error(t("amSelect.loadFailed", { error: e.message }));
+      setFallback(true);
+    }
+  }, [kind, teamId, t]);
 
-  // 已存 id 在重开弹窗时要解析回名字：antd Select 找不到匹配 option 会直接显示原始 id
+  const onOpen = () => {
+    if (kind === "agent" && !teamId) {
+      toast.info(t("amSelect.chooseTeamFirst"));
+      return;
+    }
+    fetchOptions();
+  };
+
+  // 已存 id 在重开弹窗时要解析回名字
   useEffect(() => {
-    if (value && (kind === "team" || teamId)) load(true);
-  }, [value, kind, teamId, load]);
+    if (value && (kind === "team" || teamId)) fetchOptions();
+  }, [value, kind, teamId, fetchOptions]);
 
-  const selectedName = fallback ? (value ?? undefined) : options.find((o) => o.id === value)?.name;
+  const selectedName = fallback
+    ? (value ?? undefined)
+    : options.find((o) => o.id === value)?.name;
   useEffect(() => {
     onLabelChange?.(selectedName);
   }, [selectedName, onLabelChange]);
 
   if (fallback) {
     return (
-      <Input
-        size={size}
-        style={style}
-        prefix={prefix}
-        placeholder={placeholder}
-        value={value ?? ""}
-        onChange={(e) => onChange?.(e.target.value)}
-      />
+      <div style={style}>
+        <Input
+          value={value ?? ""}
+          onChange={(v) => onChange?.(v)}
+          placeholder={placeholder}
+          leftIcon={prefix}
+          classNames={{ field: "rounded-lg" }}
+        />
+      </div>
     );
   }
   return (
-    <Select
-      showSearch
-      allowClear
-      size={size}
-      style={style}
-      prefix={prefix}
-      placeholder={placeholder}
-      onOpenChange={load}
-      onChange={onChange}
-      value={value ?? undefined}
-      optionFilterProp="label"
-      getPopupContainer={getPopupContainer}
+    <SearchSelect
+      value={value ?? null}
+      onChange={(v) => onChange?.(v == null ? undefined : String(v))}
       options={options.map((o) => ({
         value: o.id,
-        label: o.description ? `${o.name}（${o.description.slice(0, 20)}）` : o.name,
+        label: o.description
+          ? `${o.name}（${o.description.slice(0, 20)}）`
+          : o.name,
       }))}
+      placeholder={placeholder}
+      onOpen={onOpen}
+      leftIcon={prefix}
+      style={style}
+      className={size === "small" ? "h-8 text-xs" : undefined}
     />
   );
 }

@@ -7,19 +7,32 @@ x-logging: &logging
       max-size: "20m"
       max-file: "5"
 
+# Docker 会把本机代理配置注入容器（当前指向已停用的 127.0.0.1:7897），容器内连不通。
+# 统一清空，容器访问内网/外网一律直连。
+x-no-proxy: &no-proxy
+  HTTP_PROXY: ""
+  HTTPS_PROXY: ""
+  ALL_PROXY: ""
+  http_proxy: ""
+  https_proxy: ""
+  all_proxy: ""
+  NO_PROXY: "*"
+  no_proxy: "*"
+
 services:
-  # 可选：只在 --profile bundled-db 时启动。复用现成 PG 时不需要它，
-  # 但 profiles 里的变量仍会被 compose 解析，所以密码不能写成 :?（空密码会让 PG 自己拒绝启动）。
+  # 内置 PG：本地和单机部署默认用它。要复用现成 PG 时，把 .env 的
+  # VEGA_DATABASE_URL 指过去，并只启动 api/web/qa-* 这些服务。
   db:
-    profiles: ["bundled-db"]
     image: postgres:17-alpine
     restart: unless-stopped
     environment:
       POSTGRES_USER: vega
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 .env 设置 POSTGRES_PASSWORD}
       POSTGRES_DB: vega
     volumes:
       - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U vega -d vega"]
       interval: 10s
@@ -36,9 +49,10 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
+      <<: *no-proxy
       # 必填：外部 PG（如 内网主机 上现成的实例）或内置 db（--profile bundled-db）都填这里；
       # 沿用现成 SQLite 文件也行：sqlite+aiosqlite:////data/vega.db
-      VEGA_DATABASE_URL: ${VEGA_DATABASE_URL:?请在 .env 里设置 VEGA_DATABASE_URL}
+      VEGA_DATABASE_URL: postgresql+asyncpg://vega:${POSTGRES_PASSWORD:?请在 .env 设置 POSTGRES_PASSWORD}@db:5432/vega
     volumes:
       - ./data:/data
     depends_on:
@@ -59,11 +73,83 @@ services:
       dockerfile: web/Dockerfile
       args:
         NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org}
+        VITE_QA_API_BASE: ${VITE_QA_API_BASE:-http://localhost:8100}
     restart: unless-stopped
     ports:
       - "8180:80"
     depends_on:
       - api
+    <<: *logging
+
+  # 测试域：与 Vega 共库（同一个 DATABASE_URL），只建 qa_* 表。
+  # 浏览器从 Vega 页面直接调 http://localhost:8100，所以必须发布端口并放行 CORS。
+  qa-api:
+    image: aster-qa-api:vega
+    build:
+      context: ./qa
+      dockerfile: Dockerfile
+      args:
+        UV_INDEX_URL: ${PIP_INDEX_URL:-}
+    restart: unless-stopped
+    environment:
+      <<: *no-proxy
+      DATABASE_URL: postgresql+asyncpg://vega:${POSTGRES_PASSWORD:?请在 .env 设置 POSTGRES_PASSWORD}@db:5432/vega
+      VEGA_SECRET_KEY: ${VEGA_SECRET_KEY:?请在 .env 设置 VEGA_SECRET_KEY}
+      ENVIRONMENT_SECRET_KEY: ${QA_ENVIRONMENT_SECRET_KEY:-dev-environment-key-change-me}
+      # 用 Bearer token 鉴权、不依赖 cookie，允许任意来源（含局域网 IP/OrbStack 别名访问）
+      CORS_ORIGINS: ${QA_CORS_ORIGINS:-*}
+      PUBLIC_BASE_URL: ${QA_PUBLIC_BASE_URL:-http://localhost:8100}
+      WORKER_STALE_SECONDS: ${WORKER_STALE_SECONDS:-90}
+    volumes:
+      - qa-run-artifacts:/app/runner/.runs
+      - qa-midscene:/app/runner/midscene_run
+    ports:
+      - "${QA_API_PORT:-8100}:8000"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    <<: *logging
+
+  qa-worker:
+    image: aster-qa-worker:vega
+    build:
+      context: ./qa
+      dockerfile: Dockerfile.worker
+      args:
+        DEBIAN_MIRROR: ${DEBIAN_MIRROR:-}
+        PLAYWRIGHT_DOWNLOAD_HOST: ${PLAYWRIGHT_DOWNLOAD_HOST:-https://cdn.npmmirror.com/binaries/playwright}
+        UV_INDEX_URL: ${PIP_INDEX_URL:-}
+        NPM_REGISTRY: ${NPM_REGISTRY:-}
+    restart: unless-stopped
+    init: true
+    environment:
+      <<: *no-proxy
+      DATABASE_URL: postgresql+asyncpg://vega:${POSTGRES_PASSWORD:?请在 .env 设置 POSTGRES_PASSWORD}@db:5432/vega
+      VEGA_SECRET_KEY: ${VEGA_SECRET_KEY:?请在 .env 设置 VEGA_SECRET_KEY}
+      ENVIRONMENT_SECRET_KEY: ${QA_ENVIRONMENT_SECRET_KEY:-dev-environment-key-change-me}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
+      WORKER_STALE_SECONDS: ${WORKER_STALE_SECONDS:-90}
+      HEADLESS: "true"
+      CHROMIUM_NO_SANDBOX: "1"
+    volumes:
+      - qa-run-artifacts:/app/runner/.runs
+      - qa-midscene:/app/runner/midscene_run
+    depends_on:
+      qa-api:
+        condition: service_healthy
+    stop_grace_period: 900s
     <<: *logging
 
   # 可选：runner 节点。界面里创建节点拿 token 后，填进 .env 再
@@ -83,6 +169,7 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
+      <<: *no-proxy
       VEGA_API_URL: http://api:8000
       VEGA_RUNNER_TOKEN: ${VEGA_RUNNER_TOKEN:-}
       VEGA_RUNNER_NAME: ${VEGA_RUNNER_NAME:-vega-runner-1}
@@ -101,3 +188,5 @@ volumes:
   claude-config:
   runner-home:
   runner-workspace:
+  qa-run-artifacts:
+  qa-midscene:

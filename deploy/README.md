@@ -1,4 +1,4 @@
-# Vega 部署手册（Docker Compose）
+# 经纬 部署手册（Docker Compose）
 
 ## 组成
 

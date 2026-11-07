@@ -1,9 +1,12 @@
-import { ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { Button, Empty, Segmented, Select, Tooltip, message } from "antd";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import ResizableTable from "../ResizableTable";
 import { api, isAdmin } from "../api";
-import { PAGE } from "../table";
+import DataTable, { type DataTableColumn } from "../ui/DataTable";
+import SearchSelect from "../ui/SearchSelect";
+import { toast } from "../ui/toast";
+import { Button } from "../components/motion/button/index";
+import { Tooltip } from "../components/motion/tooltip";
+import { Tabs, TabsList, TabsTrigger } from "../components/motion/tabs";
 
 /**
  * 工作台 · 代码统计：读每日落库的 DailyStat / FileStat，按区间聚合。
@@ -106,7 +109,9 @@ function TrendChart({ days }: { days: Day[] }) {
     // 容器必须常驻：数据没到时若整块换成 Empty，ref 挂不上，测量用的 effect 再也不会跑
     <div className="cs-trend" ref={ref}>
       {!days.length ? (
-        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t("codeStats.emptyRange")} />
+        <div className="py-10 text-center text-sm text-muted-foreground">
+          {t("codeStats.emptyRange")}
+        </div>
       ) : (
         <>
       <svg
@@ -193,7 +198,7 @@ function RankBars({
   const { t } = useTranslation();
   const unitText = unit ?? t("codeStats.unitCommits");
   if (!items.length) {
-    return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={emptyText} style={{ padding: "20px 0" }} />;
+    return <div className="py-5 text-center text-sm text-muted-foreground">{emptyText}</div>;
   }
   const max = Math.max(1, ...items.map((i) => i.value));
   return (
@@ -201,7 +206,7 @@ function RankBars({
       {items.map((it, i) => (
         <div className="cs-bar-row" key={it.label}>
           <span className="cs-bar-name">
-            <Tooltip title={it.label} placement="topLeft" mouseEnterDelay={0.15}>
+            <Tooltip content={it.label}>
               <span>
                 {medal && i < 3 && <b className="cs-medal">{MEDAL[i]}</b>}
                 {it.label}
@@ -241,11 +246,12 @@ function Section({ title, hint, children }: { title: string; hint?: ReactNode; c
 export default function CodeStats({ groupId, projectId }: { groupId?: number; projectId?: number }) {
   const { t, i18n } = useTranslation();
   const loc = i18n.resolvedLanguage?.startsWith("zh") ? "zh-CN" : "en-US";
-  const num = (title: string, key: keyof Row) => ({
+  const num = (title: string, key: keyof Row): DataTableColumn<any> => ({
     title,
     dataIndex: key,
     align: "right" as const,
-    render: (n: number) => n.toLocaleString(loc),
+    width: 110,
+    render: (n: number) => (n ?? 0).toLocaleString(loc),
   });
   const [kind, setKind] = useState("today");
   const [personId, setPersonId] = useState<number | undefined>();
@@ -280,7 +286,7 @@ export default function CodeStats({ groupId, projectId }: { groupId?: number; pr
 
   const pull = async () => {
     if (!groupId) {
-      message.warning(t("codeStats.chooseGroupFirst"));
+      toast.warning(t("codeStats.chooseGroupFirst"));
       return;
     }
     const [start, end] = range(kind);
@@ -289,10 +295,10 @@ export default function CodeStats({ groupId, projectId }: { groupId?: number; pr
     setPulling(true);
     try {
       const d = await api<any>(`/api/code-stats/collect?${p}`, { method: "POST" });
-      message.success(t("codeStats.collected", { days: d.days, rows: d.rows, files: d.files }));
+      toast.success(t("codeStats.collected", { days: d.days, rows: d.rows, files: d.files }));
       setTick((t) => t + 1);
     } catch (e: any) {
-      message.error(e.message);
+      toast.error(e.message);
     } finally {
       setPulling(false);
     }
@@ -327,33 +333,29 @@ export default function CodeStats({ groupId, projectId }: { groupId?: number; pr
   return (
     <div>
       <div className="wb-bar">
-        <Segmented
-          value={kind}
-          onChange={(v) => setKind(v as string)}
-          options={[
-            { value: "today", label: t("codeStats.rangeToday") },
-            { value: "yesterday", label: t("codeStats.rangeYesterday") },
-            { value: "week", label: t("codeStats.rangeWeek") },
-            { value: "month", label: t("codeStats.rangeMonth") },
-          ]}
-        />
-        <Select
-          style={{ width: 180 }}
-          allowClear
-          showSearch
-          optionFilterProp="label"
+        <Tabs value={kind} onValueChange={setKind} variant="segment">
+          <TabsList>
+            <TabsTrigger value="today">{t("codeStats.rangeToday")}</TabsTrigger>
+            <TabsTrigger value="yesterday">{t("codeStats.rangeYesterday")}</TabsTrigger>
+            <TabsTrigger value="week">{t("codeStats.rangeWeek")}</TabsTrigger>
+            <TabsTrigger value="month">{t("codeStats.rangeMonth")}</TabsTrigger>
+          </TabsList>
+        </Tabs>
+        <SearchSelect
+          value={personId ?? null}
+          onChange={(v) => setPersonId(v == null ? undefined : Number(v))}
+          clearable
           placeholder={t("codeStats.personPlaceholder")}
-          value={personId}
-          onChange={setPersonId}
           options={people.map((p) => ({ value: p.id, label: p.name }))}
+          className="w-[180px]"
         />
         {isAdmin() && (
-          <Button loading={pulling} onClick={pull}>
+          <Button variant="outline" size="sm" className="rounded-lg" onClick={pull} disabled={pulling}>
             {t("codeStats.pull")}
           </Button>
         )}
         {data && (
-          <span style={{ color: "var(--muted)", fontSize: 12 }}>
+          <span className="text-[12px] text-muted-foreground">
             {data.start} ~ {data.end}
             {data.totals.commits === 0 && t("codeStats.noDataHint")}
           </span>
@@ -435,32 +437,22 @@ export default function CodeStats({ groupId, projectId }: { groupId?: number; pr
 
       {!personId && (
         <Section title={t("codeStats.hotFiles")} hint={t("codeStats.hotFilesHint")}>
-          <ResizableTable
-            size="small"
-            rowKey={(r) => `${r.system_id}:${r.path}`}
+          <DataTable
+            rowKey={(r: any) => `${r.system_id}:${r.path}`}
             loading={loading}
-            pagination={PAGE}
             dataSource={data?.hot_files || []}
+            className="rounded-none border-0 bg-transparent"
+            emptyText={t("common.noData")}
             columns={[
               {
                 title: t("codeStats.colFile"),
                 dataIndex: "path",
-                ellipsis: { showTitle: false },
-                render: (v: string) => (
-                  <Tooltip title={v} placement="topLeft" mouseEnterDelay={0.15}>
-                    <span>{v}</span>
-                  </Tooltip>
-                ),
+                render: (v: string) => <span className="truncate">{v}</span>,
               },
               {
                 title: t("codeStats.colProject"),
                 dataIndex: "system",
-                ellipsis: { showTitle: false },
-                render: (v: string) => (
-                  <Tooltip title={v} placement="topLeft" mouseEnterDelay={0.15}>
-                    <span>{v}</span>
-                  </Tooltip>
-                ),
+                render: (v: string) => <span className="truncate">{v}</span>,
               },
               {
                 title: t("codeStats.colChanges"),
@@ -483,12 +475,12 @@ export default function CodeStats({ groupId, projectId }: { groupId?: number; pr
       )}
 
       <Section title={t("codeStats.dailyDetail")} hint={t("codeStats.dailyHint")}>
-        <ResizableTable
-          size="small"
+        <DataTable<Day>
           rowKey="date"
           loading={loading}
-          pagination={PAGE}
           dataSource={data?.daily || []}
+          className="rounded-none border-0 bg-transparent"
+          emptyText={t("common.noData")}
           columns={[
             { title: t("codeStats.colDate"), dataIndex: "date" },
             num(t("codeStats.colCommits"), "commits"),

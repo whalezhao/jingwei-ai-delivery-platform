@@ -1,0 +1,61 @@
+#
+# 执行 worker：Python（跑队列）+ Node（midscene 执行器）+ Chromium。
+#
+# 这个镜像比 API 大得多（Chromium + 系统依赖约 1.5GB）。如果只想调界面，可以
+# 只起 api + web；要真正跑用例才需要它。
+
+FROM python:3.13-slim-bookworm
+
+# 国内网络构建时再传镜像源；默认留空走官方源（GitHub Actions 等海外构建不受影响）
+#   --build-arg DEBIAN_MIRROR=https://mirrors.aliyun.com
+#   --build-arg PLAYWRIGHT_DOWNLOAD_HOST=https://npmmirror.com/mirrors/playwright
+ARG DEBIAN_MIRROR=
+ARG PLAYWRIGHT_DOWNLOAD_HOST=
+ARG UV_INDEX_URL=
+ARG NPM_REGISTRY=
+ENV PLAYWRIGHT_DOWNLOAD_HOST=${PLAYWRIGHT_DOWNLOAD_HOST}
+
+# Node 20（midscene 执行器需要）
+RUN if [ -n "$DEBIAN_MIRROR" ]; then \
+        host="${DEBIAN_MIRROR#*://}"; \
+        sed -i "s|deb.debian.org|$host|g" /etc/apt/sources.list.d/debian.sources 2>/dev/null || true; \
+        if [ -f /etc/apt/sources.list ]; then \
+            sed -i "s|deb.debian.org|$host|g" /etc/apt/sources.list; \
+        fi; \
+    fi \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates gnupg \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# ghcr.io 在部分内网/国内直连不通，装 PyPI 上的 uv（走构建时镜像源）
+RUN if [ -n "$UV_INDEX_URL" ]; then pip install --no-cache-dir uv -i "$UV_INDEX_URL"; else pip install --no-cache-dir uv; fi
+
+WORKDIR /app
+
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    PYTHONUNBUFFERED=1 \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+# 先装执行器依赖和 Chromium，再拷业务代码 —— 改 Python 代码/版本号时不用重下浏览器
+WORKDIR /app/runner
+COPY runner/package.json runner/package-lock.json ./
+RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi; npm ci
+RUN npx playwright install --with-deps chromium
+
+WORKDIR /app
+COPY . .
+
+# 本地开发用 .env 提供非模型配置；容器里没有这个文件也支持直接注入 MIDSCENE_* 环境变量
+COPY runner/.env.example runner/.env
+
+WORKDIR /app
+RUN --mount=type=cache,target=/root/.cache/uv if [ -n "$UV_INDEX_URL" ]; then export UV_INDEX_URL; fi; uv sync --frozen --no-dev
+ENV PATH="/app/.venv/bin:$PATH"
+
+# 让容器的 init 进程回收 midscene 派生的浏览器子进程
+STOPSIGNAL SIGTERM
+
+CMD ["python", "worker.py"]

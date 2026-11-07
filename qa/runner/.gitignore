@@ -1,0 +1,6 @@
+node_modules/
+.env
+# 每次执行的工作目录（含暂存的用例、产物、日志）
+.runs/
+# midscene 自己写的运行目录（报告/log/cache）
+midscene_run/

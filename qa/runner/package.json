@@ -1,0 +1,25 @@
+{
+  "name": "aster-qa-runner",
+  "private": true,
+  "type": "module",
+  "description": "Aster QA 平台自己管的 midscene 执行器。平台每次执行在这里生成一个 .runs/<run_id>/ 私有子目录，不复制 node_modules。",
+  "scripts": {
+    "test": "midscene-test"
+  },
+  "dependencies": {
+    "@midscene/core": "1.17.3",
+    "@midscene/shared": "1.17.3",
+    "@midscene/test": "1.17.3",
+    "@midscene/web": "1.17.3",
+    "@playwright/test": "1.64.1",
+    "playwright": "1.64.1"
+  },
+  "overrides": {
+    "js-yaml": "4.3.2",
+    "sharp": "0.35.5",
+    "uuid": "11.1.1",
+    "glob": "11.1.0",
+    "basic-ftp": "6.2.1",
+    "@puppeteer/browsers": "3.2.5"
+  }
+}

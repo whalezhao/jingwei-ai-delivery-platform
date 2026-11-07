@@ -1,4 +1,4 @@
-# Vega · 织女星 — 研发流程自动化平台
+# 经纬 · JINGWEI — 研发交付平台
 
 [English](README.en.md) | 简体中文
 
@@ -33,7 +33,7 @@ octo 群 ← 播报/派单 ← vega-api ← webhook ← GitLab 13.12
                         ↑  ↓ 长轮询
                     vega-runner（可多节点，每节点驱动 claude -p）
                         ↑ SSE 流式
-                     vega-web（React 18 + antd 5 + @ant-design/x）
+                     vega-web（React 18 + Tailwind v4 + beUI）
 ```
 
 | 组件 | 技术 | 说明 |

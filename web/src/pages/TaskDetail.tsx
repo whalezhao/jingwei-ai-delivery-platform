@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { Button, Empty, Spin, Tag, Typography } from "antd";
-import { BulbOutlined, CheckOutlined, CloseOutlined, RightOutlined } from "@ant-design/icons";
+import { Bot, Check, ChevronRight, Lightbulb, LoaderCircle, X } from "lucide-react";
+import { Button } from "../components/motion/button/index";
+import Badge from "../ui/Badge";
+import { Chain, type ChainItem } from "../ui/Chain";
 import { useTranslation } from "react-i18next";
 import Markdown from "react-markdown";
-import ThoughtChain from "@ant-design/x/es/thought-chain";
-import type { ThoughtChainItemType } from "@ant-design/x/es/thought-chain";
 import { rawNode } from "../eventNodes";
 import { api } from "../api";
 import i18n, { type MsgKey } from "../i18n";
@@ -24,7 +24,7 @@ import {
 
 /**
  * 任务详情页：定稿需求 + 定稿方案 + AI 实时工作进展。
- * 进展 = Ant Design X ThoughtChain，按事件的 parent 字段分「主 Agent / 子 Agent」泳道
+ * 进展 = 本地 Chain 思考链，按事件的 parent 字段分「主 Agent / 子 Agent」泳道
  * （子 agent 由主 agent 在执行期用 Task 工具自开，parent 即派生它的 tool_use id）。
  * 数据 = SSE 实时推（按本任务的 runner 任务号过滤 dev_raw）+ 3s 轮询兜底对账。
  */
@@ -52,7 +52,7 @@ function evtBody(e: TaskEvent & { parent?: string }): string {
   return e.text || "";
 }
 
-/** 泳道事件 → ThoughtChain 节点（与需求对话页同款）：
+/** 泳道事件 → 思考链节点（与需求对话页同款）：
  *  每次思考是可折叠链节点；tool_use/tool_result 就地配对，按工具类型出动作行
  *  （命令/文件/搜索…）；原生 status（loading 转圈 / success ✓ / error ✗ / abort ⊖），
  *  思考结束回落灯泡图标；任务失败时遗留 loading 标 abort。 */
@@ -60,15 +60,15 @@ function laneItems(
   evts: (TaskEvent & { parent?: string })[],
   laneLive: boolean,
   failed: boolean,
-): ThoughtChainItemType[] {
-  type ChainNode = ThoughtChainItemType & { kind: "think" | "tool" | "raw"; toolName?: string; arg?: string };
+): ChainItem[] {
+  type ChainNode = ChainItem & { kind: "think" | "tool" | "raw"; toolName?: string; arg?: string };
   const items: ChainNode[] = [];
   for (const e of evts) {
     if (e.kind === "thinking") {
       items.push({
         kind: "think",
         key: `k${e.seq}`,
-        icon: <BulbOutlined />,
+        icon: <Lightbulb size={14} />,
         title: i18n.t("taskDetail.thinking"),
         collapsible: true,
         content: thinkBlock(e.text || ""),
@@ -96,7 +96,7 @@ function laneItems(
           <>
             {actionRow(m.icon, it.arg || "…")}
             {actionRow(
-              e.is_error ? <CloseOutlined /> : <CheckOutlined />,
+              e.is_error ? <X size={14} /> : <Check size={14} />,
               line || i18n.t("events.noOutput"),
               e.is_error ? "err" : "ok",
               e.is_error ? i18n.t("taskDetail.execError") : i18n.t("taskDetail.done"),
@@ -150,12 +150,12 @@ function laneItems(
 }
 
 /** 单条泳道的思考链：活跃末节点自动展开（用户手动点过的以手动为准） */
-function LaneChain({ items, live }: { items: ThoughtChainItemType[]; live: boolean }) {
+function LaneChain({ items, live }: { items: ChainItem[]; live: boolean }) {
   const [manual, setManual] = useState<Record<string, boolean>>({});
   const lastKey = items[items.length - 1]?.key;
   const expandedKeys = chainExpandedKeys(manual, live ? lastKey : undefined);
   const onExpand = chainExpandSetter(setManual, expandedKeys);
-  return <ThoughtChain items={items} expandedKeys={expandedKeys} onExpand={onExpand} />;
+  return <Chain items={items} expandedKeys={expandedKeys} onExpand={onExpand} />;
 }
 
 export default function TaskDetail() {
@@ -170,9 +170,7 @@ export default function TaskDetail() {
   // 会话树选中态：main = 主会话，否则为子会话 key（= 派生它的 Task tool_use id）
   const [sel, setSel] = useState("main");
   const [treeOpen, setTreeOpen] = useState(true);
-  // AI 工作进展：右侧常驻停靠栏（占位不遮挡，默认展开）
-  const [progOpen, setProgOpen] = useState(true);
-
+  
   const reload = async () => {
     try {
       const detail = await api<Detail>(`/api/dev-tasks/${taskId}/detail`);
@@ -266,12 +264,10 @@ export default function TaskDetail() {
     return (
       <Page title={t("taskDetail.pageTitle")} desc={t("taskDetail.descDenied")}>
         <div className="page-card" style={{ padding: 48, textAlign: "center" }}>
-          <Typography.Title level={5} style={{ marginBottom: 8 }}>
+          <h5 className="rc-empty-title" style={{ marginBottom: 8 }}>
             {denied}
-          </Typography.Title>
-          <Typography.Text type="secondary">
-            {t("taskDetail.deniedBody")}
-          </Typography.Text>
+          </h5>
+          <div className="muted">{t("taskDetail.deniedBody")}</div>
           <div style={{ marginTop: 16 }}>
             <Link to="/tasks">{t("taskDetail.backToTasks")}</Link>
           </div>
@@ -297,9 +293,7 @@ export default function TaskDetail() {
       {evts.length ? (
         <LaneChain items={laneItems(evts, laneLive, task.status === "failed")} live={laneLive} />
       ) : (
-        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          {t("taskDetail.noEvents")}
-        </Typography.Text>
+        <span className="muted text-xs">{t("taskDetail.noEvents")}</span>
       )}
     </div>
   );
@@ -318,11 +312,11 @@ export default function TaskDetail() {
       <div className="td-main">
       <div className="page-card">
         <div className="td-head">
-          <Tag color={st?.[0] ?? "default"}>{st ? t(st[1]) : task.status}</Tag>
+          <Badge tone={st?.[0] ?? "neutral"}>{st ? t(st[1]) : task.status}</Badge>
           <span className="td-title">{task.title || task.code}</span>
-          {task.runner_name && <Tag color="blue">⚡ {task.runner_name}</Tag>}
+          {task.runner_name && <Badge tone="info">⚡ {task.runner_name}</Badge>}
           {lanes.subLanes.length > 0 && (
-            <Tag color="purple">{t("taskDetail.mainAndSubs", { n: lanes.subLanes.length })}</Tag>
+            <Badge tone="violet">{t("taskDetail.mainAndSubs", { n: lanes.subLanes.length })}</Badge>
           )}
           {task.mr_url ? (
             <a href={task.mr_url} target="_blank" rel="noreferrer" className="mono">
@@ -332,11 +326,6 @@ export default function TaskDetail() {
             <span className="mono">MR !{task.mr_iid}</span>
           ) : null}
           <Link to={`/reqs/${req.id}`}>{t("taskDetail.requirement")}</Link>
-          {!progOpen && (
-            <Button size="small" onClick={() => setProgOpen(true)}>
-              {t("taskDetail.aiProgress")}
-            </Button>
-          )}
         </div>
         <div className="td-meta">
           {task.branch && <span className="mono">{t("taskDetail.branch", { branch: task.branch })}</span>}
@@ -350,7 +339,7 @@ export default function TaskDetail() {
           </div>
         )}
         {task.error && (
-          <div className="td-scope" style={{ background: "#fff2f0", color: "#cf1322" }}>
+          <div className="td-scope" style={{ background: "rgba(194,57,52,0.07)", color: "var(--danger)" }}>
             <b>{t("taskDetail.error")}</b>
             {task.error}
           </div>
@@ -368,7 +357,7 @@ export default function TaskDetail() {
               <Markdown>{final_plan.content}</Markdown>
             </div>
           ) : (
-            <Empty description={t("taskDetail.noPlan")} style={{ padding: "24px 0" }} />
+            <div className="muted py-6 text-center text-xs">{t("taskDetail.noPlan")}</div>
           )}
         </div>
 
@@ -385,9 +374,7 @@ export default function TaskDetail() {
             </>
           ) : (
             <>
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                {t("taskDetail.noDoc")}
-              </Typography.Text>
+              <span className="muted text-xs">{t("taskDetail.noDoc")}</span>
               <div className="md-body td-evt-wrap" style={{ marginTop: 6 }}>
                 {req.description || t("taskDetail.noDescription")}
               </div>
@@ -407,9 +394,7 @@ export default function TaskDetail() {
                 <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {tk.title || "—"}
                 </span>
-                <Tag color={sib?.[0] ?? "default"} style={{ marginInlineEnd: 0 }}>
-                  {sib ? t(sib[1]) : tk.status}
-                </Tag>
+                <Badge tone={sib?.[0] ?? "neutral"}>{sib ? t(sib[1]) : tk.status}</Badge>
                 {tk.id !== task.id && <Link to={`/tasks/${tk.id}`}>{t("taskDetail.detail")}</Link>}
               </div>
               );
@@ -420,21 +405,14 @@ export default function TaskDetail() {
 
       </div>
 
-      {progOpen && (
-        <aside className="rc-dock">
+      <aside className="rc-dock">
           <div className="rc-dock-head">
-            <span>
+            <span className="rc-dock-title">
+              <Bot size={15} className="text-primary" />
               {t("taskDetail.progressTitle")}
               {live && t("taskDetail.liveSuffix")}
             </span>
             {live && <i className="sess-live" />}
-            <button
-              className="rc-dock-toggle"
-              onClick={() => setProgOpen(false)}
-              title={t("taskDetail.collapseProgress")}
-            >
-              »
-            </button>
           </div>
           {events.length ? (
             <div className="td-evt-wrap">
@@ -451,7 +429,7 @@ export default function TaskDetail() {
                       setTreeOpen(!treeOpen);
                     }}
                   >
-                    <RightOutlined />
+                    <ChevronRight size={14} />
                   </span>
                   <span className="sess-ico">🤖</span>
                   <span className="sess-name" title={task.title || task.code}>
@@ -488,28 +466,19 @@ export default function TaskDetail() {
                 : laneBlock(
                     <span>
                       🧩 <b>{lanes.subLanes.find((s) => s.key === sel)?.label}</b>{" "}
-                      <Tag style={{ marginInlineStart: 4 }}>{t("taskDetail.subAgent")}</Tag>
+                      <Badge className="ml-1">{t("taskDetail.subAgent")}</Badge>
                     </span>,
                     lanes.subLanes.find((s) => s.key === sel)?.evts || [],
                     live
                   )}
             </div>
           ) : (
-            <Empty
-              description={
-                live ? (
-                  <span>
-                    <Spin size="small" /> {t("taskDetail.waiting")}
-                  </span>
-                ) : (
-                  t("taskDetail.noTrace")
-                )
-              }
-              style={{ padding: "32px 0" }}
-            />
+            <div className="flex items-center justify-center gap-2 py-8 text-xs text-muted-foreground">
+              {live && <LoaderCircle size={14} className="animate-spin" />}
+              {live ? t("taskDetail.waiting") : t("taskDetail.noTrace")}
+            </div>
           )}
         </aside>
-      )}
       </div>
     </Page>
   );

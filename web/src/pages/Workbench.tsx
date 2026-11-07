@@ -1,12 +1,20 @@
 import { Fragment, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Empty, Select, Tabs, Tag, message } from "antd";
 import dayjs from "dayjs";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { useGroup } from "../group";
 import i18n, { type MsgKey } from "../i18n";
 import Page from "../Page";
+import Badge, { type BadgeTone } from "../ui/Badge";
+import SearchSelect from "../ui/SearchSelect";
+import { toast } from "../ui/toast";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "../components/motion/tabs";
 import CodeStats from "./CodeStats";
 
 /**
@@ -79,12 +87,12 @@ const fmtT = (s?: string | null) => (s ? dayjs(s).format("MM-DD HH:mm") : null);
 const fullT = (s?: string | null) => (s ? dayjs(s).format("YYYY-MM-DD HH:mm:ss") : "—");
 const stamped = (key: MsgKey, s?: string | null) => (s ? `${i18n.t(key)} ${fmtT(s)}` : null);
 
-const REQ_STATUS: Record<string, [string, MsgKey]> = {
-  pool: ["default", "workbench.reqStatus.pool"],
-  claimed: ["processing", "workbench.reqStatus.claimed"],
+const REQ_STATUS: Record<string, [BadgeTone, MsgKey]> = {
+  pool: ["neutral", "workbench.reqStatus.pool"],
+  claimed: ["info", "workbench.reqStatus.claimed"],
   confirmed: ["success", "workbench.reqStatus.confirmed"],
-  archived: ["default", "workbench.reqStatus.archived"],
-  online: ["cyan", "workbench.reqStatus.online"],
+  archived: ["neutral", "workbench.reqStatus.archived"],
+  online: ["violet", "workbench.reqStatus.online"],
 };
 const TASK_STATUS: Record<string, MsgKey> = {
   pending: "workbench.taskStatus.pending",
@@ -130,20 +138,20 @@ function mergeChip(task: Task) {
   return null;
 }
 /** 任务卡种类标签：流水线上走到哪一段（终态三分类 + 中间阶段） */
-function taskPhase(task: Task, r: Req): [string, MsgKey] {
+function taskPhase(task: Task, r: Req): [BadgeTone, MsgKey] {
   if (task.outcome === "merged") return ["success", "workbench.phase.merged"];
   if (task.outcome === "closed") return ["warning", "workbench.phase.closed"];
-  if (task.outcome === "failed" || task.status === "failed") return ["error", "workbench.phase.failed"];
+  if (task.outcome === "failed" || task.status === "failed") return ["danger", "workbench.phase.failed"];
   if (task.mr_iid || task.status === "pushed") {
-    if (!r.review_on) return ["processing", task.mr_iid ? "workbench.phase.pendingMerge" : "workbench.phase.submitting"];
+    if (!r.review_on) return ["info", task.mr_iid ? "workbench.phase.pendingMerge" : "workbench.phase.submitting"];
     const m = task.mr;
-    if (!m || m.verdict === "pending" || m.verdict === "modify") return ["processing", "workbench.phase.review"];
-    if (m.verdict === "failed") return ["error", "workbench.phase.reviewFailed"];
-    if (m.gate) return ["processing", "workbench.phase.ci"];
-    return ["processing", r.merge_on ? "workbench.phase.autoMerging" : "workbench.phase.pendingMerge"];
+    if (!m || m.verdict === "pending" || m.verdict === "modify") return ["info", "workbench.phase.review"];
+    if (m.verdict === "failed") return ["danger", "workbench.phase.reviewFailed"];
+    if (m.gate) return ["info", "workbench.phase.ci"];
+    return ["info", r.merge_on ? "workbench.phase.autoMerging" : "workbench.phase.pendingMerge"];
   }
-  if (task.status === "pending") return ["default", "workbench.phase.grabbing"];
-  return ["processing", "workbench.phase.developing"];
+  if (task.status === "pending") return ["neutral", "workbench.phase.grabbing"];
+  return ["info", "workbench.phase.developing"];
 }
 
 type NodeKey = "doc" | "plan" | "dev" | "review" | "ci" | "merge" | "notify";
@@ -305,7 +313,7 @@ function TaskCard({ task, r, onOpen }: { task: Task; r: Req; onOpen: () => void 
         <span
           className={`wb-task-title${task.can_open ? "" : " muted"}`}
           title={task.can_open ? task.scope || task.title || "" : t("workbench.scopeDenied")}
-          onClick={task.can_open ? undefined : () => message.info(denied)}
+          onClick={task.can_open ? undefined : () => toast.info(denied)}
         >
           {task.title || task.code}
         </span>
@@ -315,13 +323,13 @@ function TaskCard({ task, r, onOpen }: { task: Task; r: Req; onOpen: () => void 
         >
           🕒 {fmtT(task.updated_at) || "—"}
         </span>
-        <Tag className="wb-phase" color={phase[0]}>{t(phase[1])}</Tag>
+        <Badge tone={phase[0]} className="wb-phase">{t(phase[1])}</Badge>
       </div>
       <div className="wb-chips">
         <a
           className={`wb-chip mono${task.can_open ? "" : " muted"}`}
           title={task.can_open ? t("workbench.viewTask", { code: task.code }) : denied}
-          onClick={task.can_open ? onOpen : () => message.info(denied)}
+          onClick={task.can_open ? onOpen : () => toast.info(denied)}
         >
           {task.code}
         </a>
@@ -335,7 +343,7 @@ function TaskCard({ task, r, onOpen }: { task: Task; r: Req; onOpen: () => void 
         {task.agents && task.agents.sub > 0 && (
           <a
             className={`wb-chip${cls === "live" ? " live" : ""}${task.can_open ? "" : " muted"}`}
-            onClick={task.can_open ? onOpen : () => message.info(denied)}
+            onClick={task.can_open ? onOpen : () => toast.info(denied)}
             title={t("workbench.eventsTip", { n: task.agents.events })}
           >
             {cls === "live"
@@ -469,25 +477,21 @@ export default function Workbench() {
   return (
     <Page title={t("nav.workbench")} desc={t("workbench.desc")}>
       <div className="wb-bar">
-        <Select
-          style={{ width: 280 }}
-          allowClear
-          showSearch
-          optionFilterProp="label"
+        <SearchSelect
+          value={projectId ?? null}
+          onChange={(v) => setProjectId(v == null ? undefined : Number(v))}
+          clearable
           placeholder={t("workbench.projectPlaceholder")}
-          value={projectId}
-          onChange={setProjectId}
           options={projOptions}
+          className="w-[280px]"
         />
       </div>
-      <Tabs
-        defaultActiveKey="flow"
-        items={[
-          {
-            key: "flow",
-            label: t("workbench.tabFlow"),
-            children: (
-              <>
+      <Tabs defaultValue="flow" variant="segment">
+        <TabsList className="mb-3">
+          <TabsTrigger value="flow">{t("workbench.tabFlow")}</TabsTrigger>
+          <TabsTrigger value="stats">{t("workbench.tabStats")}</TabsTrigger>
+        </TabsList>
+        <TabsContent value="flow">
         <div className="wb-bar">
         <div className="wb-legend">
           <span><i className="wb-dot live" /> {t("workbench.legendLive")}</span>
@@ -511,10 +515,9 @@ export default function Workbench() {
           <i /> {t("workbench.live")}
         </span>
         {active.length === 0 ? (
-          <Empty
-            description={t("workbench.empty")}
-            style={{ padding: "48px 0" }}
-          />
+          <div className="py-12 text-center text-sm text-muted-foreground">
+            {t("workbench.empty")}
+          </div>
         ) : (
           <div className="wb-board">
             {active.map((r) => {
@@ -533,12 +536,12 @@ export default function Workbench() {
                     <div
                       className={`wb-card wb-req-card${r.can_open ? "" : " muted-card"}`}
                       title={r.can_open ? undefined : t("errors.denied")}
-                      onClick={() => (r.can_open ? nav(`/reqs/${r.id}`) : message.info(t("errors.denied")))}
+                      onClick={() => (r.can_open ? nav(`/reqs/${r.id}`) : toast.info(t("errors.denied")))}
                     >
                       <div className="wb-req-top">
-                        <Tag color={REQ_STATUS[r.status]?.[0] ?? "default"}>
+                        <Badge tone={REQ_STATUS[r.status]?.[0] ?? "neutral"}>
                           {REQ_STATUS[r.status] ? t(REQ_STATUS[r.status][1]) : r.status}
-                        </Tag>
+                        </Badge>
                         <span className="mono wb-req-code">{r.code}</span>
                       </div>
                       <div className="wb-req-title" title={r.title}>
@@ -601,16 +604,11 @@ export default function Workbench() {
         )}
       </div>
 
-              </>
-            ),
-          },
-          {
-            key: "stats",
-            label: t("workbench.tabStats"),
-            children: <CodeStats groupId={groupId ?? undefined} projectId={projectId} />,
-          },
-        ]}
-      />
+              </TabsContent>
+        <TabsContent value="stats">
+          <CodeStats groupId={groupId ?? undefined} projectId={projectId} />
+        </TabsContent>
+      </Tabs>
     </Page>
   );
 }

@@ -1,11 +1,21 @@
 import { useEffect, useState } from "react";
-import { Button, Divider, Form, Input, Modal, Popconfirm, Space, Tag, Tooltip, Typography, message } from "antd";
+import { Plus, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import ResizableTable from "../ResizableTable";
-import { PlusOutlined } from "@ant-design/icons";
 import { api, isAdmin } from "../api";
 import Page from "../Page";
-import { PAGE } from "../table";
+import DataTable, { type DataTableColumn } from "../ui/DataTable";
+import Badge from "../ui/Badge";
+import CopyText from "../ui/CopyText";
+import { confirm } from "../ui/confirm";
+import { Field, useForm } from "../ui/form";
+import { toast } from "../ui/toast";
+import { Button } from "../components/motion/button/index";
+import {
+  CenterMorphModal,
+  CenterMorphModalContent,
+} from "../components/motion/center-morph-modal";
+import { Input } from "../components/motion/input";
+import { Tooltip } from "../components/motion/tooltip";
 
 interface Node {
   id: number;
@@ -19,7 +29,10 @@ export default function Nodes() {
   const { t } = useTranslation();
   const [rows, setRows] = useState<Node[]>([]);
   const [open, setOpen] = useState(false);
-  const [form] = Form.useForm();
+  const [created, setCreated] = useState<{ token: string; name: string } | null>(
+    null,
+  );
+  const form = useForm({ name: "" });
 
   const load = () => api<Node[]>("/api/runner-nodes").then(setRows);
   useEffect(() => {
@@ -28,124 +41,201 @@ export default function Nodes() {
     return () => clearInterval(timer);
   }, []);
 
+  const save = async () => {
+    if (
+      !form.validate({
+        name: { required: true, message: t("common.required") },
+      })
+    )
+      return;
+    try {
+      const d = await api<any>("/api/runner-nodes", {
+        method: "POST",
+        body: JSON.stringify(form.values),
+      });
+      setOpen(false);
+      load();
+      setCreated(d);
+    } catch (e: any) {
+      toast.error(e.message);
+    }
+  };
+
+  const remove = async (row: Node) => {
+    const ok = await confirm({
+      title: t("nodes.deleteConfirm"),
+      confirmText: t("common.delete"),
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await api(`/api/runner-nodes/${row.id}`, { method: "DELETE" });
+      load();
+    } catch (e: any) {
+      toast.error(e.message);
+    }
+  };
+
+  const columns: DataTableColumn<Node>[] = [
+    {
+      title: t("nodes.colName"),
+      dataIndex: "name",
+      render: (v) => <span className="font-mono text-[12px]">{v}</span>,
+    },
+    {
+      title: t("common.status"),
+      dataIndex: "status",
+      width: 100,
+      render: (v) =>
+        v === "online" ? (
+          <Badge tone="success">{t("nodes.online")}</Badge>
+        ) : (
+          <Badge>{t("nodes.offline")}</Badge>
+        ),
+    },
+    {
+      title: t("nodes.colRunning"),
+      dataIndex: "running_tasks",
+      width: 120,
+      render: (v) =>
+        v ? (
+          <Tooltip content={t("nodes.runningTip", { n: v })}>
+            <span className="inline-flex">
+              <Badge tone="info">{t("nodes.runningTag", { n: v })}</Badge>
+            </span>
+          </Tooltip>
+        ) : (
+          "—"
+        ),
+    },
+    {
+      title: t("nodes.colHeartbeat"),
+      dataIndex: "last_heartbeat",
+      width: 110,
+      render: (v) =>
+        v ? <span className="font-mono text-[12px]">{v.slice(11, 19)}</span> : "—",
+    },
+    {
+      title: t("common.actions"),
+      width: 80,
+      render: (_, r) =>
+        isAdmin() ? (
+          <button
+            type="button"
+            onClick={() => remove(r)}
+            aria-label={t("common.delete")}
+            className="grid size-7 place-items-center rounded-lg text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+          >
+            <Trash2 className="size-3.5" />
+          </button>
+        ) : null,
+    },
+  ];
+
   return (
     <Page
       title={t("nav.nodes")}
       desc={t("nodes.desc")}
       actions={
-        isAdmin() && (
+        isAdmin() ? (
           <Button
-            type="primary"
-            icon={<PlusOutlined />}
+            size="sm"
+            className="rounded-lg"
             onClick={() => {
-              form.resetFields();
+              form.reset({ name: "" });
               setOpen(true);
             }}
           >
+            <Plus className="size-4" />
             {t("nodes.new")}
           </Button>
-        )
+        ) : null
       }
     >
-      <div className="page-card">
-        <ResizableTable<Node>
-          rowKey="id"
-          dataSource={rows}
-          pagination={PAGE}
-          columns={[
-            { title: t("nodes.colName"), dataIndex: "name", render: (v) => <span className="mono">{v}</span> },
-            {
-              title: t("common.status"),
-              dataIndex: "status",
-              width: 100,
-              render: (v) => (
-                <Tag color={v === "online" ? "green" : "default"}>
-                  {v === "online" ? t("nodes.online") : t("nodes.offline")}
-                </Tag>
-              ),
-            },
-            {
-              title: t("nodes.colRunning"),
-              dataIndex: "running_tasks",
-              width: 110,
-              render: (v) =>
-                v ? (
-                  <Tooltip title={t("nodes.runningTip", { n: v })}>
-                    <Tag color="processing">{t("nodes.runningTag", { n: v })}</Tag>
-                  </Tooltip>
-                ) : (
-                  "—"
-                ),
-            },
-            {
-              title: t("nodes.colHeartbeat"),
-              dataIndex: "last_heartbeat",
-              render: (v) => (v ? <span className="mono">{v.slice(11, 19)}</span> : "—"),
-              width: 110,
-            },
-            {
-              title: t("common.actions"),
-              render: (_, r) => (
-                <Space size={0} split={<Divider type="vertical" />}>
-                  <Popconfirm
-                    title={t("nodes.deleteConfirm")}
-                    onConfirm={async () => {
-                      await api(`/api/runner-nodes/${r.id}`, { method: "DELETE" });
-                      load();
-                    }}
-                  >
-                    <a className="danger-link">{t("common.delete")}</a>
-                  </Popconfirm>
-                </Space>
-              ),
-              width: 80,
-            },
-          ]}
-        />
-      </div>
-      <Modal
+      <DataTable<Node>
+        rowKey="id"
+        dataSource={rows}
+        columns={columns}
+        emptyText={t("common.noData")}
+      />
+
+      <CenterMorphModal
         open={open}
-        title={t("nodes.createTitle")}
-        onCancel={() => setOpen(false)}
-        onOk={() => form.submit()}
-        destroyOnHidden
+        onOpenChange={(next) => {
+          if (!next) setOpen(false);
+        }}
       >
-        <Form
-          form={form}
-          layout="vertical"
-          initialValues={{ name: "" }}
-          onFinish={async (v: any) => {
-            try {
-              const d = await api<any>("/api/runner-nodes", {
-                method: "POST",
-                body: JSON.stringify(v),
-              });
-              setOpen(false);
-              load();
-              Modal.success({
-                title: t("nodes.createdTitle"),
-                content: (
-                  <div>
-                    <p>
-                      {t("nodes.startCommand")}
-                      <br />
-                      <Typography.Text code copyable>
-                        {`VEGA_API_URL=http://<api地址>:8000 VEGA_RUNNER_TOKEN=${d.token} VEGA_RUNNER_NAME=${d.name} python -m vega.runner`}
-                      </Typography.Text>
-                    </p>
-                  </div>
-                ),
-              });
-            } catch (e: any) {
-              message.error(e.message);
-            }
-          }}
+        <CenterMorphModalContent
+          ariaLabel={t("nodes.createTitle")}
+          className="max-w-[420px]"
         >
-          <Form.Item name="name" label={t("nodes.nameLabel")} rules={[{ required: true }]}>
-            <Input placeholder={t("nodes.namePlaceholder")} />
-          </Form.Item>
-        </Form>
-      </Modal>
+          <div className="p-6">
+            <h2 className="m-0 text-lg font-semibold tracking-[-0.01em] text-foreground">
+              {t("nodes.createTitle")}
+            </h2>
+            <div className="mt-5">
+              <Input
+                label={t("nodes.nameLabel")}
+                value={form.values.name}
+                onChange={(v) => form.set("name", v)}
+                placeholder={t("nodes.namePlaceholder")}
+                error={form.errors.name}
+                classNames={{ field: "rounded-lg" }}
+              />
+            </div>
+            <div className="mt-6 flex justify-end gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="rounded-lg"
+                onClick={() => setOpen(false)}
+              >
+                {t("common.cancel")}
+              </Button>
+              <Button size="sm" className="rounded-lg" onClick={save}>
+                {t("common.save")}
+              </Button>
+            </div>
+          </div>
+        </CenterMorphModalContent>
+      </CenterMorphModal>
+
+      <CenterMorphModal
+        open={!!created}
+        onOpenChange={(next) => {
+          if (!next) setCreated(null);
+        }}
+      >
+        <CenterMorphModalContent
+          ariaLabel={t("nodes.createdTitle")}
+          className="max-w-[560px]"
+        >
+          <div className="p-6">
+            <h2 className="m-0 text-lg font-semibold tracking-[-0.01em] text-foreground">
+              {t("nodes.createdTitle")}
+            </h2>
+            {created ? (
+              <div className="mt-4 flex flex-col gap-2">
+                <span className="text-[13px] text-muted-foreground">
+                  {t("nodes.startCommand")}
+                </span>
+                <CopyText
+                  value={`VEGA_API_URL=http://<api地址>:8000 VEGA_RUNNER_TOKEN=${created.token} VEGA_RUNNER_NAME=${created.name} python -m vega.runner`}
+                />
+              </div>
+            ) : null}
+            <div className="mt-6 flex justify-end">
+              <Button
+                size="sm"
+                className="rounded-lg"
+                onClick={() => setCreated(null)}
+              >
+                {t("common.close")}
+              </Button>
+            </div>
+          </div>
+        </CenterMorphModalContent>
+      </CenterMorphModal>
     </Page>
   );
 }

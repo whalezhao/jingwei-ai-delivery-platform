@@ -1,73 +1,73 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import Page from "../Page";
-import { Attachments, Bubble, FileCard, Prompts, Sender, Suggestion } from "@ant-design/x";
-import ThoughtChain from "@ant-design/x/es/thought-chain";
-import type { ThoughtChainItemType } from "@ant-design/x/es/thought-chain";
 import {
-  Alert,
-  Avatar,
-  Badge,
-  Button,
-  Col,
-  Descriptions,
-  Drawer,
-  Dropdown,
-  Empty,
-  Modal,
-  Popconfirm,
-  Popover,
-  Progress,
-  Row,
-  Segmented,
-  Space,
-  Spin,
-  Tag,
-  Typography,
-  Upload,
-  message,
-} from "antd";
-import { ProCard } from "@ant-design/pro-components";
-import {
-  ApartmentOutlined,
-  AuditOutlined,
-  BulbOutlined,
-  CheckCircleFilled,
-  CheckOutlined,
-  ClearOutlined,
-  ClockCircleOutlined,
-  CloseCircleFilled,
-  CloseOutlined,
-  CodeOutlined,
-  EditOutlined,
-  FileSearchOutlined,
-  FileTextOutlined,
-  FormOutlined,
-  GlobalOutlined,
-  InboxOutlined,
-  LoadingOutlined,
-  MessageOutlined,
-  PaperClipOutlined,
-  QuestionCircleOutlined,
-  RobotOutlined,
-  SearchOutlined,
-  StopOutlined,
-  TeamOutlined,
-  ToolOutlined,
-  UserOutlined,
-} from "@ant-design/icons";
-import type { MenuProps } from "antd";
+  ArrowUp,
+  Bot,
+  ClipboardCheck,
+  Building2,
+  Check,
+  CircleAlert,
+  CircleCheck,
+  CircleHelp,
+  CircleStop,
+  CircleX,
+  Clock,
+  Code2,
+  Eraser,
+  FileSearch,
+  FileText,
+  Globe,
+  Inbox,
+  Lightbulb,
+  LoaderCircle,
+  MessageSquare,
+  Paperclip,
+  Pencil,
+  PenLine,
+  Search,
+  User,
+  Users,
+  Wrench,
+  X,
+} from "lucide-react";
 import Markdown from "react-markdown";
-import type { UploadFile } from "antd";
 import { useTranslation } from "react-i18next";
 import AmSelect from "../components/AmSelect";
 import DocPreview from "../components/DocPreview";
 import { rawNode } from "../eventNodes";
-import { api, token } from "../api";
+import { api, isAdmin, token } from "../api";
 import i18n, { type MsgKey } from "../i18n";
+import { pct, qa, type QaEnv, type QaSummary } from "../qa";
+import { Button } from "../components/motion/button/index";
+import { Drawer } from "../components/motion/drawer";
+import {
+  CenterMorphModal,
+  CenterMorphModalContent,
+} from "../components/motion/center-morph-modal";
+import { Popover, PopoverTrigger, PopoverContent } from "../components/motion/popover";
+import Badge, { type BadgeTone } from "../ui/Badge";
+import { Chain, FileChip, type ChainItem } from "../ui/Chain";
+import SearchSelect from "../ui/SearchSelect";
+import { confirm } from "../ui/confirm";
+import { toast } from "../ui/toast";
 
 /** token 数缩写：34.2k / 128k。 */
 const fmtTok = (n: number) => (n >= 1000 ? `${+(n / 1000).toFixed(1)}k` : String(n));
+
+/** 待发附件（本地文件 → 发送时逐个上传） */
+type LocalFile = { uid: string; name: string; originFileObj?: File };
+
+/** EGM 悬浮菜单项（本地菜单，替代 antd Dropdown 的 MenuProps） */
+type EgmItem = {
+  key: string;
+  icon?: React.ReactNode;
+  label?: React.ReactNode;
+  disabled?: boolean;
+  onClick?: () => void;
+  divider?: boolean;
+  dot?: boolean;
+};
 
 interface Msg {
   id: number;
@@ -91,12 +91,12 @@ interface Ask {
   options: { label: string; desc?: string; run: () => void }[];
 }
 
-const STATUS: Record<string, [string, MsgKey]> = {
-  pool: ["default", "requirements.status.pool"],
-  claimed: ["processing", "requirements.status.claimed"],
+const STATUS: Record<string, [BadgeTone, MsgKey]> = {
+  pool: ["neutral", "requirements.status.pool"],
+  claimed: ["info", "requirements.status.claimed"],
   confirmed: ["success", "requirements.status.confirmed"],
-  archived: ["default", "requirements.status.archived"],
-  online: ["cyan", "requirements.status.online"],
+  archived: ["neutral", "requirements.status.archived"],
+  online: ["violet", "requirements.status.online"],
 };
 
 const TASK_STATUS: Record<string, MsgKey> = {
@@ -123,11 +123,11 @@ const STALE_MS = 40_000;
 
 /** 右侧 AI 栏宽度（像素），拖动分隔条调整；主区至少保留 MAIN_MIN。 */
 // EGM 评审状态：incomplete 是「自报未完成」，不能画成绿色通过
-const REVIEW_ST: Record<string, { color: string; text: MsgKey }> = {
-  running: { color: "processing", text: "reqChat.reviewRunning" },
-  done: { color: "success", text: "reqChat.reviewDone" },
-  incomplete: { color: "warning", text: "reqChat.reviewIncomplete" },
-  failed: { color: "error", text: "reqChat.reviewFailed" },
+const REVIEW_ST: Record<string, { tone: BadgeTone; text: MsgKey }> = {
+  running: { tone: "info", text: "reqChat.reviewRunning" },
+  done: { tone: "success", text: "reqChat.reviewDone" },
+  incomplete: { tone: "warning", text: "reqChat.reviewIncomplete" },
+  failed: { tone: "danger", text: "reqChat.reviewFailed" },
 };
 
 /** 评审批注：把 finding 的 Affected Scope 对到方案章节上。 */
@@ -139,10 +139,10 @@ interface Finding {
   recommendation?: string;
 }
 
-const SEV_ST: Record<string, { color: string; rank: number; icon: string }> = {
-  Blocker: { color: "red", rank: 0, icon: "🔴" },
-  Major: { color: "gold", rank: 1, icon: "🟡" },
-  Nit: { color: "default", rank: 2, icon: "🟢" },
+const SEV_ST: Record<string, { tone: BadgeTone; rank: number; icon: string }> = {
+  Blocker: { tone: "danger", rank: 0, icon: "🔴" },
+  Major: { tone: "warning", rank: 1, icon: "🟡" },
+  Nit: { tone: "neutral", rank: 2, icon: "🟢" },
 };
 
 const sevOf = (f: Finding) => SEV_ST[f.severity || ""] || SEV_ST.Nit;
@@ -228,13 +228,13 @@ function FindingCard({ f }: { f: Finding }) {
   const sev = sevOf(f);
   return (
     <div style={{ maxWidth: 420 }}>
-      <Space size={4} wrap>
-        <Tag color={sev.color}>{sev.icon} {f.severity || "Nit"}</Tag>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Badge tone={sev.tone}>{sev.icon} {f.severity || "Nit"}</Badge>
         {f.title && <strong>{f.title}</strong>}
-      </Space>
+      </div>
       {f.description && <div style={{ marginTop: 6, fontSize: 12 }}>{f.description}</div>}
       {f.recommendation && (
-        <div style={{ marginTop: 6, fontSize: 12, color: "#666" }}>
+        <div style={{ marginTop: 6, fontSize: 12, color: "var(--muted)" }}>
           {i18n.t("reqChat.advice")}
           {f.recommendation}
         </div>
@@ -262,25 +262,23 @@ function AnnoBadge({
   const worst = hits.reduce((a, b) => (sevOf(a).rank <= sevOf(b).rank ? a : b));
   const sev = sevOf(worst);
   return (
-    <Popover
-      trigger="click"
-      open={open}
-      onOpenChange={onOpenChange}
-      title={i18n.t("reqChat.annoTitle", { n: hits.length })}
-      content={
-        <div>
-          {hits.map((f, i) => (
-            <div key={i} style={{ marginBottom: i === hits.length - 1 ? 0 : 12 }}>
-              <FindingCard f={f} />
-            </div>
-          ))}
-        </div>
-      }
-    >
-      <Tag color={sev.color} style={{ marginInlineStart: 8, cursor: "pointer", verticalAlign: "middle" }}>
-        {sev.icon}
-        {hits.length > 1 ? ` ${hits.length}` : ""}
-      </Tag>
+    <Popover trigger="click" open={open} onOpenChange={onOpenChange} side="bottom" align="start">
+      <PopoverTrigger>
+        <button type="button" className="ml-2 inline-flex align-middle" aria-label={i18n.t("reqChat.annoTitle", { n: hits.length })}>
+          <Badge tone={sev.tone}>
+            {sev.icon}
+            {hits.length > 1 ? ` ${hits.length}` : ""}
+          </Badge>
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[440px] max-w-[88vw]">
+        <div className="mb-2 text-xs font-semibold">{i18n.t("reqChat.annoTitle", { n: hits.length })}</div>
+        {hits.map((f, i) => (
+          <div key={i} style={{ marginBottom: i === hits.length - 1 ? 0 : 12 }}>
+            <FindingCard f={f} />
+          </div>
+        ))}
+      </PopoverContent>
     </Popover>
   );
 }
@@ -377,24 +375,24 @@ type Preview = { type: "doc" | "plan"; data: any } | null;
 
 /** 工具 → 类型图标 + 人话标签 + 关键入参字段（动作行展示用） */
 const TOOL_META: Record<string, { icon: React.ReactNode; label: MsgKey; arg?: string }> = {
-  Bash: { icon: <CodeOutlined />, label: "reqChat.tool.bash", arg: "command" },
-  Write: { icon: <FormOutlined />, label: "reqChat.tool.write", arg: "file_path" },
-  Edit: { icon: <EditOutlined />, label: "reqChat.tool.edit", arg: "file_path" },
-  Read: { icon: <FileTextOutlined />, label: "reqChat.tool.read", arg: "file_path" },
-  Grep: { icon: <SearchOutlined />, label: "reqChat.tool.grep", arg: "pattern" },
-  Glob: { icon: <FileSearchOutlined />, label: "reqChat.tool.glob", arg: "pattern" },
-  Task: { icon: <RobotOutlined />, label: "reqChat.tool.task", arg: "description" },
-  WebFetch: { icon: <GlobalOutlined />, label: "reqChat.tool.webFetch", arg: "url" },
-  WebSearch: { icon: <GlobalOutlined />, label: "reqChat.tool.webSearch", arg: "query" },
-  AskUserQuestion: { icon: <QuestionCircleOutlined />, label: "reqChat.tool.ask", arg: "question" },
-  ExitPlanMode: { icon: <CheckOutlined />, label: "reqChat.tool.exitPlan", arg: "plan" },
+  Bash: { icon: <Code2 size={14} />, label: "reqChat.tool.bash", arg: "command" },
+  Write: { icon: <PenLine size={14} />, label: "reqChat.tool.write", arg: "file_path" },
+  Edit: { icon: <Pencil size={14} />, label: "reqChat.tool.edit", arg: "file_path" },
+  Read: { icon: <FileText size={14} />, label: "reqChat.tool.read", arg: "file_path" },
+  Grep: { icon: <Search size={14} />, label: "reqChat.tool.grep", arg: "pattern" },
+  Glob: { icon: <FileSearch size={14} />, label: "reqChat.tool.glob", arg: "pattern" },
+  Task: { icon: <Bot size={14} />, label: "reqChat.tool.task", arg: "description" },
+  WebFetch: { icon: <Globe size={14} />, label: "reqChat.tool.webFetch", arg: "url" },
+  WebSearch: { icon: <Globe size={14} />, label: "reqChat.tool.webSearch", arg: "query" },
+  AskUserQuestion: { icon: <CircleHelp size={14} />, label: "reqChat.tool.ask", arg: "question" },
+  ExitPlanMode: { icon: <Check size={14} />, label: "reqChat.tool.exitPlan", arg: "plan" },
 };
 
 export function toolMeta(name?: string) {
   const m = TOOL_META[name || ""];
   return m
     ? { icon: m.icon, label: i18n.t(m.label), arg: m.arg }
-    : { icon: <ToolOutlined />, label: name || i18n.t("reqChat.tool.fallback"), arg: undefined };
+    : { icon: <Wrench size={14} />, label: name || i18n.t("reqChat.tool.fallback"), arg: undefined };
 }
 
 /** 从工具入参 JSON 里挑人话字段（命令/文件路径/描述…），截断 JSON 退回首行 */
@@ -535,7 +533,7 @@ export function deriveSubs(evts: any[]): SubItem[] {
   return [...map.values()];
 }
 
-type ChainNode = ThoughtChainItemType & {
+type ChainNode = ChainItem & {
   kind: "think" | "tool" | "sub" | "raw" | "text";
   toolName?: string;
   arg?: string;
@@ -581,11 +579,11 @@ const AGENT_ST: Record<AgentState, { text: MsgKey; short: MsgKey }> = {
 };
 
 const AGENT_ICON: Record<AgentState, React.ReactNode> = {
-  work: <LoadingOutlined spin />,
-  wait: <ClockCircleOutlined />,
-  block: <StopOutlined />,
-  done: <CheckCircleFilled />,
-  error: <CloseCircleFilled />,
+  work: <LoaderCircle size={14} className="animate-spin" />,
+  wait: <Clock size={14} />,
+  block: <CircleStop size={14} />,
+  done: <CircleCheck size={14} />,
+  error: <CircleX size={14} />,
 };
 
 /** 子代理类型展示名：去掉插件命名空间（egm:egm-zoom-out → egm-zoom-out） */
@@ -761,11 +759,7 @@ function SubChain({
   const expandedKeys = chainExpandedKeys(manual, follow && live ? lastKey : undefined);
   return (
     <div className="rc-subchain">
-      <ThoughtChain
-        items={items}
-        expandedKeys={expandedKeys}
-        onExpand={chainExpandSetter(setManual, expandedKeys)}
-      />
+      <Chain items={items} expandedKeys={expandedKeys} onExpand={chainExpandSetter(setManual, expandedKeys)} />
     </div>
   );
 }
@@ -920,7 +914,7 @@ export function buildChain(
       items.push({
         kind: "think",
         key: `${prefix}-think-${e.id || i}`,
-        icon: <BulbOutlined />,
+        icon: <Lightbulb size={14} />,
         title: i18n.t("taskDetail.thinking"),
         collapsible: true,
         content: thinkBlock(e.text || ""),
@@ -932,7 +926,7 @@ export function buildChain(
         items.push({
           kind: "sub",
           key: `${prefix}-agent-${e.id || i}`,
-          icon: <RobotOutlined />,
+          icon: <Bot size={14} />,
           title: ag.type || i18n.t("reqChat.subAgent"),
           description: ag.desc,
           status: "loading",
@@ -975,7 +969,7 @@ export function buildChain(
         <>
           {actionRow(m.icon, it.arg || "…")}
           {actionRow(
-            e.is_error ? <CloseOutlined /> : <CheckOutlined />,
+            e.is_error ? <X size={14} /> : <Check size={14} />,
             line || i18n.t("events.noOutput"),
             e.is_error ? "err" : "ok",
             e.is_error ? i18n.t("taskDetail.execError") : i18n.t("taskDetail.done"),
@@ -995,7 +989,7 @@ export function buildChain(
           kind: "text",
           key: `${prefix}-text-${e.id || i}`,
           // 有图标才不会退化成思维链的序号，看起来像正文
-          icon: <MessageOutlined />,
+          icon: <MessageSquare size={14} />,
           text: e.text,
           content: <div className="tc-sub-text">{e.text}</div>,
         });
@@ -1042,7 +1036,7 @@ export function buildChain(
       items.push({
         kind: "sub",
         key: `${prefix}-sub-${s.key}`,
-        icon: <RobotOutlined />,
+        icon: <Bot size={14} />,
         title: s.subagent_type || i18n.t("reqChat.subAgent"),
         description: s.desc,
         footer: i18n.t("reqChat.toolUsage", {
@@ -1182,22 +1176,21 @@ function AssistantBody({
               <span className="rc-plan-title">{isDoc ? t("reqChat.blockDoc") : t("reqChat.blockPlan")}</span>
               {adopt && (
                 <Button
-                  size="small"
-                  type="primary"
-                  ghost
-                  loading={adopting}
-                  disabled={b.open}
+                  size="sm"
+                  className="rounded-lg"
+                  disabled={b.open || adopting}
                   onClick={async () => {
                     setAdopting(true);
                     try {
                       await adopt(b.body);
                     } catch (e: any) {
-                      message.error(e.message);
+                      toast.error(e.message);
                     } finally {
                       setAdopting(false);
                     }
                   }}
                 >
+                  {adopting && <LoaderCircle size={12} className="animate-spin" />}
                   {isDoc ? t("reqChat.adoptDoc") : t("reqChat.adoptPlan")}
                 </Button>
               )}
@@ -1249,7 +1242,7 @@ export function TurnChain({
   const onExpand = chainExpandSetter(setManual, expandedKeys);
   return (
     <div className="rc-process">
-      <ThoughtChain items={items} expandedKeys={expandedKeys} onExpand={onExpand} />
+      <Chain items={items} expandedKeys={expandedKeys} onExpand={onExpand} />
     </div>
   );
 }
@@ -1275,13 +1268,20 @@ export default function RequirementChat() {
   const [annoOpen, setAnnoOpen] = useState<string | null>(null);
   const [reviewBusy, setReviewBusy] = useState(false);
   const [tasks, setTasks] = useState<any[]>([]);
+  // 测试域：需求维度的最近一次测试摘要（QA 后台不可达时保持 null，不阻塞页面）
+  const [qaSummary, setQaSummary] = useState<QaSummary | null>(null);
+  const [qaEnvs, setQaEnvs] = useState<QaEnv[]>([]);
+  const [qaOpen, setQaOpen] = useState(false);
+  const [qaEnv, setQaEnv] = useState<string | undefined>();
+  const [qaBusy, setQaBusy] = useState(false);
   const [preview, setPreview] = useState<Preview>(null);
   const [err, setErr] = useState("");
   const [input, setInput] = useState("");
   // 未发送的附件：点发送时先逐个上传，再把 id 绑到这条消息上
-  const [files, setFiles] = useState<UploadFile[]>([]);
-  const attRef = useRef<any>(null);
+  const [files, setFiles] = useState<LocalFile[]>([]);
+  const attRef = useRef<HTMLInputElement>(null);
   const assetsRef = useRef<HTMLDivElement>(null);
+  const msgsRef = useRef<HTMLDivElement>(null);
   const [ask, setAsk] = useState<Ask | null>(null);
   // claude 上下文用量（plan_usage 直播帧 / 历史回放里的 usage 事件）；null = 本轮还没跑过
   const [ctxUsage, setCtxUsage] = useState<{
@@ -1300,8 +1300,6 @@ export default function RequirementChat() {
   const [subs, setSubs] = useState<
     { key: string; desc: string; subagent_type: string; tool_uses: number; total_tokens: number }[]
   >([]);
-  // AI 对话栏：页面右侧常驻停靠（占位不遮挡，默认展开）
-  const [chatOpen, setChatOpen] = useState(true);
   // 清除会话后 +1 强制重连 SSE：回放空历史，顺带清掉所有实时态
   const [streamNonce, setStreamNonce] = useState(0);
   // 输入框里的团队/专家：每轮随消息下发，切换后下一轮的 claude 请求头即生效
@@ -1355,6 +1353,42 @@ export default function RequirementChat() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reqId]);
 
+  const loadQa = () =>
+    qa<QaSummary>(`/api/requirements/${reqId}/test-summary`)
+      .then(setQaSummary)
+      .catch(() => setQaSummary(null));
+  useEffect(() => {
+    loadQa();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reqId]);
+
+  const openQa = async () => {
+    setQaOpen(true);
+    if (!req?.system_id) return;
+    try {
+      setQaEnvs(await qa<QaEnv[]>(`/api/systems/${req.system_id}/environments`));
+    } catch {
+      setQaEnvs([]);
+    }
+  };
+
+  const startQa = async () => {
+    setQaBusy(true);
+    try {
+      const r = await qa<{ task_id: string; batch_id: string; case_count: number }>(
+        `/api/requirements/${reqId}/run`,
+        { method: "POST", body: JSON.stringify({ environment_name: qaEnv || null }) },
+      );
+      toast.success(t("qa.req.started", { n: r.case_count }));
+      setQaOpen(false);
+      loadQa();
+    } catch (e: any) {
+      toast.error(e.message);
+    } finally {
+      setQaBusy(false);
+    }
+  };
+
   useEffect(() => {
     // 预览升级为主区后自动选中：优先最新方案快照，无方案再取定稿文档
     setPreview((p) => {
@@ -1374,6 +1408,12 @@ export default function RequirementChat() {
   useEffect(() => {
     localStorage.setItem("vega.dockW", String(Math.round(dockW)));
   }, [dockW]);
+
+  // 新消息 / 流式增量到达时跟到底部（替代 Bubble.List 的 autoScroll）
+  useEffect(() => {
+    const el = msgsRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [msgs.length, streaming, liveEvts.length, busy]);
 
   useEffect(() => {
     if (!chatMode) return;
@@ -1512,10 +1552,10 @@ export default function RequirementChat() {
                 setReviews((list) => [r, ...list.filter((x) => x.id !== r.id)]);
                 if (r.status === "done") {
                   if (r.blockers)
-                    message.warning(i18n.t("reqChat.reviewDoneBlockers", { n: r.blockers }));
-                  else message.success(i18n.t("reqChat.reviewDoneOk"));
+                    toast.warning(i18n.t("reqChat.reviewDoneBlockers", { n: r.blockers }));
+                  else toast.success(i18n.t("reqChat.reviewDoneOk"));
                 } else if (r.status !== "running")
-                  message.warning(i18n.t("reqChat.reviewUnfinished", { status: r.status }));
+                  toast.warning(i18n.t("reqChat.reviewUnfinished", { status: r.status }));
               }
             },
             chatMode,
@@ -1535,7 +1575,7 @@ export default function RequirementChat() {
   }, [reqId, chatMode, streamNonce]);
 
   /** 逐个上传待发附件；任何一个失败就整轮不发，已传的留作下次重试（会重复，但不会丢内容）。 */
-  const uploadFiles = async (list: UploadFile[]): Promise<number[]> => {
+  const uploadFiles = async (list: LocalFile[]): Promise<number[]> => {
     const ids: number[] = [];
     for (const f of list) {
       const raw = f.originFileObj as File | undefined;
@@ -1549,6 +1589,53 @@ export default function RequirementChat() {
       ids.push(d.id);
     }
     return ids;
+  };
+
+  /** 收下待发附件：超限的直接拒收并提示，总数截到 MAX_ATTACHMENTS。 */
+  const addFiles = (list: FileList | File[]) => {
+    const add = Array.from(list).filter((f) => {
+      if (f.size > MAX_ATTACHMENT_MB * 1024 * 1024) {
+        toast.error(t("reqChat.attachTooLarge", { name: f.name, mb: MAX_ATTACHMENT_MB }));
+        return false;
+      }
+      return true;
+    });
+    if (!add.length) return;
+    setFiles((prev) =>
+      [
+        ...prev,
+        ...add.map((f) => ({
+          uid: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          name: f.name || "screenshot.png",
+          originFileObj: f,
+        })),
+      ].slice(0, MAX_ATTACHMENTS),
+    );
+  };
+
+  /** 上传需求文档（原 antd Upload 的 customRequest 逻辑）。 */
+  const uploadDoc = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    const fd = new FormData();
+    fd.append("file", file);
+    try {
+      const up = await api<{ is_final: boolean }>(`/api/requirements/${reqId}/docs`, {
+        method: "POST",
+        body: fd,
+      });
+      toast.success(up.is_final ? t("reqChat.uploadedFinal") : t("reqChat.uploaded"));
+      try {
+        await api(`/api/requirements/${reqId}`);
+      } catch {
+        nav("/reqs");
+        return;
+      }
+      reload();
+    } catch (err: any) {
+      toast.error(err.message);
+    }
   };
 
   const send = async (
@@ -1617,9 +1704,9 @@ export default function RequirementChat() {
         body: JSON.stringify({ mode: chatMode }),
       });
       setStreamNonce((n) => n + 1);
-      message.success(t("reqChat.sessionCleared"));
+      toast.success(t("reqChat.sessionCleared"));
     } catch (e: any) {
-      message.error(e.message);
+      toast.error(e.message);
     }
   };
 
@@ -1632,14 +1719,14 @@ export default function RequirementChat() {
       setBusy(false);
       busyRef.current = false;
       setStreaming("");
-      message.info(e.message);
+      toast.info(e.message);
     }
   };
 
   /** 发起 Goldfish 评审：零上下文的独立任务，评审最新一版方案。 */
   const runReview = async () => {
     if (!planVers.length) {
-      message.info(t("reqChat.reviewNeedPlan"));
+      toast.info(t("reqChat.reviewNeedPlan"));
       return;
     }
     setReviewBusy(true);
@@ -1655,9 +1742,9 @@ export default function RequirementChat() {
         setSubs([]);
         setThinkTokens(0);
       }
-      message.success(t("reqChat.reviewSubmitted"));
+      toast.success(t("reqChat.reviewSubmitted"));
     } catch (e: any) {
-      message.error(e.message);
+      toast.error(e.message);
     } finally {
       setReviewBusy(false);
     }
@@ -1666,20 +1753,20 @@ export default function RequirementChat() {
   const finalizeDoc = async (doc: any) => {
     try {
       await api(`/api/requirements/${reqId}/docs/${doc.id}/finalize`, { method: "POST" });
-      message.success(t("reqChat.docFinalized", { version: doc.version }));
+      toast.success(t("reqChat.docFinalized", { version: doc.version }));
       // 定稿即移交：自己不是开发的话这一刻就失去详情访问，直接回需求池，
       // 否则留在页面上只会看到 403 提示
       try {
         await api(`/api/requirements/${reqId}`);
       } catch {
-        message.info(t("reqChat.handedOver"));
+        toast.info(t("reqChat.handedOver"));
         nav("/reqs");
         return;
       }
       await reload();
       setPreview({ type: "doc", data: { ...doc, is_final: true } });
     } catch (e: any) {
-      message.error(e.message);
+      toast.error(e.message);
     }
   };
 
@@ -1687,11 +1774,11 @@ export default function RequirementChat() {
   const unfinalizeDoc = async (doc: any) => {
     try {
       await api(`/api/requirements/${reqId}/docs/${doc.id}/unfinalize`, { method: "POST" });
-      message.success(t("reqChat.docUnfinalized", { version: doc.version }));
+      toast.success(t("reqChat.docUnfinalized", { version: doc.version }));
       await reload();
       setPreview({ type: "doc", data: { ...doc, is_final: false } });
     } catch (e: any) {
-      message.error(e.message);
+      toast.error(e.message);
     }
   };
 
@@ -1701,7 +1788,7 @@ export default function RequirementChat() {
       `/api/requirements/${reqId}/plan-versions`,
       { method: "POST", body: JSON.stringify({ content }) },
     );
-    message.success(
+    toast.success(
       d.created
         ? t("reqChat.planAdopted", { version: d.version })
         : t("reqChat.planAdoptedSame", { version: d.version }),
@@ -1740,7 +1827,7 @@ export default function RequirementChat() {
       `/api/requirements/${reqId}/docs/from-ai`,
       { method: "POST", body: JSON.stringify({ content }) },
     );
-    message.success(
+    toast.success(
       d.created
         ? t("reqChat.docAdopted", { version: d.version })
         : t("reqChat.docAdoptedSame", { version: d.version }),
@@ -1754,11 +1841,11 @@ export default function RequirementChat() {
   const doFinalizePlan = async (v: any) => {
     try {
       await api(`/api/requirements/${reqId}/plan-versions/${v.id}/finalize`, { method: "POST" });
-      message.success(t("reqChat.planFinalized", { version: v.version }));
+      toast.success(t("reqChat.planFinalized", { version: v.version }));
       await reload();
       setPreview({ type: "plan", data: { ...v, is_final: true } });
     } catch (e: any) {
-      message.error(e.message);
+      toast.error(e.message);
     }
   };
 
@@ -1766,31 +1853,48 @@ export default function RequirementChat() {
   const finalizePlan = async (v: any) => {
     const reviewed = reviews.some((r) => r.plan_version_id === v.id && r.status === "done");
     if (reviewed) return doFinalizePlan(v);
-    Modal.confirm({
+    const ok = await confirm({
       title: t("reqChat.planNoReviewTitle", { version: v.version }),
-      content: t("reqChat.planNoReviewContent"),
-      okText: t("reqChat.okFinalize"),
+      description: t("reqChat.planNoReviewContent"),
+      confirmText: t("reqChat.okFinalize"),
       cancelText: t("reqChat.cancelReviewFirst"),
-      onOk: () => doFinalizePlan(v),
     });
+    if (ok) await doFinalizePlan(v);
   };
 
   if (denied)
     return (
       <Page title={t("reqChat.detailTitle")} desc={t("reqChat.detailDesc")}>
         <div className="page-card" style={{ padding: 48, textAlign: "center" }}>
-          <Typography.Title level={5} style={{ marginBottom: 8 }}>
+          <h5 className="rc-empty-title" style={{ marginBottom: 8 }}>
             {denied}
-          </Typography.Title>
-          <Typography.Text type="secondary">{t("reqChat.deniedHint")}</Typography.Text>
+          </h5>
+          <div className="muted">{t("reqChat.deniedHint")}</div>
           <div style={{ marginTop: 16 }}>
-            <Button onClick={() => nav("/reqs")}>{t("reqChat.backToPool")}</Button>
+            <Button className="rounded-lg" onClick={() => nav("/reqs")}>
+              {t("reqChat.backToPool")}
+            </Button>
           </div>
         </div>
       </Page>
     );
-  if (!req) return <Spin style={{ marginTop: 80, width: "100%" }} />;
+  if (!req)
+    return (
+      <div className="flex justify-center pt-20">
+        <LoaderCircle size={22} className="animate-spin text-muted-foreground" />
+      </div>
+    );
   const st = STATUS[req.status];
+  const qaTone: BadgeTone =
+    qaSummary?.status === "completed"
+      ? "success"
+      : qaSummary?.status === "completed_with_failures"
+        ? "warning"
+        : qaSummary?.status === "failed"
+          ? "danger"
+          : qaSummary?.status === "running"
+            ? "info"
+            : "neutral";
   const chatable = req.status === "claimed";
   // 阶段：需求文档未定稿 → 需求讨论（AI 可改文档）；已定稿 → 方案讨论；方案定稿 → 开发阶段
   const planFinal = ["confirmed", "archived", "online"].includes(req.status);
@@ -1803,10 +1907,6 @@ export default function RequirementChat() {
         ? t("reqChat.claimHintFinalized")
         : t("reqChat.claimHintUnfinalized");
 
-  /** 附件卡片的图标（按文件名后缀）。 */
-  const fileIcon = (name: string): "markdown" | "word" | "default" =>
-    /\.(md|markdown)$/i.test(name) ? "markdown" : /\.docx?$/i.test(name) ? "word" : "default";
-
   // 只有最后一条带提问的 AI 回复可点：之后的失败提示等消息不该把还挂着的提问锁死
   const lastAskId = [...msgs]
     .reverse()
@@ -1816,49 +1916,41 @@ export default function RequirementChat() {
   const liveTurn = !!(busy || streaming || (reviewRunning && liveEvts.length > 0));
   // EGM 能力收进输入框旁的悬浮下拉：每项一个独立图标，不再占一整行
   const latestDoneReview = reviews.find((r) => r.status === "done");
-  const egmMenu: MenuProps["items"] = [
+  const egmMenu: EgmItem[] = [
     {
       key: "brainstorm",
-      icon: <BulbOutlined />,
+      icon: <Lightbulb size={14} />,
       label: t("reqChat.brainstorm"),
       disabled: busy,
       onClick: () => send(t("reqChat.brainstormPrompt"), "brainstorm"),
     },
     {
       key: "draft",
-      icon: <EditOutlined />,
+      icon: <Pencil size={14} />,
       label: t("reqChat.draft"),
       disabled: busy,
       onClick: () => send(t("reqChat.draftPrompt"), "draft"),
     },
-    { type: "divider" },
+    { key: "divider", divider: true },
     {
       key: "review",
-      icon: <AuditOutlined />,
+      icon: <ClipboardCheck size={14} />,
       label: t("reqChat.startReview"),
       disabled: !planVers.length || reviewBusy,
       onClick: runReview,
     },
     {
       key: "revise",
-      icon: <ToolOutlined />,
+      icon: <Wrench size={14} />,
       label: t("reqChat.reviseByVerdict"),
       disabled: busy || !latestDoneReview,
       onClick: () => latestDoneReview && send(t("reqChat.revisePrompt"), "resolve", latestDoneReview.id),
     },
     {
       key: "reports",
-      icon: <FileTextOutlined />,
-      label: (
-        <Badge
-          dot={reviews.some((r) => r.status === "done" && r.blockers > 0)}
-          offset={[6, -2]}
-          title={t("reqChat.hasBlockers")}
-        >
-          {t("reqChat.reports")}
-          {reviews.length ? ` (${reviews.length})` : ""}
-        </Badge>
-      ),
+      icon: <FileText size={14} />,
+      label: `${t("reqChat.reports")}${reviews.length ? ` (${reviews.length})` : ""}`,
+      dot: reviews.some((r) => r.status === "done" && r.blockers > 0),
       onClick: () => setReviewOpen(true),
     },
   ];
@@ -1867,28 +1959,28 @@ export default function RequirementChat() {
   const slashDefs = [
     {
       key: "brainstorm",
-      icon: <BulbOutlined />,
+      icon: <Lightbulb size={14} />,
       label: t("reqChat.brainstorm"),
       ok: !busy,
       run: () => send(t("reqChat.brainstormPrompt"), "brainstorm"),
     },
     {
       key: "draft",
-      icon: <EditOutlined />,
+      icon: <Pencil size={14} />,
       label: t("reqChat.draft"),
       ok: !busy,
       run: () => send(t("reqChat.draftPrompt"), "draft"),
     },
     {
       key: "review",
-      icon: <AuditOutlined />,
+      icon: <ClipboardCheck size={14} />,
       label: t("reqChat.startReview"),
       ok: !!planVers.length && !reviewBusy,
       run: runReview,
     },
     {
       key: "revise",
-      icon: <ToolOutlined />,
+      icon: <Wrench size={14} />,
       label: t("reqChat.reviseByVerdict"),
       ok: !!latestDoneReview,
       run: () => latestDoneReview && send(t("reqChat.revisePrompt"), "resolve", latestDoneReview.id),
@@ -1936,9 +2028,10 @@ export default function RequirementChat() {
           {!!m.attachments?.length && (
             <div style={{ marginTop: 6, display: "flex", gap: 4, flexWrap: "wrap" }}>
               {m.attachments.map((a, i) => (
-                <Tag key={`${a.id}-${a.filename}-${i}`} icon={<PaperClipOutlined />}>
+                <Badge key={`${a.id}-${a.filename}-${i}`} tone="neutral">
+                  <Paperclip size={12} />
                   {a.filename}
-                </Tag>
+                </Badge>
               ))}
             </div>
           )}
@@ -2058,172 +2151,223 @@ export default function RequirementChat() {
   return (
     <div className="req-page">
       <div className="rc-shell" ref={shellRef}>
-      <ProCard
-        className="rc-main"
-        title={
-          <Space>
+      <main className="rc-main page-card">
+        <div className="rc-main-head">
+          <div className="rc-main-title">
             <span>{t("reqChat.convTitle")}</span>
-            <span className="mono" style={{ fontSize: 13, color: "rgba(0,0,0,0.45)" }}>
+            <span className="mono" style={{ fontSize: 13, color: "var(--muted)" }}>
               {req.code}
             </span>
-            <Tag color={st?.[0] ?? "default"}>{st ? t(st[1]) : req.status}</Tag>
-          </Space>
-        }
-        subTitle={req.title}
-        extra={
-          <Space>
-            {!chatOpen && (
-              <Button size="small" onClick={() => setChatOpen(true)}>
-                {t("reqChat.aiChat")}
-              </Button>
-            )}
-            <Link to="/reqs">{t("reqChat.backToPool")}</Link>
-          </Space>
-        }
-        bodyStyle={{ padding: 12 }}
-      >
-        <Row gutter={12}>
-          {/* 左：文件列表（需求文档多版本 + 方案版本）+ 任务池 + 需求信息 */}
-          <Col xs={24} lg={5}>
-            <div className="panel rc-files">
-              {req.req_type !== "bug" && (<>
-              <h4>
-                {t("reqChat.docSection")}{" "}
-                {!planFinal && (
-                  <Upload
-                    showUploadList={false}
-                    customRequest={async (opt) => {
-                      const fd = new FormData();
-                      fd.append("file", opt.file as any);
-                      try {
-                        const up = await api<{ is_final: boolean }>(`/api/requirements/${reqId}/docs`, {
-                          method: "POST",
-                          body: fd,
-                        });
-                        message.success(up.is_final ? t("reqChat.uploadedFinal") : t("reqChat.uploaded"));
-                        try {
-                          await api(`/api/requirements/${reqId}`);
-                        } catch {
-                          nav("/reqs");
-                          return;
-                        }
-                        (opt as any).onSuccess?.({});
-                        reload();
-                      } catch (e: any) {
-                        message.error(e.message);
-                      }
-                    }}
-                  >
-                    <Button size="small" type="text" icon={<InboxOutlined />}>
-                      {t("reqChat.upload")}
-                    </Button>
-                  </Upload>
+            <Badge tone={st?.[0] ?? "neutral"}>{st ? t(st[1]) : req.status}</Badge>
+          </div>
+          <div className="ml-auto flex items-center gap-3 text-[13px]">
+            <Link to="/reqs" className="text-primary hover:underline">
+              {t("reqChat.backToPool")}
+            </Link>
+          </div>
+          <div className="rc-main-sub">{req.title}</div>
+        </div>
+        <div className="rc-main-body">
+          <div className="rc-grid">
+            {/* 左：文件列表（需求文档多版本 + 方案版本）+ 任务池 + 需求信息 */}
+            <div>
+              <div className="panel rc-files">
+                {req.req_type !== "bug" && (
+                  <>
+                    <h4>
+                      {t("reqChat.docSection")}{" "}
+                      {!planFinal && (
+                        <label className="inline-flex cursor-pointer items-center gap-1 text-xs font-normal text-primary hover:underline">
+                          <Inbox size={14} />
+                          {t("reqChat.upload")}
+                          <input type="file" className="hidden" onChange={uploadDoc} />
+                        </label>
+                      )}
+                    </h4>
+                    {docs.length === 0 && (
+                      <span className="muted text-xs">{t("reqChat.noDocs")}</span>
+                    )}
+                    {docs.map((d) => (
+                      <div
+                        key={d.id}
+                        className={`rc-file${previewDoc?.id === d.id ? " on" : ""}`}
+                        onClick={() => setPreview({ type: "doc", data: d })}
+                        title={t("reqChat.clickPreview")}
+                      >
+                        <span className="rc-file-name">{d.is_final && <span className="ver-final">🎯 </span>}{d.filename}</span>
+                        <span className="rc-file-ver">v{d.version}</span>
+                      </div>
+                    ))}
+                  </>
                 )}
-              </h4>
-              {docs.length === 0 && (
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  {t("reqChat.noDocs")}
-                </Typography.Text>
-              )}
-              {docs.map((d) => (
-                <div
-                  key={d.id}
-                  className={`rc-file${previewDoc?.id === d.id ? " on" : ""}`}
-                  onClick={() => setPreview({ type: "doc", data: d })}
-                  title={t("reqChat.clickPreview")}
-                >
-                  <span className="rc-file-name">{d.is_final && <span className="ver-final">🎯 </span>}{d.filename}</span>
-                  <span className="rc-file-ver">v{d.version}</span>
-                </div>
-              ))}
-              </>)}
-              {planVers.length > 0 && (
-                <>
-                  <h4 style={{ marginTop: 12 }}>{t("reqChat.planVersions")}</h4>
-                  {planVers.map((v) => (
-                    <div
-                      key={v.id}
-                      className={`rc-file${previewPlan?.id === v.id ? " on" : ""}`}
-                      onClick={() => setPreview({ type: "plan", data: v })}
-                      title={t("reqChat.clickPreview")}
-                    >
-                      <span className="rc-file-name">{v.is_final && <span className="ver-final">🎯 </span>}{t("reqChat.planSnapshot")}</span>
-                      <span className="rc-file-ver">v{v.version} · {(v.created_at || "").slice(5, 10)}</span>
-                    </div>
-                  ))}
-                </>
-              )}
-            </div>
-
-            {req.status === "confirmed" && (
-              <div className="panel">
-                <h4>{t("reqChat.taskPool")}</h4>
-                {tasks.map((task) => {
-                  const taskSt = TASK_STATUS[task.status];
-                  return (
-                  <div key={task.id} className="task-pill" title={task.scope || undefined}>
-                    <span className="mono">{task.code}</span>
-                    <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {task.title || "—"}
-                    </span>
-                    <Tag
-                      color={task.status === "failed" ? "error" : task.status === "mr_created" ? "success" : "processing"}
-                      style={{ marginInlineEnd: 0 }}
-                    >
-                      {taskSt ? t(taskSt) : task.status}
-                    </Tag>
-                    {task.mr_url ? (
-                      <a href={task.mr_url} target="_blank" rel="noreferrer" className="mono">
-                        MR !{task.mr_iid}
-                      </a>
-                    ) : null}
-                    <Link to={`/tasks/${task.id}`}>{t("reqChat.taskDetail")}</Link>
-                  </div>
-                  );
-                })}
+                {planVers.length > 0 && (
+                  <>
+                    <h4 style={{ marginTop: 12 }}>{t("reqChat.planVersions")}</h4>
+                    {planVers.map((v) => (
+                      <div
+                        key={v.id}
+                        className={`rc-file${previewPlan?.id === v.id ? " on" : ""}`}
+                        onClick={() => setPreview({ type: "plan", data: v })}
+                        title={t("reqChat.clickPreview")}
+                      >
+                        <span className="rc-file-name">{v.is_final && <span className="ver-final">🎯 </span>}{t("reqChat.planSnapshot")}</span>
+                        <span className="rc-file-ver">v{v.version} · {(v.created_at || "").slice(5, 10)}</span>
+                      </div>
+                    ))}
+                  </>
+                )}
               </div>
-            )}
 
-            <div className="panel">
-              <h4>{t("reqChat.reqInfo")}</h4>
-              <Descriptions size="small" column={1}>
-                <Descriptions.Item label={t("reqChat.fDesc")}>{req.description || "—"}</Descriptions.Item>
-                <Descriptions.Item label={t("reqChat.fType")}>
-                  {req.req_type === "bug" ? t("requirements.typeBug") : t("requirements.typeRequirement")}
-                </Descriptions.Item>
-                <Descriptions.Item label={t("reqChat.fProject")}>{req.system_name || `#${req.system_id}`}</Descriptions.Item>
-                <Descriptions.Item label={t("reqChat.fClaimant")}>{req.claimant_name || "—"}</Descriptions.Item>
-                <Descriptions.Item label={t("reqChat.fProposer")}>{req.proposer_name || "—"}</Descriptions.Item>
-                <Descriptions.Item label={t("reqChat.fCreated")}>
-                  <span className="mono">{(req.created_at || "").slice(0, 19)}</span>
-                </Descriptions.Item>
-              </Descriptions>
+              {req.status === "confirmed" && (
+                <div className="panel">
+                  <h4>{t("reqChat.taskPool")}</h4>
+                  {tasks.map((task) => {
+                    const taskSt = TASK_STATUS[task.status];
+                    const tone: BadgeTone =
+                      task.status === "failed" ? "danger" : task.status === "mr_created" ? "success" : "info";
+                    return (
+                      <div key={task.id} className="task-pill" title={task.scope || undefined}>
+                        <span className="mono">{task.code}</span>
+                        <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {task.title || "—"}
+                        </span>
+                        <Badge tone={tone}>{taskSt ? t(taskSt) : task.status}</Badge>
+                        {task.mr_url ? (
+                          <a href={task.mr_url} target="_blank" rel="noreferrer" className="mono">
+                            MR !{task.mr_iid}
+                          </a>
+                        ) : null}
+                        <Link to={`/tasks/${task.id}`}>{t("reqChat.taskDetail")}</Link>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              <div className="panel">
+                <h4>{t("qa.req.cardTitle")}</h4>
+                {qaSummary && qaSummary.status !== "none" ? (
+                  <div className="flex flex-col gap-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge tone={qaTone}>{t(`qa.status.${qaSummary.status}` as MsgKey)}</Badge>
+                      {qaSummary.pass_rate != null && (
+                        <span className="mono">{pct(qaSummary.pass_rate)}</span>
+                      )}
+                      {qaSummary.total > 0 && (
+                        <span className="muted">
+                          {qaSummary.passed}/{qaSummary.total}
+                        </span>
+                      )}
+                    </div>
+                    {qaSummary.batch_id && (
+                      <Link to={`/qa/batches/${qaSummary.batch_id}`}>{t("qa.batch.detail")}</Link>
+                    )}
+                  </div>
+                ) : (
+                  <div className="muted">{t("qa.req.none")}</div>
+                )}
+                <div className="mt-2 flex flex-wrap items-center gap-3">
+                  <Button
+                    size="sm"
+                    className="rounded-lg"
+                    onClick={openQa}
+                    disabled={req.status !== "online" && !isAdmin()}
+                  >
+                    {t("qa.req.start")}
+                  </Button>
+                  <Link to={`/systems/${req.system_id}/qa?tab=batches`}>{t("qa.req.history")}</Link>
+                </div>
+                {req.status !== "online" && (
+                  <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                    {t("qa.req.notOnline")}
+                  </div>
+                )}
+                <CenterMorphModal
+                  open={qaOpen}
+                  onOpenChange={(next) => {
+                    if (!next) setQaOpen(false);
+                  }}
+                >
+                  <CenterMorphModalContent ariaLabel={t("qa.req.startTitle")} className="max-w-[480px]">
+                    <div className="p-6">
+                      <h2 className="m-0 text-lg font-semibold tracking-[-0.01em] text-foreground">
+                        {t("qa.req.startTitle")}
+                      </h2>
+                      <div className="mt-4">
+                        <SearchSelect
+                          value={qaEnv ?? null}
+                          onChange={(v) => setQaEnv(v == null ? undefined : String(v))}
+                          clearable
+                          placeholder={t("qa.env.default")}
+                          options={qaEnvs.map((e) => ({
+                            value: e.name,
+                            label: e.base_url ? `${e.name} · ${e.base_url}` : e.name,
+                          }))}
+                        />
+                      </div>
+                      <div className="mt-2 text-xs text-muted-foreground">{t("qa.req.startHint")}</div>
+                      <div className="mt-6 flex justify-end gap-2">
+                        <Button variant="outline" size="sm" className="rounded-lg" onClick={() => setQaOpen(false)}>
+                          {t("common.cancel")}
+                        </Button>
+                        <Button size="sm" className="rounded-lg" onClick={startQa} disabled={qaBusy}>
+                          {t("qa.req.start")}
+                        </Button>
+                      </div>
+                    </div>
+                  </CenterMorphModalContent>
+                </CenterMorphModal>
+              </div>
+
+              <div className="panel">
+                <h4>{t("reqChat.reqInfo")}</h4>
+                <dl className="rc-desc">
+                  <div><dt>{t("reqChat.fDesc")}</dt><dd>{req.description || "—"}</dd></div>
+                  <div>
+                    <dt>{t("reqChat.fType")}</dt>
+                    <dd>{req.req_type === "bug" ? t("requirements.typeBug") : t("requirements.typeRequirement")}</dd>
+                  </div>
+                  <div><dt>{t("reqChat.fProject")}</dt><dd>{req.system_name || `#${req.system_id}`}</dd></div>
+                  <div><dt>{t("reqChat.fClaimant")}</dt><dd>{req.claimant_name || "—"}</dd></div>
+                  <div><dt>{t("reqChat.fProposer")}</dt><dd>{req.proposer_name || "—"}</dd></div>
+                  <div>
+                    <dt>{t("reqChat.fCreated")}</dt>
+                    <dd><span className="mono">{(req.created_at || "").slice(0, 19)}</span></dd>
+                  </div>
+                </dl>
+              </div>
             </div>
-          </Col>
 
-          {/* 主区：文件/方案预览（页面主体；AI 对话在右侧抽屉） */}
-          <Col xs={24} lg={19}>
+            {/* 主区：文件/方案预览（页面主体；AI 对话在右侧停靠栏） */}
             <div className="rc-preview">
               {previewDoc ? (
                 <>
                   <div className="rc-preview-head">
                     <span className="rc-preview-title">
                       📄 {previewDoc.filename}
-                      <Tag style={{ marginInlineStart: 8 }}>v{previewDoc.version}</Tag>
-                      {previewDoc.is_final && <Tag color="success">{t("reqChat.finalTag")}</Tag>}
+                      <Badge className="ml-2">v{previewDoc.version}</Badge>
+                      {previewDoc.is_final && <Badge tone="success">{t("reqChat.finalTag")}</Badge>}
                     </span>
                     {!previewDoc.is_final && !planFinal && (
-                      <Button size="small" type="primary" onClick={() => finalizeDoc(previewDoc)}>
+                      <Button size="sm" className="rounded-lg" onClick={() => finalizeDoc(previewDoc)}>
                         {t("reqChat.setFinal")}
                       </Button>
                     )}
                     {previewDoc.is_final && !planFinal && (
-                      <Popconfirm
-                        title={t("reqChat.unfinalizeConfirm")}
-                        onConfirm={() => unfinalizeDoc(previewDoc)}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="rounded-lg"
+                        onClick={async () => {
+                          const ok = await confirm({
+                            title: t("reqChat.unfinalizeConfirm"),
+                            confirmText: t("reqChat.unfinalize"),
+                          });
+                          if (ok) unfinalizeDoc(previewDoc);
+                        }}
                       >
-                        <Button size="small">{t("reqChat.unfinalize")}</Button>
-                      </Popconfirm>
+                        {t("reqChat.unfinalize")}
+                      </Button>
                     )}
                   </div>
                   <div className="rc-preview-body">
@@ -2235,11 +2379,11 @@ export default function RequirementChat() {
                   <div className="rc-preview-head">
                     <span className="rc-preview-title">
                       📋 {t("reqChat.planSnapshot")}
-                      <Tag style={{ marginInlineStart: 8 }}>v{previewPlan.version}</Tag>
-                      {previewPlan.is_final && <Tag color="success">{t("reqChat.finalTag")}</Tag>}
+                      <Badge className="ml-2">v{previewPlan.version}</Badge>
+                      {previewPlan.is_final && <Badge tone="success">{t("reqChat.finalTag")}</Badge>}
                     </span>
                     {chatMode === "plan" && !previewPlan.is_final && (
-                      <Button size="small" type="primary" onClick={() => finalizePlan(previewPlan)}>
+                      <Button size="sm" className="rounded-lg" onClick={() => finalizePlan(previewPlan)}>
                         {t("reqChat.finalizePlanBtn")}
                       </Button>
                     )}
@@ -2255,9 +2399,9 @@ export default function RequirementChat() {
                             (f) => (f.severity || "Nit") === sev,
                           ).length;
                           return n ? (
-                            <Tag key={sev} color={SEV_ST[sev].color}>
+                            <Badge key={sev} tone={SEV_ST[sev].tone}>
                               {SEV_ST[sev].icon} {sev} {n}
-                            </Tag>
+                            </Badge>
                           ) : null;
                         })}
                         {planAnno.docLevel.length > 0 && (
@@ -2265,21 +2409,27 @@ export default function RequirementChat() {
                             trigger="click"
                             open={annoOpen === "doc"}
                             onOpenChange={(v) => setAnnoOpen(v ? "doc" : null)}
-                            title={t("reqChat.docLevelTitle", { n: planAnno.docLevel.length })}
-                            content={
-                              <div>
-                                {planAnno.docLevel.map((f, i) => (
-                                  <div
-                                    key={i}
-                                    style={{ marginBottom: i === planAnno.docLevel.length - 1 ? 0 : 12 }}
-                                  >
-                                    <FindingCard f={f} />
-                                  </div>
-                                ))}
-                              </div>
-                            }
+                            side="bottom"
+                            align="start"
                           >
-                            <a>{t("reqChat.docLevel", { n: planAnno.docLevel.length })}</a>
+                            <PopoverTrigger>
+                              <button type="button" className="text-primary">
+                                {t("reqChat.docLevel", { n: planAnno.docLevel.length })}
+                              </button>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-[440px] max-w-[88vw]">
+                              <div className="mb-2 text-xs font-semibold">
+                                {t("reqChat.docLevelTitle", { n: planAnno.docLevel.length })}
+                              </div>
+                              {planAnno.docLevel.map((f, i) => (
+                                <div
+                                  key={i}
+                                  style={{ marginBottom: i === planAnno.docLevel.length - 1 ? 0 : 12 }}
+                                >
+                                  <FindingCard f={f} />
+                                </div>
+                              ))}
+                            </PopoverContent>
                           </Popover>
                         )}
                       </div>
@@ -2291,31 +2441,29 @@ export default function RequirementChat() {
                 </>
               ) : req.status === "pool" ? (
                 <div className="rc-preview-empty">
-                  <Typography.Title level={5} style={{ margin: 0 }}>
-                    {req.title}
-                  </Typography.Title>
-                  <Typography.Text type="secondary">{req.description || t("reqChat.noDesc")}</Typography.Text>
+                  <h5 className="rc-empty-title">{req.title}</h5>
+                  <div className="muted">{req.description || t("reqChat.noDesc")}</div>
                   {req.can_claim ? (
                     <Button
-                      type="primary"
+                      className="rounded-lg"
                       onClick={async () => {
                         try {
                           await api(`/api/requirements/${reqId}/claim`, { method: "POST" });
                           reload();
                         } catch (e: any) {
-                          message.error(e.message);
+                          toast.error(e.message);
                         }
                       }}
                     >
                       {t("reqChat.claimReq")}
                     </Button>
                   ) : (
-                    <Typography.Text type="secondary">{claimHint}</Typography.Text>
+                    <div className="muted">{claimHint}</div>
                   )}
                 </div>
               ) : (
                 <div className="rc-preview-empty">
-                  <Typography.Text type="secondary">
+                  <div className="muted">
                     {chatMode === "requirement" ? (
                       <>
                         {t("reqChat.noDocYet")}
@@ -2329,18 +2477,17 @@ export default function RequirementChat() {
                         {t("reqChat.noPlanYetHint")}
                       </>
                     )}
-                  </Typography.Text>
+                  </div>
                 </div>
               )}
             </div>
-          </Col>
-        </Row>
-      </ProCard>
+          </div>
+        </div>
+      </main>
 
-      {chatOpen && (
-        <div
-          className={`rc-split${dragging ? " on" : ""}`}
-          role="separator"
+      <div
+        className={`rc-split${dragging ? " on" : ""}`}
+        role="separator"
           aria-orientation="vertical"
           aria-label={t("reqChat.resizeAria")}
           aria-valuenow={Math.round(dockW)}
@@ -2359,70 +2506,75 @@ export default function RequirementChat() {
             setDockW((w) => Math.min(dockMax(), Math.max(DOCK_MIN, w + step)));
           }}
         />
-      )}
-      {chatOpen && (
-        <aside
-          className="rc-dock"
-          style={{ flex: `0 0 clamp(${DOCK_MIN}px, ${dockW}px, calc(100% - ${MAIN_MIN + SPLIT_W}px))` }}
-        >
+      <aside
+        className="rc-dock"
+        style={{ flex: `0 0 clamp(${DOCK_MIN}px, ${dockW}px, calc(100% - ${MAIN_MIN + SPLIT_W}px))` }}
+      >
           <div className="rc-dock-head">
-            <span>{t("reqChat.aiChat")}</span>
+            <span className="rc-dock-title">
+              <Bot size={15} className="text-primary" />
+              {t("reqChat.aiChat")}
+            </span>
             {chatMode && (
               // 阶段由文档/方案是否定稿决定，另一侧不可用即当前阶段；Bug 没有需求阶段，不显示需求讨论
-              <Segmented
-                size="small"
-                value={chatMode}
-                options={
-                  req.req_type === "bug"
-                    ? [{ label: t("reqChat.tabPlan"), value: "plan", disabled: chatMode !== "plan" }]
-                    : [
-                        { label: t("reqChat.tabReq"), value: "requirement", disabled: chatMode !== "requirement" },
-                        { label: t("reqChat.tabPlan"), value: "plan", disabled: chatMode !== "plan" },
-                      ]
-                }
-              />
+              <div className="rc-mode-seg">
+                {(req.req_type === "bug"
+                  ? [["plan", t("reqChat.tabPlan")] as const]
+                  : [
+                      ["requirement", t("reqChat.tabReq")] as const,
+                      ["plan", t("reqChat.tabPlan")] as const,
+                    ]
+                ).map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    className={chatMode === value ? "on" : ""}
+                    disabled={chatMode !== value}
+                  >
+                    {value === "plan" ? <ClipboardCheck size={12} /> : <PenLine size={12} />}
+                    {label}
+                  </button>
+                ))}
+              </div>
             )}
-            <Tag color={st?.[0] ?? "default"}>{st ? t(st[1]) : req.status}</Tag>
+            <Badge tone={st?.[0] ?? "neutral"}>{st ? t(st[1]) : req.status}</Badge>
             {(busy || streaming) && <i className="sess-live" />}
             {chatMode && (
-              <Popconfirm
-                title={t("reqChat.clearConfirm")}
-                description={t("reqChat.clearDesc")}
-                okText={t("reqChat.clear")}
-                cancelText={t("reqChat.cancel")}
-                onConfirm={clearSession}
+              <Button
+                size="icon"
+                variant="ghost"
+                className="ml-auto rounded-lg"
+                aria-label={t("reqChat.clearSession")}
+                title={t("reqChat.clearSession")}
+                onClick={async () => {
+                  const ok = await confirm({
+                    title: t("reqChat.clearConfirm"),
+                    description: t("reqChat.clearDesc"),
+                    confirmText: t("reqChat.clear"),
+                    cancelText: t("reqChat.cancel"),
+                  });
+                  if (ok) clearSession();
+                }}
               >
-                <Button size="small" type="text" icon={<ClearOutlined />} title={t("reqChat.clearSession")} />
-              </Popconfirm>
+                <Eraser size={14} />
+              </Button>
             )}
-            <button
-              className="rc-dock-toggle"
-              onClick={() => setChatOpen(false)}
-              title={t("reqChat.collapseDock")}
-            >
-              »
-            </button>
           </div>
         <div className="chat-box">
           {(ctxDoc || ctxPlan) && req.status !== "pool" && (
             <div className="rc-filecards">
               <span className="rc-filecards-label">{t("reqChat.introduced")}</span>
               {ctxDoc && (
-                <FileCard
-                  size="small"
+                <FileChip
                   name={ctxDoc.filename}
-                  byte={ctxDoc.size}
                   description={`v${ctxDoc.version}${ctxDoc.is_final ? ` · ${t("reqChat.finalMark")}` : ""}`}
-                  icon={fileIcon(ctxDoc.filename)}
                   onClick={() => setPreview({ type: "doc", data: ctxDoc })}
                 />
               )}
               {ctxPlan && (
-                <FileCard
-                  size="small"
+                <FileChip
                   name={t("reqChat.planFileName", { version: ctxPlan.version })}
                   description={ctxPlan.is_final ? t("reqChat.finalMark") : t("reqChat.snapshot")}
-                  icon="markdown"
                   onClick={() => setPreview({ type: "plan", data: ctxPlan })}
                 />
               )}
@@ -2441,77 +2593,60 @@ export default function RequirementChat() {
           )}
           {req.status === "pool" ? (
             <div className="chat-empty">
-              <Typography.Title level={5} style={{ margin: 0 }}>
-                {req.title}
-              </Typography.Title>
-              <Typography.Text type="secondary">{t("reqChat.claimToChat")}</Typography.Text>
+              <h5 className="rc-empty-title">{req.title}</h5>
+              <div className="muted">{t("reqChat.claimToChat")}</div>
               {req.can_claim ? (
                 <Button
-                  type="primary"
+                  className="rounded-lg"
                   onClick={async () => {
                     try {
                       await api(`/api/requirements/${reqId}/claim`, { method: "POST" });
                       reload();
                     } catch (e: any) {
-                      message.error(e.message);
+                      toast.error(e.message);
                     }
                   }}
                 >
                   {t("reqChat.claimReq")}
                 </Button>
               ) : (
-                <Typography.Text type="secondary">{claimHint}</Typography.Text>
+                <div className="muted">{claimHint}</div>
               )}
             </div>
           ) : chatable ? (
             <>
               {msgs.length === 0 && !busy && !streaming && (
-                <div style={{ overflowY: "auto" }}>
-                  <Prompts
-                    vertical
-                    title={t("reqChat.tryThese")}
-                    items={examples.map((e, i) => ({ key: String(i), label: e }))}
-                    onItemClick={({ data }) => send(String(data.label ?? ""))}
-                  />
+                <div className="rc-examples">
+                  <div className="rc-examples-title">{t("reqChat.tryThese")}</div>
+                  {examples.map((e, i) => (
+                    <button key={i} type="button" className="rc-example" onClick={() => send(e)}>
+                      {e}
+                    </button>
+                  ))}
                 </div>
               )}
               {(msgs.length > 0 || busy || streaming) && (
-                <Bubble.List
-                  style={{ flex: 1, minHeight: 0, overflowY: "auto" }}
-                  autoScroll
-                  items={bubbles}
-                  role={{
-                    user: {
-                      placement: "end",
-                      variant: "filled",
-                      avatar: <Avatar icon={<UserOutlined />} style={{ background: "#1677ff" }} />,
-                    },
-                    assistant: {
-                      placement: "start",
-                      variant: "outlined",
-                      rootClassName: "rc-turn-bubble",
-                      avatar: (
-                        <Avatar
-                          icon={<RobotOutlined />}
-                          style={{ background: "#e6f4ff", color: "#1677ff" }}
-                        />
-                      ),
-                      header: <span className="rc-bubble-name">Vega AI</span>,
-                      // 内容已是渲染好的元素（含思考链 + 正文），原样交给气泡
-                      contentRender: (c: any) => c,
-                      styles: { content: { fontSize: 13, lineHeight: 1.7 } },
-                    },
-                  }}
-                />
+                <div className="rc-msgs" ref={msgsRef}>
+                  {bubbles.map((b) => (
+                    <div key={b.key} className={`rc-msg ${b.role}`}>
+                      <span className="rc-msg-avatar">
+                        {b.role === "user" ? <User size={14} /> : <Bot size={14} />}
+                      </span>
+                      <div className="rc-msg-body">
+                        {b.role === "assistant" && <div className="rc-bubble-name">经纬 AI</div>}
+                        <div className="rc-msg-content">{b.content}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               )}
               {err && (
-                <Alert
-                  type="error"
-                  message={err}
-                  style={{ margin: "8px 0" }}
-                  closable
-                  onClose={() => setErr("")}
-                />
+                <div className="rc-error" role="alert">
+                  <span>{err}</span>
+                  <button type="button" aria-label={t("common.close")} onClick={() => setErr("")}>
+                    <X size={14} />
+                  </button>
+                </div>
               )}
               {ask && (
                 <div className="rc-ask">
@@ -2532,253 +2667,317 @@ export default function RequirementChat() {
                   ))}
                 </div>
               )}
-              <Suggestion
-                items={slashItems}
-                open={slash !== null && slashItems.length > 0}
-                onOpenChange={(o) => {
-                  if (!o) setSlash(null);
-                }}
-                onSelect={(v) => runSlash(v)}
-              >
-                {({ onKeyDown }) => (
-              <Sender
-                style={{ marginTop: 8 }}
-                loading={busy}
-                onCancel={stop}
+<div className="rc-composer">
+              {slash !== null && slashItems.length > 0 && (
+                <div className="rc-slash">
+                  {slashItems.map((it) => (
+                    <button
+                      key={it.value}
+                      type="button"
+                      className="rc-slash-item"
+                      onClick={() => runSlash(it.value)}
+                    >
+                      {it.icon}
+                      {it.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {files.length > 0 && (
+                <div className="rc-attach-row">
+                  {files.map((f) => (
+                    <span className="rc-attach-chip" key={f.uid}>
+                      <Paperclip size={12} />
+                      <span title={f.name}>{f.name}</span>
+                      <button
+                        type="button"
+                        aria-label={t("common.delete")}
+                        onClick={() => setFiles((prev) => prev.filter((x) => x.uid !== f.uid))}
+                      >
+                        <X size={12} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              <textarea
+                className="rc-composer-input"
+                rows={3}
                 value={input}
-                onChange={(v) => {
+                placeholder={
+                  chatMode === "requirement"
+                    ? t("reqChat.placeholderReq")
+                    : t("reqChat.placeholderPlan")
+                }
+                onChange={(e) => {
+                  const v = e.target.value;
                   setInput(v);
                   // 开头或空白后的 "/" 唤起快捷指令；只取到下一个空白为止
                   const m = /(?:^|\s)\/(\S*)$/.exec(v);
                   setSlash(m ? m[1] : null);
                 }}
                 onKeyDown={(e) => {
-                  const res = onKeyDown(e) as unknown;
+                  if (e.key === "Escape") {
+                    setSlash(null);
+                    return;
+                  }
+                  if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;
+                  e.preventDefault();
                   // 面板打开时回车选中首项：列表随输入过滤，首项即键盘默认高亮项
-                  if (res === false && slashItems.length) runSlash(slashItems[0].value);
-                  return res as any;
-                }}
-                placeholder={
-                  chatMode === "requirement"
-                    ? t("reqChat.placeholderReq")
-                    : t("reqChat.placeholderPlan")
-                }
-                header={
-                  <Attachments
-                    ref={attRef}
-                    items={files}
-                    beforeUpload={(f) => {
-                      if (f.size > MAX_ATTACHMENT_MB * 1024 * 1024) {
-                        message.error(t("reqChat.attachTooLarge", { name: f.name, mb: MAX_ATTACHMENT_MB }));
-                        return Upload.LIST_IGNORE;
-                      }
-                      return false;
-                    }}
-                    onChange={({ fileList }) => setFiles(fileList.slice(0, MAX_ATTACHMENTS))}
-                    maxCount={MAX_ATTACHMENTS}
-                    accept="image/*,.md,.markdown,.txt,.docx,.pdf,.log,.json,.csv,.xls,.xlsx,.zip"
-                    style={files.length ? undefined : { display: "none" }}
-                  />
-                }
-                onPasteFile={(list) => {
-                  const add = Array.from(list).filter((f) => {
-                    if (f.size > MAX_ATTACHMENT_MB * 1024 * 1024) {
-                      message.error(t("reqChat.attachTooLarge", { name: f.name, mb: MAX_ATTACHMENT_MB }));
-                      return false;
-                    }
-                    return true;
-                  });
-                  if (!add.length) return;
-                  setFiles((prev) =>
-                    [
-                      ...prev,
-                      ...add.map((f) => ({
-                        uid: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-                        name: f.name || "screenshot.png",
-                        status: "done" as const,
-                        originFileObj: f as any,
-                      })),
-                    ].slice(0, MAX_ATTACHMENTS),
-                  );
-                }}
-                onSubmit={(text) => {
-                  send(text);
+                  if (slash !== null && slashItems.length) {
+                    runSlash(slashItems[0].value);
+                    return;
+                  }
+                  if (!input.trim() || busy) return;
+                  send(input);
                   setInput("");
+                  setSlash(null);
                 }}
-                footer={
-                  <div className="rc-sender-tools">
-                    <Button
-                      type="text"
-                      size="small"
-                      icon={<PaperClipOutlined />}
-                      title={t("reqChat.attach")}
-                      aria-label={t("reqChat.attach")}
-                      disabled={busy}
-                      onClick={() => attRef.current?.select({ multiple: true })}
-                    />
-                    <Popover
-                      trigger={["hover", "click"]}
-                      placement="topLeft"
-                      title={t("reqChat.assets")}
-                      // 内容常驻挂载并跟随父级刷新（fresh 未进 antd 类型，但会透传给 trigger）：
-                      // 回放的历史团队/专家要立刻解析成名字显示在按钮上
-                      forceRender
-                      {...({ fresh: true } as any)}
-                      content={
-                        <div className="rc-assets" ref={assetsRef}>
-                          <AmSelect
-                            kind="team"
-                            size="small"
-                            style={{ width: 240 }}
-                            prefix={<ApartmentOutlined />}
-                            value={teamId}
-                            onLabelChange={setTeamName}
-                            onChange={(v) => {
-                              setTeamId(v ?? null);
-                              setAgentId(null); // 专家属于团队：换团队后旧专家不再适用
-                            }}
-                            placeholder={t("reqChat.teamDefault")}
-                            getPopupContainer={() => assetsRef.current || document.body}
-                          />
-                          <AmSelect
-                            kind="agent"
-                            size="small"
-                            teamId={teamId ?? undefined}
-                            style={{ width: 240 }}
-                            prefix={<RobotOutlined />}
-                            value={agentId}
-                            onLabelChange={setAgentName}
-                            onChange={(v) => setAgentId(v ?? null)}
-                            placeholder={t("reqChat.agentDefault")}
-                            getPopupContainer={() => assetsRef.current || document.body}
-                          />
-                          <div className="rc-assets-tip">{t("reqChat.senderTip")}</div>
-                        </div>
-                      }
-                    >
-                      <Button
-                        size="small"
-                        type={teamId || agentId ? "primary" : "default"}
-                        ghost={!!(teamId || agentId)}
-                        icon={<TeamOutlined />}
-                      >
-                        {agentName || teamName || t("reqChat.assets")}
-                      </Button>
-                    </Popover>
-                    {chatMode === "plan" && (
-                      <Dropdown menu={{ items: egmMenu }} trigger={["hover", "click"]} placement="topLeft">
-                        <Button size="small" icon={<EgmMark />}>
-                          {t("reqChat.egm")}
-                        </Button>
-                      </Dropdown>
-                    )}
-                    {/* 上下文环放在输入框内部右下角：发送按钮下方 */}
-                    <div className="rc-ctx-row">
-                      <Popover
-                        trigger={["hover", "click"]}
-                        placement="topRight"
-                        // 标题写进 content 而不是 Popover.title：避免与浏览器原生的 title 提示叠成两层
-                        content={
-                          <div className="rc-ctx-pop">
-                            <div className="rc-ctx-title">{t("reqChat.context")}</div>
-                            {ctxUsage ? (
-                              <>
-                                <div>
-                                  {t("reqChat.contextUsed", {
-                                    used: fmtTok(ctxUsed),
-                                    total: fmtTok(ctxUsage.window),
-                                    pct: ctxPct,
-                                  })}
-                                </div>
-                                <div className="rc-ctx-sub">
-                                  {t("reqChat.contextBreakdown", {
-                                    input: fmtTok(ctxUsage.input),
-                                    read: fmtTok(ctxUsage.cache_read),
-                                    write: fmtTok(ctxUsage.cache_create),
-                                    output: fmtTok(ctxUsage.output),
-                                  })}
-                                </div>
-                              </>
-                            ) : (
-                              <div className="rc-ctx-sub">{t("reqChat.contextNone")}</div>
-                            )}
-                          </div>
-                        }
-                      >
-                        <Progress
-                          type="circle"
-                          // size ≤ 20 时 antd 会给圆环套一个自带 Tooltip（空标题成黑气泡），22 可避开
-                          size={22}
-                          strokeWidth={14}
-                          percent={ctxPct}
-                          strokeColor={
-                            ctxPct >= 85 ? "#ff4d4f" : ctxPct >= 60 ? "#faad14" : "#1677ff"
-                          }
-                          format={() => null}
-                        />
-                      </Popover>
-                      {ctxUsage && <span className="rc-ctx-pct">{ctxPct}%</span>}
-                    </div>
-                  </div>
-                }
+                onPaste={(e) => {
+                  if (e.clipboardData.files.length) {
+                    e.preventDefault();
+                    addFiles(e.clipboardData.files);
+                  }
+                }}
               />
+              <div className="rc-composer-tools">
+                <input
+                  ref={attRef}
+                  type="file"
+                  hidden
+                  multiple
+                  accept="image/*,.md,.markdown,.txt,.docx,.pdf,.log,.json,.csv,.xls,.xlsx,.zip"
+                  onChange={(e) => {
+                    if (e.target.files) addFiles(e.target.files);
+                    e.target.value = "";
+                  }}
+                />
+                <button
+                  type="button"
+                  className="rc-tool-btn"
+                  title={t("reqChat.attach")}
+                  aria-label={t("reqChat.attach")}
+                  disabled={busy}
+                  onClick={() => attRef.current?.click()}
+                >
+                  <Paperclip size={14} />
+                </button>
+                <Popover trigger="hover" side="top" align="start" sideOffset={8}>
+                  <PopoverTrigger>
+                    <button type="button" className={`rc-tool-btn${teamId || agentId ? " on" : ""}`}>
+                      <Users size={14} />
+                      <span>{agentName || teamName || t("reqChat.assets")}</span>
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-[280px] p-3">
+                    <div className="rc-assets" ref={assetsRef}>
+                      <AmSelect
+                        kind="team"
+                        size="small"
+                        style={{ width: 240 }}
+                        prefix={<Building2 size={14} />}
+                        value={teamId}
+                        onLabelChange={setTeamName}
+                        onChange={(v) => {
+                          setTeamId(v ?? null);
+                          setAgentId(null); // 专家属于团队：换团队后旧专家不再适用
+                        }}
+                        placeholder={t("reqChat.teamDefault")}
+                      />
+                      <AmSelect
+                        kind="agent"
+                        size="small"
+                        teamId={teamId ?? undefined}
+                        style={{ width: 240 }}
+                        prefix={<Bot size={14} />}
+                        value={agentId}
+                        onLabelChange={setAgentName}
+                        onChange={(v) => setAgentId(v ?? null)}
+                        placeholder={t("reqChat.agentDefault")}
+                      />
+                      <div className="rc-assets-tip">{t("reqChat.senderTip")}</div>
+                    </div>
+                  </PopoverContent>
+                </Popover>
+                {chatMode === "plan" && (
+                  <Popover trigger="hover" side="top" align="start" sideOffset={8}>
+                    <PopoverTrigger>
+                      <button type="button" className="rc-tool-btn">
+                        <EgmMark />
+                        <span>{t("reqChat.egm")}</span>
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent className="p-1.5">
+                      <div className="rc-egm-menu">
+                        {egmMenu.map((it) =>
+                          it.divider ? (
+                            <hr key={it.key} />
+                          ) : (
+                            <button key={it.key} type="button" disabled={it.disabled} onClick={it.onClick}>
+                              {it.icon}
+                              {it.label}
+                              {it.dot && <span className="rc-egm-dot" />}
+                            </button>
+                          ),
+                        )}
+                      </div>
+                    </PopoverContent>
+                  </Popover>
                 )}
-              </Suggestion>
+                {/* 上下文环放在输入框内部右下角：发送按钮旁 */}
+                <div className="rc-ctx-row">
+                  <Popover trigger="hover" side="top" align="end" sideOffset={8}>
+                    <PopoverTrigger>
+                      <button type="button" className="rc-ctx-ring" aria-label={t("reqChat.context")}>
+                        <svg width={22} height={22} viewBox="0 0 22 22" aria-hidden="true">
+                          <circle cx={11} cy={11} r={8.5} fill="none" stroke="var(--line)" strokeWidth={3} />
+                          <circle
+                            cx={11}
+                            cy={11}
+                            r={8.5}
+                            fill="none"
+                            stroke={
+                              ctxPct >= 85 ? "var(--danger)" : ctxPct >= 60 ? "var(--warning)" : "var(--primary)"
+                            }
+                            strokeWidth={3}
+                            strokeLinecap="round"
+                            pathLength={100}
+                            strokeDasharray={`${ctxPct} ${100 - ctxPct}`}
+                            transform="rotate(-90 11 11)"
+                          />
+                        </svg>
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-[280px] p-3">
+                      <div className="rc-ctx-pop">
+                        <div className="rc-ctx-title">{t("reqChat.context")}</div>
+                        {ctxUsage ? (
+                          <>
+                            <div>
+                              {t("reqChat.contextUsed", {
+                                used: fmtTok(ctxUsed),
+                                total: fmtTok(ctxUsage.window),
+                                pct: ctxPct,
+                              })}
+                            </div>
+                            <div className="rc-ctx-sub">
+                              {t("reqChat.contextBreakdown", {
+                                input: fmtTok(ctxUsage.input),
+                                read: fmtTok(ctxUsage.cache_read),
+                                write: fmtTok(ctxUsage.cache_create),
+                                output: fmtTok(ctxUsage.output),
+                              })}
+                            </div>
+                          </>
+                        ) : (
+                          <div className="rc-ctx-sub">{t("reqChat.contextNone")}</div>
+                        )}
+                      </div>
+                    </PopoverContent>
+                  </Popover>
+                  {ctxUsage && <span className="rc-ctx-pct">{ctxPct}%</span>}
+                </div>
+                {busy ? (
+                  <button
+                    type="button"
+                    className="rc-send stop"
+                    onClick={stop}
+                    title={t("reqChat.stop")}
+                    aria-label={t("reqChat.stop")}
+                  >
+                    <CircleStop size={16} />
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="rc-send"
+                    disabled={!input.trim()}
+                    onClick={() => {
+                      send(input);
+                      setInput("");
+                      setSlash(null);
+                    }}
+                    title={t("reqChat.send")}
+                    aria-label={t("reqChat.send")}
+                  >
+                    <ArrowUp size={16} />
+                  </button>
+                )}
+              </div>
+            </div>
             </>
           ) : (
             <div className="chat-empty">
-              <Typography.Title level={5} style={{ margin: 0 }}>
-                {t("reqChat.finalizedBanner")}
-              </Typography.Title>
-              <Typography.Text type="secondary">
-                {t("reqChat.finalizedBannerDesc")}
-              </Typography.Text>
+              <h5 className="rc-empty-title">{t("reqChat.finalizedBanner")}</h5>
+              <div className="muted">{t("reqChat.finalizedBannerDesc")}</div>
             </div>
           )}
         </div>
-        </aside>
-      )}
+      </aside>
       <Drawer
-        title={t("reqChat.reviewDrawer")}
-        width={720}
         open={reviewOpen}
-        onClose={() => setReviewOpen(false)}
+        onOpenChange={(open) => {
+          if (!open) setReviewOpen(false);
+        }}
+        ariaLabel={t("reqChat.reviewDrawer")}
+        className="w-[min(720px,96vw)] max-w-[96vw] p-0"
       >
-        {reviews.length === 0 ? (
-          <Empty description={t("reqChat.noReviews")} />
-        ) : (
-          reviews.map((r) => {
-            const rst = REVIEW_ST[r.status];
-            return (
-              <div key={r.id} className="rc-review">
-                <Space wrap>
-                  <Tag color={rst?.color ?? "default"}>{rst ? t(rst.text) : r.status}</Tag>
-                  {!!r.blockers && <Tag color="red">{t("reqChat.blockersTag", { n: r.blockers })}</Tag>}
-                  <span style={{ fontSize: 12, opacity: 0.6 }}>{r.created_at}</span>
-                  <Button
-                    size="small"
-                    disabled={r.status !== "done" || busy}
-                    onClick={() => {
-                      setReviewOpen(false);
-                      send(t("reqChat.revisePrompt"), "resolve", r.id);
-                    }}
-                  >
-                    {t("reqChat.reviseByThis")}
-                  </Button>
-                </Space>
-                {r.report_md ? (
-                  <div className="md-body" style={{ marginTop: 8 }}>
-                    <Markdown>{r.report_md}</Markdown>
+        <div className="flex h-full flex-col">
+          <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-3">
+            <h3 className="m-0 truncate text-base font-semibold text-foreground">
+              {t("reqChat.reviewDrawer")}
+            </h3>
+            <button
+              type="button"
+              aria-label={t("common.close")}
+              onClick={() => setReviewOpen(false)}
+              className="grid size-7 place-items-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <X size={16} />
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto px-5 py-4">
+            {reviews.length === 0 ? (
+              <div className="py-10 text-center text-sm text-muted-foreground">{t("reqChat.noReviews")}</div>
+            ) : (
+              reviews.map((r) => {
+                const rst = REVIEW_ST[r.status];
+                return (
+                  <div key={r.id} className="rc-review">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge tone={rst?.tone ?? "neutral"}>{rst ? t(rst.text) : r.status}</Badge>
+                      {!!r.blockers && (
+                        <Badge tone="danger">{t("reqChat.blockersTag", { n: r.blockers })}</Badge>
+                      )}
+                      <span style={{ fontSize: 12, opacity: 0.6 }}>{r.created_at}</span>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="rounded-lg"
+                        disabled={r.status !== "done" || busy}
+                        onClick={() => {
+                          setReviewOpen(false);
+                          send(t("reqChat.revisePrompt"), "resolve", r.id);
+                        }}
+                      >
+                        {t("reqChat.reviseByThis")}
+                      </Button>
+                    </div>
+                    {r.report_md ? (
+                      <div className="md-body" style={{ marginTop: 8 }}>
+                        <Markdown>{r.report_md}</Markdown>
+                      </div>
+                    ) : (
+                      <span className="muted text-xs">
+                        {r.status === "running" ? t("reqChat.reviewInProgress") : t("reqChat.noReport")}
+                      </span>
+                    )}
                   </div>
-                ) : (
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    {r.status === "running" ? t("reqChat.reviewInProgress") : t("reqChat.noReport")}
-                  </Typography.Text>
-                )}
-              </div>
-            );
-          })
-        )}
+                );
+              })
+            )}
+          </div>
+        </div>
       </Drawer>
       </div>
     </div>

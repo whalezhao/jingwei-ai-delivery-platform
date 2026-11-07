@@ -45,12 +45,17 @@ def system_to_out(p: System, tech_lead_ids: list[int], owner_ids: list[int]) -> 
 @router.get("", response_model=list[SystemOut])
 async def list_projects(
     group_id: int | None = None,
+    project_id: int | None = None,
     db: AsyncSession = Depends(get_db),
     me: Person = Depends(current_person),
 ) -> list[SystemOut]:
     q = select(System).order_by(System.id)
     if group_id:
         q = q.where(System.group_id == group_id)
+    if project_id:
+        q = q.where(
+            System.group_id.in_(select(DevGroup.id).where(DevGroup.project_id == project_id))
+        )
     rows = (await db.scalars(q)).all()
     out = []
     for p in rows:

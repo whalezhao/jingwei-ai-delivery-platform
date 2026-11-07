@@ -1,21 +1,44 @@
-import { Avatar } from "antd";
 import { useTranslation } from "react-i18next";
 import { PRESET_AVATARS } from "./PersonAvatar";
+import { cn } from "@/lib/utils";
 
-/** 内置头像选择器（Form.Item 注入 value/onChange；顶栏弹窗直接受控使用）；不提供上传入口。 */
-export default function AvatarPicker({ value, onChange }: { value?: string; onChange?: (v: string) => void }) {
+/** 内置头像选择器（受控 value/onChange）；不提供上传入口。 */
+export default function AvatarPicker({
+  value,
+  onChange,
+}: {
+  value?: string;
+  onChange?: (v: string) => void;
+}) {
   const { t } = useTranslation();
-  const pick = (v: string) => onChange?.(v);
   return (
-    <>
-      <div className="avatar-picker">
-        {PRESET_AVATARS.map((k) => (
-          <a key={k} className={"avatar-opt" + (value === k ? " on" : "")} onClick={() => pick(k)}>
-            <Avatar size={36} src={`/avatars/${k}.svg`} />
-          </a>
+    <div className="flex flex-col gap-1.5">
+      <div className="flex flex-wrap gap-1.5">
+        {PRESET_AVATARS.map((key) => (
+          <button
+            key={key}
+            type="button"
+            aria-label={key}
+            aria-pressed={value === key}
+            onClick={() => onChange?.(key)}
+            className={cn(
+              "rounded-full p-0.5 ring-2 transition-[box-shadow]",
+              value === key
+                ? "ring-primary"
+                : "ring-transparent hover:ring-(--color-border-strong)",
+            )}
+          >
+            <img
+              src={`/avatars/${key}.svg`}
+              alt=""
+              className="size-9 rounded-full"
+            />
+          </button>
         ))}
       </div>
-      <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 6 }}>{t("avatarPicker.builtinOnly")}</div>
-    </>
+      <span className="px-1 text-xs text-muted-foreground">
+        {t("avatarPicker.builtinOnly")}
+      </span>
+    </div>
   );
 }

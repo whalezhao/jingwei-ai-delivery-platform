@@ -1,4 +1,4 @@
-# Vega — R&D Process Automation Platform
+# JINGWEI — R&D Delivery Platform
 
 English | [简体中文](README.md)
 
@@ -33,7 +33,7 @@ octo group chat ← announcements ← vega-api ← webhooks ← GitLab 13.12
                         ↑  ↓ long-polling
                   vega-runner (N nodes, each driving claude -p)
                         ↑ SSE streaming
-                     vega-web (React 18 + antd 5 + @ant-design/x)
+                     vega-web (React 18 + Tailwind v4 + beUI)
 ```
 
 | Component | Stack | Notes |

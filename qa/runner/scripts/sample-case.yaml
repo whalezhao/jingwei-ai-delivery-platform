@@ -1,0 +1,9 @@
+beforeEach:
+  - gotoUrl: ${BASE_URL}
+
+cases:
+  - name: QA 用户登录 Acme Console
+    steps:
+      - aiAct:
+          prompt: 使用工作邮箱 qa@acme.test 和密码 hunter2 登录系统
+      - aiAssert: 仪表盘按姓名问候了已登录用户

@@ -1,10 +1,25 @@
 import { useCallback, useEffect, useState } from "react";
-import { Button, Input, Space, Tabs, Tag, Tooltip, Typography, message } from "antd";
+import { Search, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import ResizableTable from "../ResizableTable";
 import { api } from "../api";
 import type { MsgKey } from "../i18n";
 import Page from "../Page";
+import DataTable, { type DataTableColumn } from "../ui/DataTable";
+import Badge, { type BadgeTone } from "../ui/Badge";
+import CopyText from "../ui/CopyText";
+import { toast } from "../ui/toast";
+import { Button } from "../components/motion/button/index";
+import {
+  CenterMorphModal,
+  CenterMorphModalContent,
+} from "../components/motion/center-morph-modal";
+import { Input } from "../components/motion/input";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "../components/motion/tabs";
 
 interface Paged<T> {
   items: T[];
@@ -13,17 +28,17 @@ interface Paged<T> {
 
 const PAGE_SIZE = 20;
 
-const VERDICT: Record<string, [string, MsgKey]> = {
-  pending: ["blue", "integrations.verdict.pending"],
-  approve: ["green", "integrations.verdict.approve"],
-  modify: ["orange", "integrations.verdict.modify"],
-  failed: ["red", "integrations.verdict.failed"],
+const VERDICT: Record<string, [BadgeTone, MsgKey]> = {
+  pending: ["info", "integrations.verdict.pending"],
+  approve: ["success", "integrations.verdict.approve"],
+  modify: ["warning", "integrations.verdict.modify"],
+  failed: ["danger", "integrations.verdict.failed"],
 };
 
-const FLOW: Record<string, [string, MsgKey]> = {
-  merged: ["green", "integrations.flow.merged"],
-  conflict_notified: ["red", "integrations.flow.conflict_notified"],
-  hold_not_mergeable: ["orange", "integrations.flow.hold_not_mergeable"],
+const FLOW: Record<string, [BadgeTone, MsgKey]> = {
+  merged: ["success", "integrations.flow.merged"],
+  conflict_notified: ["danger", "integrations.flow.conflict_notified"],
+  hold_not_mergeable: ["warning", "integrations.flow.hold_not_mergeable"],
 };
 
 /** 分页表格的公共拉取：三个日志 Tab 结构一致，抽一个 hook 少写三遍。
@@ -36,11 +51,14 @@ function usePaged<T>(url: string, q: string) {
     async (p: number) => {
       setLoading(true);
       try {
-        const qs = new URLSearchParams({ page: String(p), page_size: String(PAGE_SIZE) });
+        const qs = new URLSearchParams({
+          page: String(p),
+          page_size: String(PAGE_SIZE),
+        });
         if (q) qs.set("q", q);
         setData(await api<Paged<T>>(`${url}?${qs}`));
       } catch (e: any) {
-        message.error(e.message);
+        toast.error(e.message);
       } finally {
         setLoading(false);
       }
@@ -53,19 +71,45 @@ function usePaged<T>(url: string, q: string) {
   useEffect(() => {
     load(page);
   }, [page, load]);
-  return { data, page, setPage, loading, reload: () => load(page) };
+  return { data, page, setPage, loading };
 }
 
 /** 日志检索框：回车/清空即查，和分页 hook 的 q 配套 */
-function LogSearch({ onChange, placeholder }: { onChange: (v: string) => void; placeholder: string }) {
+function LogSearch({
+  onChange,
+  placeholder,
+}: {
+  onChange: (v: string) => void;
+  placeholder: string;
+}) {
+  const [value, setValue] = useState("");
   return (
-    <Input.Search
-      style={{ width: 280, marginBottom: 12 }}
-      allowClear
-      placeholder={placeholder}
-      onSearch={(v) => onChange(v.trim())}
-      onChange={(e) => !e.target.value && onChange("")}
-    />
+    <div className="mb-3 max-w-sm">
+      <Input
+        value={value}
+        onChange={setValue}
+        placeholder={placeholder}
+        leftIcon={<Search />}
+        classNames={{ field: "rounded-lg" }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") onChange(value.trim());
+        }}
+        rightIcon={
+          value ? (
+            <button
+              type="button"
+              aria-label="clear"
+              onClick={() => {
+                setValue("");
+                onChange("");
+              }}
+            >
+              <X />
+            </button>
+          ) : undefined
+        }
+      />
+    </div>
   );
 }
 
@@ -77,91 +121,116 @@ function Credentials() {
   const [busy, setBusy] = useState(false);
 
   const loadOcto = useCallback(
-    () => api<any>("/api/integrations/octo").then(setOcto).catch((e) => message.error(e.message)),
+    () =>
+      api<any>("/api/integrations/octo")
+        .then(setOcto)
+        .catch((e) => toast.error(e.message)),
     [],
   );
 
   useEffect(() => {
-    api<any>("/api/integrations/summary").then(setSum).catch((e) => message.error(e.message));
+    api<any>("/api/integrations/summary")
+      .then(setSum)
+      .catch((e) => toast.error(e.message));
     loadOcto();
   }, [loadOcto]);
 
   const saveOcto = async () => {
     setBusy(true);
     try {
-      await api("/api/integrations/octo", { method: "PUT", body: JSON.stringify({ bot_token: tok }) });
+      await api("/api/integrations/octo", {
+        method: "PUT",
+        body: JSON.stringify({ bot_token: tok }),
+      });
       setTok("");
       await loadOcto();
       // 保存即验证：能拉到群列表才算真的连上 octo
-      const g = await api<{ items: any[]; error: string | null }>("/api/integrations/octo-groups");
-      if (g.error) message.warning(g.error);
-      else message.success(t("integrations.octoConnected", { n: g.items.length }));
+      const g = await api<{ items: any[]; error: string | null }>(
+        "/api/integrations/octo-groups",
+      );
+      if (g.error) toast.warning(g.error);
+      else toast.success(t("integrations.octoConnected", { n: g.items.length }));
     } catch (e: any) {
-      message.error(e.message);
+      toast.error(e.message);
     } finally {
       setBusy(false);
     }
   };
 
   if (!sum) return null;
+
+  const columns: DataTableColumn<any>[] = [
+    { title: t("integrations.colGroup"), dataIndex: "name" },
+    {
+      title: t("integrations.colSecret"),
+      dataIndex: "webhook_secret",
+      render: (v) => (v ? <CopyText value={v} className="py-1" /> : "—"),
+    },
+    {
+      title: t("integrations.colOctoBot"),
+      dataIndex: "has_octo_bot_token",
+      width: 130,
+      render: (v) =>
+        v ? (
+          <Badge tone="success">{t("integrations.ownBot")}</Badge>
+        ) : (
+          <Badge>{t("integrations.globalBot")}</Badge>
+        ),
+    },
+  ];
+
   return (
-    <div>
-      <p>
+    <div className="rounded-xl border border-border bg-card p-4">
+      <p className="m-0 flex flex-wrap items-center gap-2 text-sm text-foreground">
         {t("integrations.octoIntro")}
         {octo?.has_token ? (
-          <Tag color="green">
-            {octo.source === "env" ? t("integrations.configuredEnv") : t("integrations.configured")}
-          </Tag>
+          <Badge tone="success">
+            {octo.source === "env"
+              ? t("integrations.configuredEnv")
+              : t("integrations.configured")}
+          </Badge>
         ) : (
-          <Tag color="red">{t("integrations.notConfigured")}</Tag>
+          <Badge tone="danger">{t("integrations.notConfigured")}</Badge>
         )}
-        <Typography.Text type="secondary">API {octo?.api_url}</Typography.Text>
+        <span className="font-mono text-[11px] text-muted-foreground">
+          API {octo?.api_url}
+        </span>
       </p>
-      <Space.Compact style={{ width: 560, marginBottom: 20 }}>
-        <Input.Password
+      <div className="my-4 flex max-w-[560px] flex-col gap-2 sm:flex-row">
+        <Input
+          type="password"
           value={tok}
-          onChange={(e) => setTok(e.target.value)}
+          onChange={setTok}
           placeholder={
-            octo?.has_token ? t("integrations.tokenPlaceholderSet") : t("integrations.tokenPlaceholderNew")
+            octo?.has_token
+              ? t("integrations.tokenPlaceholderSet")
+              : t("integrations.tokenPlaceholderNew")
           }
+          classNames={{ field: "rounded-lg" }}
+          className="flex-1"
         />
-        <Button type="primary" loading={busy} onClick={saveOcto}>
+        <Button
+          size="sm"
+          className="h-11 rounded-lg px-4"
+          onClick={saveOcto}
+          disabled={busy}
+        >
           {t("integrations.saveConnect")}
         </Button>
-      </Space.Compact>
-      <p>
+      </div>
+      <p className="m-0 text-sm text-foreground">
         {t("integrations.webhookIntro")}
-        <br />
-        <Typography.Text copyable code>{sum.webhook_url}</Typography.Text>
       </p>
-      <ResizableTable
-        rowKey="id"
-        size="small"
-        pagination={false}
-        dataSource={sum.groups}
-        columns={[
-          { title: t("integrations.colGroup"), dataIndex: "name" },
-          {
-            title: t("integrations.colSecret"),
-            dataIndex: "webhook_secret",
-            render: (v) => (v ? <Typography.Text copyable code>{v}</Typography.Text> : "—"),
-          },
-          {
-            title: t("integrations.colOctoBot"),
-            dataIndex: "has_octo_bot_token",
-            render: (v) =>
-              v ? (
-                <Tooltip title={t("integrations.ownBotTip")}>
-                  <Tag color="green">{t("integrations.ownBot")}</Tag>
-                </Tooltip>
-              ) : (
-                <Tooltip title={t("integrations.globalBotTip")}>
-                  <Tag>{t("integrations.globalBot")}</Tag>
-                </Tooltip>
-              ),
-          },
-        ]}
-      />
+      <CopyText value={sum.webhook_url} className="my-2 max-w-[560px]" />
+      <div className="mt-4">
+        <DataTable
+          rowKey="id"
+          dataSource={sum.groups}
+          columns={columns}
+          rowHeight={56}
+          emptyText={t("common.noData")}
+        />
+      </div>
     </div>
   );
 }
@@ -169,35 +238,84 @@ function Credentials() {
 function GitlabEvents() {
   const { t } = useTranslation();
   const [q, setQ] = useState("");
-  const { data, page, setPage, loading } = usePaged<any>("/api/integrations/events", q);
+  const { data, page, setPage, loading } = usePaged<any>(
+    "/api/integrations/events",
+    q,
+  );
+  const [payload, setPayload] = useState<any>(null);
+
+  const columns: DataTableColumn<any>[] = [
+    { title: "ID", dataIndex: "id", width: 70 },
+    {
+      title: t("integrations.colEvent"),
+      dataIndex: "event_type",
+      width: 180,
+      render: (v) => <Badge>{v}</Badge>,
+    },
+    {
+      title: t("integrations.colGroupShort"),
+      dataIndex: "group_id",
+      width: 70,
+    },
+    {
+      title: t("integrations.colSummary"),
+      render: (_, r) => {
+        const a = r.payload?.object_attributes || {};
+        return (
+          a.title ||
+          a.ref ||
+          (r.payload?.project && r.payload.project.name) ||
+          "—"
+        );
+      },
+    },
+    {
+      title: t("integrations.colHandled"),
+      dataIndex: "handled_at",
+      width: 170,
+      render: (v) =>
+        v ? (
+          <span className="font-mono text-[11px]">{v.slice(0, 19)}</span>
+        ) : (
+          t("integrations.unhandled")
+        ),
+    },
+  ];
+
   return (
     <>
       <LogSearch onChange={setQ} placeholder={t("integrations.eventsPlaceholder")} />
-      <ResizableTable<any>
+      <DataTable
         rowKey="id"
-        size="small"
-        loading={loading}
         dataSource={data.items}
-        pagination={{ current: page, pageSize: PAGE_SIZE, total: data.total, onChange: setPage }}
-        expandable={{
-          expandedRowRender: (r) => (
-            <pre style={{ maxHeight: 300, overflow: "auto", fontSize: 12 }}>{JSON.stringify(r.payload, null, 2)}</pre>
-          ),
+        columns={columns}
+        loading={loading}
+        onRowClick={(r) => setPayload(r.payload)}
+        serverPagination={{
+          page,
+          total: data.total,
+          pageSize: PAGE_SIZE,
+          onPageChange: setPage,
         }}
-        columns={[
-          { title: "ID", dataIndex: "id", width: 70 },
-          { title: t("integrations.colEvent"), dataIndex: "event_type", render: (v) => <Tag>{v}</Tag> },
-          { title: t("integrations.colGroupShort"), dataIndex: "group_id", width: 70 },
-          {
-            title: t("integrations.colSummary"),
-            render: (_, r) => {
-              const a = r.payload?.object_attributes || {};
-              return a.title || a.ref || (r.payload?.project && r.payload.project.name) || "—";
-            },
-          },
-          { title: t("integrations.colHandled"), dataIndex: "handled_at", render: (v) => (v ? v.slice(0, 19) : t("integrations.unhandled")) },
-        ]}
+        emptyText={t("common.noData")}
       />
+      <CenterMorphModal
+        open={payload != null}
+        onOpenChange={(next) => {
+          if (!next) setPayload(null);
+        }}
+      >
+        <CenterMorphModalContent
+          ariaLabel={t("integrations.colSummary")}
+          className="max-w-[720px]"
+        >
+          <div className="p-5">
+            <pre className="m-0 max-h-[65vh] overflow-auto rounded-lg bg-muted/40 p-3 font-mono text-[11px] leading-5">
+              {JSON.stringify(payload, null, 2)}
+            </pre>
+          </div>
+        </CenterMorphModalContent>
+      </CenterMorphModal>
     </>
   );
 }
@@ -205,33 +323,70 @@ function GitlabEvents() {
 function NotifyLogs() {
   const { t } = useTranslation();
   const [q, setQ] = useState("");
-  const { data, page, setPage, loading } = usePaged<any>("/api/integrations/notify-logs", q);
+  const { data, page, setPage, loading } = usePaged<any>(
+    "/api/integrations/notify-logs",
+    q,
+  );
+
+  const columns: DataTableColumn<any>[] = [
+    { title: "ID", dataIndex: "id", width: 70 },
+    {
+      title: t("integrations.colReason"),
+      dataIndex: "reason",
+      width: 160,
+      render: (v) => <Badge>{v}</Badge>,
+    },
+    {
+      title: t("integrations.colResult"),
+      dataIndex: "ok",
+      width: 100,
+      render: (v) =>
+        v ? (
+          <Badge tone="success">{t("integrations.delivered")}</Badge>
+        ) : (
+          <Badge tone="danger">{t("integrations.verdict.failed")}</Badge>
+        ),
+    },
+    {
+      title: t("integrations.colContent"),
+      dataIndex: "content",
+      render: (v) => (
+        <span className="truncate">
+          {v}
+        </span>
+      ),
+    },
+    {
+      title: "@",
+      dataIndex: "mentioned_uids",
+      width: 80,
+      render: (v: any[]) => (v?.length ? v.length : "—"),
+    },
+    {
+      title: t("integrations.colTime"),
+      dataIndex: "created_at",
+      width: 170,
+      render: (v) => (
+        <span className="font-mono text-[11px]">{v?.slice(0, 19)}</span>
+      ),
+    },
+  ];
+
   return (
     <>
       <LogSearch onChange={setQ} placeholder={t("integrations.notifyPlaceholder")} />
-      <ResizableTable<any>
+      <DataTable
         rowKey="id"
-        size="small"
-        loading={loading}
         dataSource={data.items}
-        pagination={{ current: page, pageSize: PAGE_SIZE, total: data.total, onChange: setPage }}
-        columns={[
-          { title: "ID", dataIndex: "id", width: 70 },
-          { title: t("integrations.colReason"), dataIndex: "reason", render: (v) => <Tag>{v}</Tag> },
-          {
-            title: t("integrations.colResult"),
-            dataIndex: "ok",
-            render: (v) => (v ? <Tag color="green">{t("integrations.delivered")}</Tag> : <Tag color="red">{t("integrations.verdict.failed")}</Tag>),
-          },
-          {
-            title: t("integrations.colContent"),
-            dataIndex: "content",
-            ellipsis: true,
-            render: (v) => <span style={{ whiteSpace: "pre-wrap" }}>{v}</span>,
-          },
-          { title: "@", dataIndex: "mentioned_uids", width: 90, render: (v: any[]) => (v?.length ? v.length : "—") },
-          { title: t("integrations.colTime"), dataIndex: "created_at", width: 160, render: (v) => v?.slice(0, 19) },
-        ]}
+        columns={columns}
+        loading={loading}
+        serverPagination={{
+          page,
+          total: data.total,
+          pageSize: PAGE_SIZE,
+          onPageChange: setPage,
+        }}
+        emptyText={t("common.noData")}
       />
     </>
   );
@@ -240,47 +395,97 @@ function NotifyLogs() {
 function MrReviews() {
   const { t } = useTranslation();
   const [q, setQ] = useState("");
-  const { data, page, setPage, loading } = usePaged<any>("/api/integrations/mr-reviews", q);
+  const { data, page, setPage, loading } = usePaged<any>(
+    "/api/integrations/mr-reviews",
+    q,
+  );
+
+  const columns: DataTableColumn<any>[] = [
+    {
+      title: "MR",
+      width: 150,
+      render: (_, r) => (
+        <span className="font-mono text-[11px]">
+          {r.project_path} !{r.mr_iid}
+        </span>
+      ),
+    },
+    {
+      title: t("integrations.colTitle"),
+      dataIndex: "title",
+      render: (v) => (
+        <span className="truncate">
+          {v}
+        </span>
+      ),
+    },
+    {
+      title: t("integrations.colVerdict"),
+      dataIndex: "verdict",
+      width: 120,
+      render: (v, r) => {
+        const pair = VERDICT[v];
+        return (
+          <Badge tone={pair?.[0] ?? "neutral"}>
+            {pair ? t(pair[1]) : v}
+            {r.gate ? `（CI ${r.gate.replace("ci:", "")}）` : ""}
+          </Badge>
+        );
+      },
+    },
+    {
+      title: t("integrations.colRelease"),
+      dataIndex: "flow_state",
+      width: 130,
+      render: (v) => {
+        if (!v) return <Badge>{t("integrations.pending")}</Badge>;
+        const pair = FLOW[v];
+        return (
+          <Badge tone={pair?.[0] ?? "neutral"}>
+            {pair ? t(pair[1]) : v}
+          </Badge>
+        );
+      },
+    },
+    {
+      title: t("integrations.colChanged"),
+      dataIndex: "changed_files",
+      width: 70,
+      render: (v: any[]) => v?.length ?? 0,
+    },
+    {
+      title: t("integrations.colSummary"),
+      dataIndex: "summary",
+      render: (v) => (
+        <span className="truncate">
+          {v}
+        </span>
+      ),
+    },
+    {
+      title: t("integrations.colCommit"),
+      width: 100,
+      render: (_, r) => (
+        <span className="font-mono text-[11px]">{r.head_sha?.slice(0, 8)}</span>
+      ),
+    },
+  ];
+
   return (
     <>
       <LogSearch onChange={setQ} placeholder={t("integrations.mrPlaceholder")} />
-      <ResizableTable<any>
+      <DataTable
         rowKey="id"
-        size="small"
-        loading={loading}
         dataSource={data.items}
-        pagination={{ current: page, pageSize: PAGE_SIZE, total: data.total, onChange: setPage }}
-        columns={[
-        { title: "MR", width: 110, render: (_, r) => <span className="mono">{r.project_path} !{r.mr_iid}</span> },
-        { title: t("integrations.colTitle"), dataIndex: "title", ellipsis: true },
-        {
-          title: t("integrations.colVerdict"),
-          dataIndex: "verdict",
-          width: 100,
-          render: (v, r) => {
-            const pair = VERDICT[v];
-            return (
-              <Tag color={pair?.[0] ?? "default"}>
-                {pair ? t(pair[1]) : v}
-                {r.gate ? `（CI ${r.gate.replace("ci:", "")}）` : ""}
-              </Tag>
-            );
-          },
-        },
-        {
-          title: t("integrations.colRelease"),
-          dataIndex: "flow_state",
-          width: 110,
-          render: (v) => {
-            if (!v) return <Tag>{t("integrations.pending")}</Tag>;
-            const pair = FLOW[v];
-            return <Tag color={pair?.[0] ?? "default"}>{pair ? t(pair[1]) : v}</Tag>;
-          },
-        },
-        { title: t("integrations.colChanged"), dataIndex: "changed_files", width: 70, render: (v: any[]) => v?.length ?? 0 },
-        { title: t("integrations.colSummary"), dataIndex: "summary", ellipsis: true },
-        { title: t("integrations.colCommit"), dataIndex: "head_sha", width: 100, render: (v) => <span className="mono">{v?.slice(0, 8)}</span> },
-        ]}
+        columns={columns}
+        loading={loading}
+        serverPagination={{
+          page,
+          total: data.total,
+          pageSize: PAGE_SIZE,
+          onPageChange: setPage,
+        }}
+        emptyText={t("common.noData")}
       />
     </>
   );
@@ -290,16 +495,26 @@ export default function Integrations() {
   const { t } = useTranslation();
   return (
     <Page title={t("nav.integrations")} desc={t("integrations.desc")}>
-      <div className="page-card">
-        <Tabs
-          items={[
-            { key: "cred", label: t("integrations.tabCred"), children: <Credentials /> },
-            { key: "events", label: t("integrations.tabEvents"), children: <GitlabEvents /> },
-            { key: "notify", label: t("integrations.tabNotify"), children: <NotifyLogs /> },
-            { key: "mr", label: t("integrations.tabMr"), children: <MrReviews /> },
-          ]}
-        />
-      </div>
+      <Tabs defaultValue="cred" variant="segment">
+        <TabsList className="mb-3">
+          <TabsTrigger value="cred">{t("integrations.tabCred")}</TabsTrigger>
+          <TabsTrigger value="events">{t("integrations.tabEvents")}</TabsTrigger>
+          <TabsTrigger value="notify">{t("integrations.tabNotify")}</TabsTrigger>
+          <TabsTrigger value="mr">{t("integrations.tabMr")}</TabsTrigger>
+        </TabsList>
+        <TabsContent value="cred">
+          <Credentials />
+        </TabsContent>
+        <TabsContent value="events">
+          <GitlabEvents />
+        </TabsContent>
+        <TabsContent value="notify">
+          <NotifyLogs />
+        </TabsContent>
+        <TabsContent value="mr">
+          <MrReviews />
+        </TabsContent>
+      </Tabs>
     </Page>
   );
 }

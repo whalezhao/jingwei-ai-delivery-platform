@@ -91,6 +91,7 @@ async def list_tasks(
     requirement_id: int | None = None,
     system_id: int | None = None,
     group_id: int | None = None,
+    project_id: int | None = None,
     status: str | None = None,
     q: str | None = None,
     db: AsyncSession = Depends(get_db),
@@ -107,6 +108,15 @@ async def list_tasks(
                 select(Requirement.id)
                 .join(System, Requirement.system_id == System.id)
                 .where(System.group_id == group_id)
+            )
+        )
+    if project_id:
+        stmt = stmt.where(
+            DevTask.requirement_id.in_(
+                select(Requirement.id)
+                .join(System, Requirement.system_id == System.id)
+                .join(DevGroup, DevGroup.id == System.group_id)
+                .where(DevGroup.project_id == project_id)
             )
         )
     if status:

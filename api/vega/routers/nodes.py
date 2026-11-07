@@ -83,21 +83,22 @@ async def delete_node(
     # 否则会话消息永远卡在 queued（requeue_dead 也只认还存在的节点）。
     # claude 会话存在节点本机，节点没了会话也没了——session id 一并作废，
     # 下一条消息新开会话并带上历史（requirements.post_plan_message 的 first 分支）。
-    # 已认领/在跑的任务放回队列换节点重跑；runner_id 一并置空（外键指向被删的行）。
+    # runner_task.runner_id 是外键：所有历史任务（含已完成）都要先解绑，否则删除节点触发外键 500。
+    for t in (await db.scalars(select(RunnerTask).where(RunnerTask.runner_id == node_id))).all():
+        t.runner_id = None
+        if t.status in ("claimed", "running"):
+            t.claimed_at = None
+            t.status = "queued"
     for req in (await db.scalars(select(Requirement).where(Requirement.plan_runner_id == node_id))).all():
         req.plan_runner_id = None
         req.req_session_id = None
         req.plan_session_id = None
+    # sticky 路由只认原节点，活任务还指着它时清掉，换节点重派。
     for t in (
         await db.scalars(select(RunnerTask).where(RunnerTask.status.in_(("queued", "claimed", "running"))))
     ).all():
         if (t.payload or {}).get("sticky_runner_id") == node_id:
             t.payload = {k: v for k, v in t.payload.items() if k != "sticky_runner_id"}
-        if t.runner_id == node_id:
-            t.runner_id = None
-            t.claimed_at = None
-            if t.status in ("claimed", "running"):
-                t.status = "queued"
     await db.delete(node)
     await db.commit()
     return {"ok": True}

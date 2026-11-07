@@ -1,0 +1,12 @@
+.venv/
+.env
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+tests/
+runner/node_modules/
+runner/.runs/
+runner/midscene_run/
+runner/.env
+.DS_Store

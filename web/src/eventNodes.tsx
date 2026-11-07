@@ -1,25 +1,24 @@
-import { FileCard, Sources } from "@ant-design/x";
-import type { ThoughtChainItemType } from "@ant-design/x/es/thought-chain";
 import {
-  ApiOutlined,
-  BulbOutlined,
-  CheckOutlined,
-  ClockCircleOutlined,
-  CloseOutlined,
-  CompressOutlined,
-  ExclamationCircleOutlined,
-  FileDoneOutlined,
-  InfoOutlined,
-  LockOutlined,
-  NotificationOutlined,
-  RobotOutlined,
-  StopOutlined,
-  SyncOutlined,
-  ThunderboltOutlined,
-  ToolOutlined,
-  WarningOutlined,
-} from "@ant-design/icons";
+  Bot,
+  Check,
+  CircleAlert,
+  CircleStop,
+  Clock,
+  FileCheck2,
+  Info,
+  Lightbulb,
+  Lock,
+  Megaphone,
+  Minimize2,
+  Plug,
+  RefreshCw,
+  TriangleAlert,
+  Wrench,
+  X,
+  Zap,
+} from "lucide-react";
 import i18n from "./i18n";
+import { FileChip, SourceChips, type ChainItem } from "./ui/Chain";
 
 /**
  * claude stream-json 原始事件 → 思考链节点。
@@ -29,7 +28,7 @@ import i18n from "./i18n";
  * 子类型清单对齐 @anthropic-ai/claude-agent-sdk 的 SDKMessage 定义：认不出的
  * 子类型也给一行可读节点，绝不把整段 JSON 直接铺给用户。
  */
-export type ChainNode = ThoughtChainItemType & {
+export type ChainNode = ChainItem & {
   kind: "think" | "tool" | "sub" | "raw";
   toolName?: string;
   arg?: string;
@@ -42,7 +41,7 @@ const pre = (s: unknown, max = 2000) => (
 /** 一行即可说明、没有后续内容的事件：直接给标题 + 描述，不带正文。 */
 const PLAIN: Record<string, [React.ReactNode, (ev: any) => string, string?]> = {
   status: [
-    <CompressOutlined />,
+    <Minimize2 size={14} />,
     (ev) =>
       i18n.t(
         ev.status === "compacting"
@@ -54,73 +53,73 @@ const PLAIN: Record<string, [React.ReactNode, (ev: any) => string, string?]> = {
     "loading",
   ],
   api_retry: [
-    <SyncOutlined />,
+    <RefreshCw size={14} />,
     (ev) =>
       i18n.t("events.apiRetry", { attempt: ev.attempt ?? "?", max: ev.max_retries ?? "?" }) +
       (ev.error ? ` · ${ev.error}` : ""),
     "loading",
   ],
   control_request_progress: [
-    <ClockCircleOutlined />,
+    <Clock size={14} />,
     (ev) =>
       i18n.t("events.progress", { status: ev.status ?? "" }) +
       (ev.attempt ? " " + i18n.t("events.attemptNth", { n: ev.attempt }) : ""),
     "loading",
   ],
-  permission_denied: [(<LockOutlined />), (ev) => i18n.t("events.permissionDenied", { tool: ev.tool_name ?? "" }), "error"],
-  notification: [(<NotificationOutlined />), (ev) => String(ev.text ?? "").slice(0, 200)],
-  informational: [(<InfoOutlined />), (ev) => String(ev.content ?? "").slice(0, 200)],
-  local_command_output: [(<ToolOutlined />), () => i18n.t("events.localCommandOutput")],
+  permission_denied: [(<Lock size={14} />), (ev) => i18n.t("events.permissionDenied", { tool: ev.tool_name ?? "" }), "error"],
+  notification: [(<Megaphone size={14} />), (ev) => String(ev.text ?? "").slice(0, 200)],
+  informational: [(<Info size={14} />), (ev) => String(ev.content ?? "").slice(0, 200)],
+  local_command_output: [(<Wrench size={14} />), () => i18n.t("events.localCommandOutput")],
   mirror_error: [
-    <WarningOutlined />,
+    <TriangleAlert size={14} />,
     (ev) => i18n.t("events.mirrorError", { error: String(ev.error ?? "").slice(0, 160) }),
     "error",
   ],
   worker_shutting_down: [
-    <StopOutlined />,
+    <CircleStop size={14} />,
     (ev) => i18n.t("events.workerShuttingDown", { reason: ev.reason ?? "" }),
     "abort",
   ],
-  session_state_changed: [(<ApiOutlined />), (ev) => i18n.t("events.sessionState", { state: ev.state ?? "" })],
+  session_state_changed: [(<Plug size={14} />), (ev) => i18n.t("events.sessionState", { state: ev.state ?? "" })],
   prompt_suggestion: [
-    <BulbOutlined />,
+    <Lightbulb size={14} />,
     (ev) => i18n.t("events.promptSuggestion", { suggestion: String(ev.suggestion ?? "").slice(0, 120) }),
   ],
-  conversation_reset: [(<SyncOutlined />), () => i18n.t("events.conversationReset")],
+  conversation_reset: [(<RefreshCw size={14} />), () => i18n.t("events.conversationReset")],
   active_goal: [
-    <CheckOutlined />,
+    <Check size={14} />,
     (ev) => i18n.t("events.activeGoal", { condition: ev.value?.condition ?? i18n.t("events.cleared") }),
   ],
   rate_limit_event: [
-    <ClockCircleOutlined />,
+    <Clock size={14} />,
     (ev) => i18n.t("events.rateLimit", { status: ev.rate_limit_info?.status ?? "" }),
   ],
   auth_status: [
-    <LockOutlined />,
+    <Lock size={14} />,
     (ev) =>
       i18n.t("events.authStatus", {
         status: ev.error ? String(ev.error).slice(0, 120) : i18n.t("events.authOngoing"),
       }),
   ],
-  tool_progress: [(<ClockCircleOutlined />), (ev) => i18n.t("events.toolProgress", { tool: ev.tool_name ?? "" }), "loading"],
+  tool_progress: [(<Clock size={14} />), (ev) => i18n.t("events.toolProgress", { tool: ev.tool_name ?? "" }), "loading"],
   tool_use_summary: [
-    <BulbOutlined />,
+    <Lightbulb size={14} />,
     (ev) => i18n.t("events.toolSummary", { summary: String(ev.summary ?? "").slice(0, 200) }),
   ],
   commands_changed: [
-    <ToolOutlined />,
+    <Wrench size={14} />,
     (ev) => i18n.t("events.commandsChanged", { n: Array.isArray(ev.commands) ? ev.commands.length : 0 }),
   ],
   background_tasks_changed: [
-    (<RobotOutlined />),
+    (<Bot size={14} />),
     (ev) => i18n.t("events.backgroundTasks", { n: Array.isArray(ev.tasks) ? ev.tasks.length : 0 }),
   ],
   plugin_install: [
-    <ThunderboltOutlined />,
+    <Zap size={14} />,
     (ev) => i18n.t("events.pluginInstall", { name: ev.name ?? "", status: ev.status ?? "" }),
   ],
   elicitation_complete: [
-    <CheckOutlined />,
+    <Check size={14} />,
     (ev) => i18n.t("events.elicitationComplete", { server: ev.mcp_server_name ?? "" }),
   ],
 };
@@ -139,14 +138,14 @@ function detailNode(ev: any, key: string): ChainNode | null {
     // 一句话进度（上游自带人话 detail），有 detail 才有信息量
     case "task_summary":
       return ev.detail
-        ? { kind: "raw", key, icon: <BulbOutlined />, title: ev.detail }
+        ? { kind: "raw", key, icon: <Lightbulb size={14} />, title: ev.detail }
         : null;
 
     case "vcs_state_changed":
       return {
         kind: "raw",
         key,
-        icon: <CheckOutlined />,
+        icon: <Check size={14} />,
         title: ev.kind === "commit" ? i18n.t("events.vcsCommit") : i18n.t("events.vcsChanged"),
         description: ev.branch,
       };
@@ -155,7 +154,7 @@ function detailNode(ev: any, key: string): ChainNode | null {
       return {
         kind: "raw",
         key,
-        icon: <RobotOutlined />,
+        icon: <Bot size={14} />,
         title: i18n.t("events.subagentProgress"),
         description: ev.description,
         footer: ev.usage
@@ -170,7 +169,7 @@ function detailNode(ev: any, key: string): ChainNode | null {
       return {
         kind: "raw",
         key,
-        icon: <BulbOutlined />,
+        icon: <Lightbulb size={14} />,
         title: i18n.t("events.turnSummary"),
         collapsible: true,
         content: pre(String(ev.status_detail || ""), 4000),
@@ -180,7 +179,7 @@ function detailNode(ev: any, key: string): ChainNode | null {
       return {
         kind: "raw",
         key,
-        icon: <RobotOutlined />,
+        icon: <Bot size={14} />,
         title: i18n.t("events.taskStarted", { type: ev.subagent_type || "agent" }),
         description: ev.description,
         status: ev.is_backgrounded ? undefined : "loading",
@@ -192,7 +191,7 @@ function detailNode(ev: any, key: string): ChainNode | null {
       return {
         kind: "raw",
         key,
-        icon: <RobotOutlined />,
+        icon: <Bot size={14} />,
         title: i18n.t("events.taskUpdated"),
         description: ev.patch?.description || st,
         status: st === "failed" ? "error" : st === "completed" ? "success" : undefined,
@@ -206,7 +205,7 @@ function detailNode(ev: any, key: string): ChainNode | null {
       return {
         kind: "raw",
         key,
-        icon: ok ? <CheckOutlined /> : <CloseOutlined />,
+        icon: ok ? <Check size={14} /> : <X size={14} />,
         title: i18n.t(ok ? "events.taskDone" : ev.status === "failed" ? "events.taskFailed" : "events.taskStopped"),
         description: ev.summary,
         status: ok ? "success" : ev.status === "failed" ? "error" : "abort",
@@ -223,7 +222,7 @@ function detailNode(ev: any, key: string): ChainNode | null {
       return {
         kind: "raw",
         key,
-        icon: <ThunderboltOutlined />,
+        icon: <Zap size={14} />,
         title: i18n.t("events.hook", { name: ev.hook_name || ev.hook_event || "" }),
         description: ev.hook_event,
         status: "loading",
@@ -234,7 +233,7 @@ function detailNode(ev: any, key: string): ChainNode | null {
       return {
         kind: "raw",
         key,
-        icon: <ThunderboltOutlined />,
+        icon: <Zap size={14} />,
         title: i18n.t("events.hook", { name: ev.hook_name || ev.hook_event || "" }),
         description: outcome ? i18n.t("events.ended", { outcome }) : undefined,
         status: outcome === "success" ? "success" : outcome === "error" ? "error" : "abort",
@@ -250,7 +249,7 @@ function detailNode(ev: any, key: string): ChainNode | null {
       return {
         kind: "raw",
         key,
-        icon: waiting ? <ClockCircleOutlined /> : <CheckOutlined />,
+        icon: waiting ? <Clock size={14} /> : <Check size={14} />,
         title: waiting ? i18n.t("events.permWaiting") : i18n.t("events.permDone"),
         description: ev.agent_id ? i18n.t("events.insideSubagent") : undefined,
         status: waiting ? "loading" : undefined,
@@ -264,7 +263,7 @@ function detailNode(ev: any, key: string): ChainNode | null {
       return {
         kind: "raw",
         key,
-        icon: <CompressOutlined />,
+        icon: <Minimize2 size={14} />,
         title: i18n.t("events.compact", {
           mode: m.trigger === "manual" ? i18n.t("events.manual") : i18n.t("events.auto"),
         }),
@@ -278,7 +277,7 @@ function detailNode(ev: any, key: string): ChainNode | null {
       return {
         kind: "raw",
         key,
-        icon: <FileDoneOutlined />,
+        icon: <FileCheck2 size={14} />,
         title:
           i18n.t("events.filesSaved", { n: files.length }) +
           (failed.length ? i18n.t("events.filesFailed", { n: failed.length }) : ""),
@@ -287,7 +286,7 @@ function detailNode(ev: any, key: string): ChainNode | null {
         description: files.length ? (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
             {files.slice(0, 8).map((f) => (
-              <FileCard key={f.file_id || f.filename} name={f.filename} size="small" />
+              <FileChip key={f.file_id || f.filename} name={f.filename} />
             ))}
           </div>
         ) : undefined,
@@ -301,11 +300,10 @@ function detailNode(ev: any, key: string): ChainNode | null {
       return {
         kind: "raw",
         key,
-        icon: <BulbOutlined />,
+        icon: <Lightbulb size={14} />,
         title: i18n.t("events.memoryRecall", { n: memories.length }),
         description: memories.length ? (
-          <Sources
-            inline
+          <SourceChips
             items={memories.slice(0, 8).map((m, i) => ({
               key: `${key}-${i}`,
               title: String(m.path || "").split("/").pop() || m.path,
@@ -326,7 +324,7 @@ function detailNode(ev: any, key: string): ChainNode | null {
       return {
         kind: "raw",
         key,
-        icon: <WarningOutlined />,
+        icon: <TriangleAlert size={14} />,
         title: i18n.t("events.refusalFallback", {
           dir,
           model: ev.fallback_model || i18n.t("events.fallbackModel"),
@@ -341,7 +339,7 @@ function detailNode(ev: any, key: string): ChainNode | null {
       return {
         kind: "raw",
         key,
-        icon: <ExclamationCircleOutlined />,
+        icon: <CircleAlert size={14} />,
         title: i18n.t("events.refusalNoFallback"),
         description: ev.api_refusal_category || ev.original_model,
         status: "error",
@@ -366,7 +364,7 @@ function detailNode(ev: any, key: string): ChainNode | null {
       return {
         kind: "raw",
         key,
-        icon: <InfoOutlined />,
+        icon: <Info size={14} />,
         title: i18n.t("events.unknown", { sub: sub || "?" }),
         collapsible: true,
         content: <pre className="tc-body">{JSON.stringify(ev).slice(0, 2000)}</pre>,
