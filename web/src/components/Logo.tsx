@@ -133,32 +133,32 @@ export default function Logo({
       }}
     >
       <LogoMark size={size} />
-      <span style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-        {showEn ? (
-          <span
-            style={{
-              fontFamily: "var(--font-mono)",
-              fontSize: size * 0.6,
-              fontWeight: 600,
-              lineHeight: 1,
-              letterSpacing: "0.12em",
-              color: onDark ? CREAM : "var(--ink)",
-            }}
-          >
-            JINGWEI
-          </span>
-        ) : null}
+      <span style={{ display: "flex", flexDirection: "column", gap: 1 }}>
         <span
           style={{
-            fontSize: Math.max(9, size * 0.32),
-            fontWeight: 500,
-            lineHeight: 1.15,
-            letterSpacing: "0.2em",
-            color: onDark ? "rgba(244,241,232,0.52)" : "var(--ink-2)",
+            fontSize: size * 0.66,
+            fontWeight: 600,
+            lineHeight: 1,
+            letterSpacing: "0.02em",
+            color: onDark ? CREAM : "var(--ink)",
           }}
         >
           经纬
         </span>
+        {showEn ? (
+          <span
+            style={{
+              fontFamily: "var(--font-mono)",
+              fontSize: Math.max(7, size * 0.27),
+              fontWeight: 500,
+              lineHeight: 1.2,
+              letterSpacing: "0.14em",
+              color: onDark ? "rgba(244,241,232,0.52)" : "var(--ink-2)",
+            }}
+          >
+            R&D DELIVERY PLATFORM
+          </span>
+        ) : null}
       </span>
     </span>
   );

@@ -50,10 +50,14 @@ const STATUS: Record<string, [BadgeTone, MsgKey]> = {
 
 const when = (v: string | null) => (v ? v.slice(0, 19).replace("T", " ") : "—");
 
+// 与后端 qa.app.environments.DEFAULT_ENVIRONMENT 一致；空环境名也会落到它
+const DEFAULT_ENV = "默认";
+
 const emptyForm = {
   name: "",
   type: "case_run",
   feature_ids: [] as string[],
+  environment_name: DEFAULT_ENV,
   run_now: false,
 };
 
@@ -72,6 +76,7 @@ export default function QaTasks() {
   const [creating, setCreating] = useState(false);
   const [saving, setSaving] = useState(false);
   const [features, setFeatures] = useState<FeatureOption[]>([]);
+  const [envNames, setEnvNames] = useState<string[]>([]);
   const form = useForm(emptyForm);
 
   const load = async () => {
@@ -106,6 +111,7 @@ export default function QaTasks() {
 
   const openCreate = async () => {
     form.reset(emptyForm);
+    setEnvNames([]);
     setCreating(true);
     try {
       setFeatures(await qa<FeatureOption[]>("/api/features"));
@@ -113,6 +119,49 @@ export default function QaTasks() {
       toast.error(e.message);
     }
   };
+
+  // 环境名取所选功能所属系统的交集：后端要求每个系统都有同名环境，缺一个就整体拒绝
+  useEffect(() => {
+    if (!creating) return;
+    const systemIds = [
+      ...new Set(
+        features
+          .filter((f) => form.values.feature_ids.includes(f.id))
+          .map((f) => f.system_id),
+      ),
+    ];
+    if (systemIds.length === 0) {
+      setEnvNames([]);
+      return;
+    }
+    let alive = true;
+    Promise.all(
+      systemIds.map((sid) => qa<{ name: string }[]>(`/api/systems/${sid}/environments`)),
+    )
+      .then((lists) => {
+        if (!alive) return;
+        const common = lists
+          .slice(1)
+          .reduce(
+            (acc, list) => acc.filter((n) => list.some((e) => e.name === n)),
+            lists[0].map((e) => e.name),
+          );
+        setEnvNames(common.filter((n) => n !== DEFAULT_ENV));
+      })
+      .catch(() => {
+        if (alive) setEnvNames([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [creating, features, form.values.feature_ids]);
+
+  // 换掉功能后，原来选的环境可能不再覆盖所有系统，回退到默认环境
+  useEffect(() => {
+    if (form.values.environment_name !== DEFAULT_ENV && !envNames.includes(form.values.environment_name)) {
+      form.set("environment_name", DEFAULT_ENV);
+    }
+  }, [envNames]);
 
   const create = async () => {
     if (
@@ -386,6 +435,17 @@ export default function QaTasks() {
                     </MultiSelectList>
                   </MultiSelectContent>
                 </MultiSelect>
+              </Field>
+              <Field label={t("qa.tasks.envLabel")} hint={t("qa.tasks.envHint")}>
+                <SearchSelect
+                  value={form.values.environment_name}
+                  onChange={(v) => form.set("environment_name", String(v ?? DEFAULT_ENV))}
+                  options={[
+                    { value: DEFAULT_ENV, label: t("qa.env.default") },
+                    ...envNames.map((n) => ({ value: n, label: n })),
+                  ]}
+                  className="w-full"
+                />
               </Field>
               <Switch
                 checked={form.values.run_now}

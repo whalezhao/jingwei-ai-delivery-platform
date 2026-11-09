@@ -64,12 +64,20 @@ export function CenterMorphModal({
   const controlled = controlledOpen !== undefined;
   const open = controlled ? controlledOpen : internalOpen;
 
+  // 调用方通常传内联 onOpenChange；直接把它放进 useCallback 依赖会让 context 每次
+  // 父组件渲染都换身份，Content 的聚焦 effect 随之重跑，把焦点从弹层内的输入框抢走
+  // （多选框因此每选一项就收起）。用 ref 保持最新回调，让 context 只随 open 变化。
+  const onOpenChangeRef = useRef(onOpenChange);
+  useEffect(() => {
+    onOpenChangeRef.current = onOpenChange;
+  });
+
   const setOpen = useCallback(
     (next: boolean) => {
       if (!controlled) setInternalOpen(next);
-      onOpenChange?.(next);
+      onOpenChangeRef.current?.(next);
     },
-    [controlled, onOpenChange],
+    [controlled],
   );
 
   const value = useMemo<CenterMorphModalContextValue>(

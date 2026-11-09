@@ -21,12 +21,13 @@ import {
   Inbox,
   Lightbulb,
   LoaderCircle,
+  Maximize2,
   MessageSquare,
+  Minimize2,
   Paperclip,
   Pencil,
   PenLine,
   Search,
-  User,
   Users,
   Wrench,
   X,
@@ -34,6 +35,8 @@ import {
 import Markdown from "react-markdown";
 import { useTranslation } from "react-i18next";
 import AmSelect from "../components/AmSelect";
+import PersonAvatar from "../components/PersonAvatar";
+import { LogoMark } from "../components/Logo";
 import DocPreview from "../components/DocPreview";
 import { rawNode } from "../eventNodes";
 import { api, isAdmin, token } from "../api";
@@ -99,18 +102,6 @@ const STATUS: Record<string, [BadgeTone, MsgKey]> = {
   online: ["violet", "requirements.status.online"],
 };
 
-const TASK_STATUS: Record<string, MsgKey> = {
-  pending: "workbench.taskStatus.pending",
-  queued: "workbench.taskStatus.queued",
-  running: "workbench.taskStatus.running",
-  pushed: "workbench.taskStatus.pushed",
-  mr_created: "workbench.taskStatus.mr_created",
-  reviewing: "workbench.taskStatus.reviewing",
-  cicd: "workbench.taskStatus.cicd",
-  done: "workbench.taskStatus.done",
-  failed: "workbench.taskStatus.failed",
-};
-
 /** 空对话时的起手示例（按当前讨论模式给，比一个光标干等着好）。 */
 const examplesFor = (mode: "requirement" | "plan") =>
   mode === "requirement"
@@ -121,7 +112,7 @@ const examplesFor = (mode: "requirement" | "plan") =>
  *  下游连接，read() 会永远挂着 —— 超过这个时限没收到任何字节就判死重连。 */
 const STALE_MS = 40_000;
 
-/** 右侧 AI 栏宽度（像素），拖动分隔条调整；主区至少保留 MAIN_MIN。 */
+/** 右侧文档栏宽度（像素），拖动分隔条调整；主区（AI 对话）至少保留 MAIN_MIN。 */
 // EGM 评审状态：incomplete 是「自报未完成」，不能画成绿色通过
 const REVIEW_ST: Record<string, { tone: BadgeTone; text: MsgKey }> = {
   running: { tone: "info", text: "reqChat.reviewRunning" },
@@ -308,9 +299,9 @@ function headingWithAnno(
   };
 }
 
-const DOCK_MIN = 360;
-const DOCK_DEFAULT = 460;
-const MAIN_MIN = 480;
+const DOCK_MIN = 300;
+const DOCK_DEFAULT = 400;
+const MAIN_MIN = 720;
 const SPLIT_W = 14;
 
 /** SSE：fetch 流式读 /plan/stream（EventSource 带不了 Authorization 头）。 */
@@ -1267,7 +1258,6 @@ export default function RequirementChat() {
   // 当前展开的批注角标 key（章节规范化标题或 "doc"）；方案一滚动就收起
   const [annoOpen, setAnnoOpen] = useState<string | null>(null);
   const [reviewBusy, setReviewBusy] = useState(false);
-  const [tasks, setTasks] = useState<any[]>([]);
   // 测试域：需求维度的最近一次测试摘要（QA 后台不可达时保持 null，不阻塞页面）
   const [qaSummary, setQaSummary] = useState<QaSummary | null>(null);
   const [qaEnvs, setQaEnvs] = useState<QaEnv[]>([]);
@@ -1275,6 +1265,9 @@ export default function RequirementChat() {
   const [qaEnv, setQaEnv] = useState<string | undefined>();
   const [qaBusy, setQaBusy] = useState(false);
   const [preview, setPreview] = useState<Preview>(null);
+  const [previewFull, setPreviewFull] = useState(false);
+  // 气泡头像与顶栏同源：vega_me → /api/people
+  const [me, setMe] = useState<{ name: string; avatar: string | null } | null>(null);
   const [err, setErr] = useState("");
   const [input, setInput] = useState("");
   // 未发送的附件：点发送时先逐个上传，再把 id 绑到这条消息上
@@ -1308,7 +1301,7 @@ export default function RequirementChat() {
   // 列表里解析出的名字：选过专家后按钮直接显示专家名，不再只是"团队 / 专家"
   const [teamName, setTeamName] = useState<string>();
   const [agentName, setAgentName] = useState<string>();
-  // 主区（需求对话）与右侧 AI 栏之间的分隔条：宽度可拖，记住上次位置
+  // 主区（AI 对话）与右侧文档栏之间的分隔条：宽度可拖，记住上次位置
   const [dockW, setDockW] = useState<number>(() => {
     const v = Number(localStorage.getItem("vega.dockW"));
     return v >= DOCK_MIN ? v : DOCK_DEFAULT;
@@ -1331,14 +1324,12 @@ export default function RequirementChat() {
     // 不要继续往下发后续请求（会连着弹一串同样的报错）
     try {
       // 一起取完再落状态：req 先到、docs 后到会让「当前模式」闪一下需求讨论
-      const [r, d, taskList] = await Promise.all([
+      const [r, d] = await Promise.all([
         api<any>(`/api/requirements/${reqId}`),
         api<any[]>(`/api/requirements/${reqId}/docs`),
-        api<any[]>(`/api/dev-tasks?requirement_id=${reqId}`),
       ]);
       setReq(r);
       setDocs(d);
-      setTasks(taskList);
     } catch (e: any) {
       setDenied(e.message);
       return;
@@ -1349,9 +1340,32 @@ export default function RequirementChat() {
   useEffect(() => {
     reload();
     setPreview(null);
+    setPreviewFull(false);
     setAsk(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reqId]);
+
+  useEffect(() => {
+    if (!previewFull) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setPreviewFull(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [previewFull]);
+
+  useEffect(() => {
+    const load = () =>
+      api<any[]>("/api/people")
+        .then((ps) => {
+          const p = ps.find((x) => String(x.id) === localStorage.getItem("vega_me"));
+          if (p) setMe({ name: p.name, avatar: p.avatar || null });
+        })
+        .catch(() => {});
+    load();
+    window.addEventListener("vega-me-updated", load);
+    return () => window.removeEventListener("vega-me-updated", load);
+  }, []);
 
   const loadQa = () =>
     qa<QaSummary>(`/api/requirements/${reqId}/test-summary`)
@@ -1390,7 +1404,7 @@ export default function RequirementChat() {
   };
 
   useEffect(() => {
-    // 预览升级为主区后自动选中：优先最新方案快照，无方案再取定稿文档
+    // 自动选中右侧预览：优先最新方案快照，无方案再取定稿文档
     setPreview((p) => {
       if (p) return p;
       if (planVers.length) return { type: "plan", data: planVers[planVers.length - 1] };
@@ -2117,7 +2131,7 @@ export default function RequirementChat() {
   const ctxDoc = docs.find((d) => d.is_final) || docs[docs.length - 1];
   const ctxPlan = planVers[planVers.length - 1];
 
-  // ---- 分隔条拖拽：AI 栏取 px 宽度，主区吃掉剩余空间 ----
+  // ---- 分隔条拖拽：右侧文档栏取 px 宽度，主区吃掉剩余空间 ----
   const dockMax = () => {
     const shellW = shellRef.current?.clientWidth ?? 0;
     return Math.max(DOCK_MIN, shellW - MAIN_MIN - SPLIT_W);
@@ -2125,7 +2139,7 @@ export default function RequirementChat() {
   const splitDown = (e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault();
     const el = e.currentTarget.nextElementSibling as HTMLElement | null;
-    // 窗口缩小后 CSS 会把 AI 栏压到比 dockW 更窄，先以实际宽度对齐，避免拖一下跳一截
+    // 窗口缩小后 CSS 会把文档栏压到比 dockW 更窄，先以实际宽度对齐，避免拖一下跳一截
     const w = Math.round(el?.getBoundingClientRect().width || dockW);
     setDockW(w);
     dragRef.current = { x: e.clientX, w, max: dockMax() };
@@ -2167,349 +2181,29 @@ export default function RequirementChat() {
           </div>
           <div className="rc-main-sub">{req.title}</div>
         </div>
+
+        <details className="panel rc-info-strip">
+            <summary>{t("reqChat.reqInfo")}</summary>
+            <dl className="rc-desc">
+              <div><dt>{t("reqChat.fDesc")}</dt><dd>{req.description || "—"}</dd></div>
+              <div>
+                <dt>{t("reqChat.fType")}</dt>
+                <dd>{req.req_type === "bug" ? t("requirements.typeBug") : t("requirements.typeRequirement")}</dd>
+              </div>
+              <div><dt>{t("reqChat.fProject")}</dt><dd>{req.system_name || `#${req.system_id}`}</dd></div>
+              <div><dt>{t("reqChat.fClaimant")}</dt><dd>{req.claimant_name || "—"}</dd></div>
+              <div><dt>{t("reqChat.fProposer")}</dt><dd>{req.proposer_name || "—"}</dd></div>
+              <div>
+                <dt>{t("reqChat.fCreated")}</dt>
+                <dd><span className="mono">{(req.created_at || "").slice(0, 19)}</span></dd>
+              </div>
+            </dl>
+          </details>
+
         <div className="rc-main-body">
           <div className="rc-grid">
-            {/* 左：文件列表（需求文档多版本 + 方案版本）+ 任务池 + 需求信息 */}
-            <div>
-              <div className="panel rc-files">
-                {req.req_type !== "bug" && (
-                  <>
-                    <h4>
-                      {t("reqChat.docSection")}{" "}
-                      {!planFinal && (
-                        <label className="inline-flex cursor-pointer items-center gap-1 text-xs font-normal text-primary hover:underline">
-                          <Inbox size={14} />
-                          {t("reqChat.upload")}
-                          <input type="file" className="hidden" onChange={uploadDoc} />
-                        </label>
-                      )}
-                    </h4>
-                    {docs.length === 0 && (
-                      <span className="muted text-xs">{t("reqChat.noDocs")}</span>
-                    )}
-                    {docs.map((d) => (
-                      <div
-                        key={d.id}
-                        className={`rc-file${previewDoc?.id === d.id ? " on" : ""}`}
-                        onClick={() => setPreview({ type: "doc", data: d })}
-                        title={t("reqChat.clickPreview")}
-                      >
-                        <span className="rc-file-name">{d.is_final && <span className="ver-final">🎯 </span>}{d.filename}</span>
-                        <span className="rc-file-ver">v{d.version}</span>
-                      </div>
-                    ))}
-                  </>
-                )}
-                {planVers.length > 0 && (
-                  <>
-                    <h4 style={{ marginTop: 12 }}>{t("reqChat.planVersions")}</h4>
-                    {planVers.map((v) => (
-                      <div
-                        key={v.id}
-                        className={`rc-file${previewPlan?.id === v.id ? " on" : ""}`}
-                        onClick={() => setPreview({ type: "plan", data: v })}
-                        title={t("reqChat.clickPreview")}
-                      >
-                        <span className="rc-file-name">{v.is_final && <span className="ver-final">🎯 </span>}{t("reqChat.planSnapshot")}</span>
-                        <span className="rc-file-ver">v{v.version} · {(v.created_at || "").slice(5, 10)}</span>
-                      </div>
-                    ))}
-                  </>
-                )}
-              </div>
-
-              {req.status === "confirmed" && (
-                <div className="panel">
-                  <h4>{t("reqChat.taskPool")}</h4>
-                  {tasks.map((task) => {
-                    const taskSt = TASK_STATUS[task.status];
-                    const tone: BadgeTone =
-                      task.status === "failed" ? "danger" : task.status === "mr_created" ? "success" : "info";
-                    return (
-                      <div key={task.id} className="task-pill" title={task.scope || undefined}>
-                        <span className="mono">{task.code}</span>
-                        <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {task.title || "—"}
-                        </span>
-                        <Badge tone={tone}>{taskSt ? t(taskSt) : task.status}</Badge>
-                        {task.mr_url ? (
-                          <a href={task.mr_url} target="_blank" rel="noreferrer" className="mono">
-                            MR !{task.mr_iid}
-                          </a>
-                        ) : null}
-                        <Link to={`/tasks/${task.id}`}>{t("reqChat.taskDetail")}</Link>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-
-              <div className="panel">
-                <h4>{t("qa.req.cardTitle")}</h4>
-                {qaSummary && qaSummary.status !== "none" ? (
-                  <div className="flex flex-col gap-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Badge tone={qaTone}>{t(`qa.status.${qaSummary.status}` as MsgKey)}</Badge>
-                      {qaSummary.pass_rate != null && (
-                        <span className="mono">{pct(qaSummary.pass_rate)}</span>
-                      )}
-                      {qaSummary.total > 0 && (
-                        <span className="muted">
-                          {qaSummary.passed}/{qaSummary.total}
-                        </span>
-                      )}
-                    </div>
-                    {qaSummary.batch_id && (
-                      <Link to={`/qa/batches/${qaSummary.batch_id}`}>{t("qa.batch.detail")}</Link>
-                    )}
-                  </div>
-                ) : (
-                  <div className="muted">{t("qa.req.none")}</div>
-                )}
-                <div className="mt-2 flex flex-wrap items-center gap-3">
-                  <Button
-                    size="sm"
-                    className="rounded-lg"
-                    onClick={openQa}
-                    disabled={req.status !== "online" && !isAdmin()}
-                  >
-                    {t("qa.req.start")}
-                  </Button>
-                  <Link to={`/systems/${req.system_id}/qa?tab=batches`}>{t("qa.req.history")}</Link>
-                </div>
-                {req.status !== "online" && (
-                  <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-                    {t("qa.req.notOnline")}
-                  </div>
-                )}
-                <CenterMorphModal
-                  open={qaOpen}
-                  onOpenChange={(next) => {
-                    if (!next) setQaOpen(false);
-                  }}
-                >
-                  <CenterMorphModalContent ariaLabel={t("qa.req.startTitle")} className="max-w-[480px]">
-                    <div className="p-6">
-                      <h2 className="m-0 text-lg font-semibold tracking-[-0.01em] text-foreground">
-                        {t("qa.req.startTitle")}
-                      </h2>
-                      <div className="mt-4">
-                        <SearchSelect
-                          value={qaEnv ?? null}
-                          onChange={(v) => setQaEnv(v == null ? undefined : String(v))}
-                          clearable
-                          placeholder={t("qa.env.default")}
-                          options={qaEnvs.map((e) => ({
-                            value: e.name,
-                            label: e.base_url ? `${e.name} · ${e.base_url}` : e.name,
-                          }))}
-                        />
-                      </div>
-                      <div className="mt-2 text-xs text-muted-foreground">{t("qa.req.startHint")}</div>
-                      <div className="mt-6 flex justify-end gap-2">
-                        <Button variant="outline" size="sm" className="rounded-lg" onClick={() => setQaOpen(false)}>
-                          {t("common.cancel")}
-                        </Button>
-                        <Button size="sm" className="rounded-lg" onClick={startQa} disabled={qaBusy}>
-                          {t("qa.req.start")}
-                        </Button>
-                      </div>
-                    </div>
-                  </CenterMorphModalContent>
-                </CenterMorphModal>
-              </div>
-
-              <div className="panel">
-                <h4>{t("reqChat.reqInfo")}</h4>
-                <dl className="rc-desc">
-                  <div><dt>{t("reqChat.fDesc")}</dt><dd>{req.description || "—"}</dd></div>
-                  <div>
-                    <dt>{t("reqChat.fType")}</dt>
-                    <dd>{req.req_type === "bug" ? t("requirements.typeBug") : t("requirements.typeRequirement")}</dd>
-                  </div>
-                  <div><dt>{t("reqChat.fProject")}</dt><dd>{req.system_name || `#${req.system_id}`}</dd></div>
-                  <div><dt>{t("reqChat.fClaimant")}</dt><dd>{req.claimant_name || "—"}</dd></div>
-                  <div><dt>{t("reqChat.fProposer")}</dt><dd>{req.proposer_name || "—"}</dd></div>
-                  <div>
-                    <dt>{t("reqChat.fCreated")}</dt>
-                    <dd><span className="mono">{(req.created_at || "").slice(0, 19)}</span></dd>
-                  </div>
-                </dl>
-              </div>
-            </div>
-
-            {/* 主区：文件/方案预览（页面主体；AI 对话在右侧停靠栏） */}
-            <div className="rc-preview">
-              {previewDoc ? (
-                <>
-                  <div className="rc-preview-head">
-                    <span className="rc-preview-title">
-                      📄 {previewDoc.filename}
-                      <Badge className="ml-2">v{previewDoc.version}</Badge>
-                      {previewDoc.is_final && <Badge tone="success">{t("reqChat.finalTag")}</Badge>}
-                    </span>
-                    {!previewDoc.is_final && !planFinal && (
-                      <Button size="sm" className="rounded-lg" onClick={() => finalizeDoc(previewDoc)}>
-                        {t("reqChat.setFinal")}
-                      </Button>
-                    )}
-                    {previewDoc.is_final && !planFinal && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="rounded-lg"
-                        onClick={async () => {
-                          const ok = await confirm({
-                            title: t("reqChat.unfinalizeConfirm"),
-                            confirmText: t("reqChat.unfinalize"),
-                          });
-                          if (ok) unfinalizeDoc(previewDoc);
-                        }}
-                      >
-                        {t("reqChat.unfinalize")}
-                      </Button>
-                    )}
-                  </div>
-                  <div className="rc-preview-body">
-                    <DocPreview reqId={reqId} doc={previewDoc} />
-                  </div>
-                </>
-              ) : previewPlan ? (
-                <>
-                  <div className="rc-preview-head">
-                    <span className="rc-preview-title">
-                      📋 {t("reqChat.planSnapshot")}
-                      <Badge className="ml-2">v{previewPlan.version}</Badge>
-                      {previewPlan.is_final && <Badge tone="success">{t("reqChat.finalTag")}</Badge>}
-                    </span>
-                    {chatMode === "plan" && !previewPlan.is_final && (
-                      <Button size="sm" className="rounded-lg" onClick={() => finalizePlan(previewPlan)}>
-                        {t("reqChat.finalizePlanBtn")}
-                      </Button>
-                    )}
-                  </div>
-                  <div className="rc-preview-body" onScroll={() => setAnnoOpen(null)}>
-                    {planAnno && (
-                      <div className="rc-anno-bar">
-                        <span style={{ fontWeight: 600 }}>
-                          <EgmMark /> {t("reqChat.goldfish")}
-                        </span>
-                        {(["Blocker", "Major", "Nit"] as const).map((sev) => {
-                          const n = (annoReview.findings as Finding[]).filter(
-                            (f) => (f.severity || "Nit") === sev,
-                          ).length;
-                          return n ? (
-                            <Badge key={sev} tone={SEV_ST[sev].tone}>
-                              {SEV_ST[sev].icon} {sev} {n}
-                            </Badge>
-                          ) : null;
-                        })}
-                        {planAnno.docLevel.length > 0 && (
-                          <Popover
-                            trigger="click"
-                            open={annoOpen === "doc"}
-                            onOpenChange={(v) => setAnnoOpen(v ? "doc" : null)}
-                            side="bottom"
-                            align="start"
-                          >
-                            <PopoverTrigger>
-                              <button type="button" className="text-primary">
-                                {t("reqChat.docLevel", { n: planAnno.docLevel.length })}
-                              </button>
-                            </PopoverTrigger>
-                            <PopoverContent className="w-[440px] max-w-[88vw]">
-                              <div className="mb-2 text-xs font-semibold">
-                                {t("reqChat.docLevelTitle", { n: planAnno.docLevel.length })}
-                              </div>
-                              {planAnno.docLevel.map((f, i) => (
-                                <div
-                                  key={i}
-                                  style={{ marginBottom: i === planAnno.docLevel.length - 1 ? 0 : 12 }}
-                                >
-                                  <FindingCard f={f} />
-                                </div>
-                              ))}
-                            </PopoverContent>
-                          </Popover>
-                        )}
-                      </div>
-                    )}
-                    <div className="md-body">
-                      <Markdown components={annoComponents as any}>{previewPlan.content}</Markdown>
-                    </div>
-                  </div>
-                </>
-              ) : req.status === "pool" ? (
-                <div className="rc-preview-empty">
-                  <h5 className="rc-empty-title">{req.title}</h5>
-                  <div className="muted">{req.description || t("reqChat.noDesc")}</div>
-                  {req.can_claim ? (
-                    <Button
-                      className="rounded-lg"
-                      onClick={async () => {
-                        try {
-                          await api(`/api/requirements/${reqId}/claim`, { method: "POST" });
-                          reload();
-                        } catch (e: any) {
-                          toast.error(e.message);
-                        }
-                      }}
-                    >
-                      {t("reqChat.claimReq")}
-                    </Button>
-                  ) : (
-                    <div className="muted">{claimHint}</div>
-                  )}
-                </div>
-              ) : (
-                <div className="rc-preview-empty">
-                  <div className="muted">
-                    {chatMode === "requirement" ? (
-                      <>
-                        {t("reqChat.noDocYet")}
-                        <br />
-                        {t("reqChat.noDocYetHint")}
-                      </>
-                    ) : (
-                      <>
-                        {t("reqChat.noPlanYet")}
-                        <br />
-                        {t("reqChat.noPlanYetHint")}
-                      </>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      </main>
-
-      <div
-        className={`rc-split${dragging ? " on" : ""}`}
-        role="separator"
-          aria-orientation="vertical"
-          aria-label={t("reqChat.resizeAria")}
-          aria-valuenow={Math.round(dockW)}
-          aria-valuemin={DOCK_MIN}
-          tabIndex={0}
-          title={t("reqChat.resizeTitle")}
-          onPointerDown={splitDown}
-          onPointerMove={splitMove}
-          onPointerUp={splitUp}
-          onPointerCancel={splitUp}
-          onDoubleClick={() => setDockW(DOCK_DEFAULT)}
-          onKeyDown={(e) => {
-            if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
-            e.preventDefault();
-            const step = e.key === "ArrowLeft" ? 32 : -32;
-            setDockW((w) => Math.min(dockMax(), Math.max(DOCK_MIN, w + step)));
-          }}
-        />
-      <aside
-        className="rc-dock"
-        style={{ flex: `0 0 clamp(${DOCK_MIN}px, ${dockW}px, calc(100% - ${MAIN_MIN + SPLIT_W}px))` }}
-      >
+            {/* 主区：AI 对话（页面主体）；文档预览在右侧停靠栏 */}
+            <div className="rc-chatcol">
           <div className="rc-dock-head">
             <span className="rc-dock-title">
               <Bot size={15} className="text-primary" />
@@ -2537,7 +2231,6 @@ export default function RequirementChat() {
                 ))}
               </div>
             )}
-            <Badge tone={st?.[0] ?? "neutral"}>{st ? t(st[1]) : req.status}</Badge>
             {(busy || streaming) && <i className="sess-live" />}
             {chatMode && (
               <Button
@@ -2630,10 +2323,18 @@ export default function RequirementChat() {
                   {bubbles.map((b) => (
                     <div key={b.key} className={`rc-msg ${b.role}`}>
                       <span className="rc-msg-avatar">
-                        {b.role === "user" ? <User size={14} /> : <Bot size={14} />}
+                        {b.role === "user" ? (
+                          <PersonAvatar name={me?.name} avatar={me?.avatar} size={26} />
+                        ) : (
+                          <LogoMark size={26} simplified />
+                        )}
                       </span>
                       <div className="rc-msg-body">
-                        {b.role === "assistant" && <div className="rc-bubble-name">经纬 AI</div>}
+                        <div className="rc-bubble-name">
+                          {b.role === "assistant"
+                            ? t("reqChat.aiName")
+                            : me?.name || localStorage.getItem("vega_user") || ""}
+                        </div>
                         <div className="rc-msg-content">{b.content}</div>
                       </div>
                     </div>
@@ -2913,6 +2614,318 @@ export default function RequirementChat() {
             </div>
           )}
         </div>
+            </div>
+          </div>
+        </div>
+      </main>
+
+      <div
+        className={`rc-split${dragging ? " on" : ""}`}
+        role="separator"
+          aria-orientation="vertical"
+          aria-label={t("reqChat.resizeAria")}
+          aria-valuenow={Math.round(dockW)}
+          aria-valuemin={DOCK_MIN}
+          tabIndex={0}
+          title={t("reqChat.resizeTitle")}
+          onPointerDown={splitDown}
+          onPointerMove={splitMove}
+          onPointerUp={splitUp}
+          onPointerCancel={splitUp}
+          onDoubleClick={() => setDockW(DOCK_DEFAULT)}
+          onKeyDown={(e) => {
+            if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+            e.preventDefault();
+            const step = e.key === "ArrowLeft" ? 32 : -32;
+            setDockW((w) => Math.min(dockMax(), Math.max(DOCK_MIN, w + step)));
+          }}
+        />
+      <aside
+        className="rc-dock rc-docdock"
+        style={{ flex: `0 0 clamp(${DOCK_MIN}px, ${dockW}px, calc(100% - ${MAIN_MIN + SPLIT_W}px))` }}
+      >
+              {(req.req_type !== "bug" || planVers.length > 0) && (
+              <div className="panel rc-files">
+                {req.req_type !== "bug" && (
+                  <>
+                    <h4>
+                      {t("reqChat.docSection")}{" "}
+                      {!planFinal && (
+                        <label className="inline-flex cursor-pointer items-center gap-1 text-xs font-normal text-primary hover:underline">
+                          <Inbox size={14} />
+                          {t("reqChat.upload")}
+                          <input type="file" className="hidden" onChange={uploadDoc} />
+                        </label>
+                      )}
+                    </h4>
+                    {docs.length === 0 && (
+                      <span className="muted text-xs">{t("reqChat.noDocs")}</span>
+                    )}
+                    {docs.map((d) => (
+                      <div
+                        key={d.id}
+                        className={`rc-file${previewDoc?.id === d.id ? " on" : ""}`}
+                        onClick={() => setPreview({ type: "doc", data: d })}
+                        title={t("reqChat.clickPreview")}
+                      >
+                        <span className="rc-file-name">{d.is_final && <span className="ver-final">🎯 </span>}{d.filename}</span>
+                        <span className="rc-file-ver">v{d.version}</span>
+                      </div>
+                    ))}
+                  </>
+                )}
+                {planVers.length > 0 && (
+                  <>
+                    <h4 style={{ marginTop: 12 }}>{t("reqChat.planVersions")}</h4>
+                    {planVers.map((v) => (
+                      <div
+                        key={v.id}
+                        className={`rc-file${previewPlan?.id === v.id ? " on" : ""}`}
+                        onClick={() => setPreview({ type: "plan", data: v })}
+                        title={t("reqChat.clickPreview")}
+                      >
+                        <span className="rc-file-name">{v.is_final && <span className="ver-final">🎯 </span>}{t("reqChat.planSnapshot")}</span>
+                        <span className="rc-file-ver">v{v.version} · {(v.created_at || "").slice(5, 10)}</span>
+                      </div>
+                    ))}
+                  </>
+                )}
+              </div>
+              )}
+
+            <div className={`rc-preview${previewFull ? " full" : ""}`}>
+              {previewDoc ? (
+                <>
+                  <div className="rc-preview-head">
+                    <span className="rc-preview-title">
+                      📄 {previewDoc.filename}
+                      <Badge className="ml-2">v{previewDoc.version}</Badge>
+                      {previewDoc.is_final && <Badge tone="success">{t("reqChat.finalTag")}</Badge>}
+                    </span>
+                    {!previewDoc.is_final && !planFinal && (
+                      <Button size="sm" className="rounded-lg" onClick={() => finalizeDoc(previewDoc)}>
+                        {t("reqChat.setFinal")}
+                      </Button>
+                    )}
+                    {previewDoc.is_final && !planFinal && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="rounded-lg"
+                        onClick={async () => {
+                          const ok = await confirm({
+                            title: t("reqChat.unfinalizeConfirm"),
+                            confirmText: t("reqChat.unfinalize"),
+                          });
+                          if (ok) unfinalizeDoc(previewDoc);
+                        }}
+                      >
+                        {t("reqChat.unfinalize")}
+                      </Button>
+                    )}
+                  </div>
+                    <button
+                      type="button"
+                      className="rc-preview-full"
+                      title={previewFull ? t("reqChat.previewExitFull") : t("reqChat.previewFull")}
+                      onClick={() => setPreviewFull(!previewFull)}
+                    >
+                      {previewFull ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+                    </button>
+                  <div className="rc-preview-body">
+                    <DocPreview reqId={reqId} doc={previewDoc} />
+                  </div>
+                </>
+              ) : previewPlan ? (
+                <>
+                  <div className="rc-preview-head">
+                    <span className="rc-preview-title">
+                      📋 {t("reqChat.planSnapshot")}
+                      <Badge className="ml-2">v{previewPlan.version}</Badge>
+                      {previewPlan.is_final && <Badge tone="success">{t("reqChat.finalTag")}</Badge>}
+                    </span>
+                    {chatMode === "plan" && !previewPlan.is_final && (
+                      <Button size="sm" className="rounded-lg" onClick={() => finalizePlan(previewPlan)}>
+                        {t("reqChat.finalizePlanBtn")}
+                      </Button>
+                    )}
+                  </div>
+                    <button
+                      type="button"
+                      className="rc-preview-full"
+                      title={previewFull ? t("reqChat.previewExitFull") : t("reqChat.previewFull")}
+                      onClick={() => setPreviewFull(!previewFull)}
+                    >
+                      {previewFull ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+                    </button>
+                  <div className="rc-preview-body" onScroll={() => setAnnoOpen(null)}>
+                    {planAnno && (
+                      <div className="rc-anno-bar">
+                        <span style={{ fontWeight: 600 }}>
+                          <EgmMark /> {t("reqChat.goldfish")}
+                        </span>
+                        {(["Blocker", "Major", "Nit"] as const).map((sev) => {
+                          const n = (annoReview.findings as Finding[]).filter(
+                            (f) => (f.severity || "Nit") === sev,
+                          ).length;
+                          return n ? (
+                            <Badge key={sev} tone={SEV_ST[sev].tone}>
+                              {SEV_ST[sev].icon} {sev} {n}
+                            </Badge>
+                          ) : null;
+                        })}
+                        {planAnno.docLevel.length > 0 && (
+                          <Popover
+                            trigger="click"
+                            open={annoOpen === "doc"}
+                            onOpenChange={(v) => setAnnoOpen(v ? "doc" : null)}
+                            side="bottom"
+                            align="start"
+                          >
+                            <PopoverTrigger>
+                              <button type="button" className="text-primary">
+                                {t("reqChat.docLevel", { n: planAnno.docLevel.length })}
+                              </button>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-[440px] max-w-[88vw]">
+                              <div className="mb-2 text-xs font-semibold">
+                                {t("reqChat.docLevelTitle", { n: planAnno.docLevel.length })}
+                              </div>
+                              {planAnno.docLevel.map((f, i) => (
+                                <div
+                                  key={i}
+                                  style={{ marginBottom: i === planAnno.docLevel.length - 1 ? 0 : 12 }}
+                                >
+                                  <FindingCard f={f} />
+                                </div>
+                              ))}
+                            </PopoverContent>
+                          </Popover>
+                        )}
+                      </div>
+                    )}
+                    <div className="md-body">
+                      <Markdown components={annoComponents as any}>{previewPlan.content}</Markdown>
+                    </div>
+                  </div>
+                </>
+              ) : req.status === "pool" ? (
+                <div className="rc-preview-empty">
+                  <h5 className="rc-empty-title">{req.title}</h5>
+                  <div className="muted">{req.description || t("reqChat.noDesc")}</div>
+                  {req.can_claim ? (
+                    <Button
+                      className="rounded-lg"
+                      onClick={async () => {
+                        try {
+                          await api(`/api/requirements/${reqId}/claim`, { method: "POST" });
+                          reload();
+                        } catch (e: any) {
+                          toast.error(e.message);
+                        }
+                      }}
+                    >
+                      {t("reqChat.claimReq")}
+                    </Button>
+                  ) : (
+                    <div className="muted">{claimHint}</div>
+                  )}
+                </div>
+              ) : (
+                <div className="rc-preview-empty">
+                  <div className="muted">
+                    {chatMode === "requirement" ? (
+                      <>
+                        {t("reqChat.noDocYet")}
+                        <br />
+                        {t("reqChat.noDocYetHint")}
+                      </>
+                    ) : (
+                      <>
+                        {t("reqChat.noPlanYet")}
+                        <br />
+                        {t("reqChat.noPlanYetHint")}
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+              <div className="panel rc-qa-card">
+                <h4>{t("qa.req.cardTitle")}</h4>
+                {qaSummary && qaSummary.status !== "none" ? (
+                  <div className="flex flex-col gap-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge tone={qaTone}>{t(`qa.status.${qaSummary.status}` as MsgKey)}</Badge>
+                      {qaSummary.pass_rate != null && (
+                        <span className="mono">{pct(qaSummary.pass_rate)}</span>
+                      )}
+                      {qaSummary.total > 0 && (
+                        <span className="muted">
+                          {qaSummary.passed}/{qaSummary.total}
+                        </span>
+                      )}
+                    </div>
+                    {qaSummary.batch_id && (
+                      <Link to={`/qa/batches/${qaSummary.batch_id}`}>{t("qa.batch.detail")}</Link>
+                    )}
+                  </div>
+                ) : (
+                  <div className="muted">{t("qa.req.none")}</div>
+                )}
+                <div className="mt-2 flex flex-wrap items-center gap-3">
+                  <Button
+                    size="sm"
+                    className="rounded-lg"
+                    onClick={openQa}
+                    disabled={req.status !== "online" && !isAdmin()}
+                  >
+                    {t("qa.req.start")}
+                  </Button>
+                  <Link to={`/systems/${req.system_id}/qa?tab=batches`}>{t("qa.req.history")}</Link>
+                </div>
+                {req.status !== "online" && (
+                  <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                    {t("qa.req.notOnline")}
+                  </div>
+                )}
+                <CenterMorphModal
+                  open={qaOpen}
+                  onOpenChange={(next) => {
+                    if (!next) setQaOpen(false);
+                  }}
+                >
+                  <CenterMorphModalContent ariaLabel={t("qa.req.startTitle")} className="max-w-[480px]">
+                    <div className="p-6">
+                      <h2 className="m-0 text-lg font-semibold tracking-[-0.01em] text-foreground">
+                        {t("qa.req.startTitle")}
+                      </h2>
+                      <div className="mt-4">
+                        <SearchSelect
+                          value={qaEnv ?? null}
+                          onChange={(v) => setQaEnv(v == null ? undefined : String(v))}
+                          clearable
+                          placeholder={t("qa.env.default")}
+                          options={qaEnvs.map((e) => ({
+                            value: e.name,
+                            label: e.base_url ? `${e.name} · ${e.base_url}` : e.name,
+                          }))}
+                        />
+                      </div>
+                      <div className="mt-2 text-xs text-muted-foreground">{t("qa.req.startHint")}</div>
+                      <div className="mt-6 flex justify-end gap-2">
+                        <Button variant="outline" size="sm" className="rounded-lg" onClick={() => setQaOpen(false)}>
+                          {t("common.cancel")}
+                        </Button>
+                        <Button size="sm" className="rounded-lg" onClick={startQa} disabled={qaBusy}>
+                          {t("qa.req.start")}
+                        </Button>
+                      </div>
+                    </div>
+                  </CenterMorphModalContent>
+                </CenterMorphModal>
+              </div>
+
       </aside>
       <Drawer
         open={reviewOpen}

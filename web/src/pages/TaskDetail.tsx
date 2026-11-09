@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { Bot, Check, ChevronRight, Lightbulb, LoaderCircle, X } from "lucide-react";
+import { Bot, Check, ChevronRight, Lightbulb, LoaderCircle, Puzzle, X } from "lucide-react";
 import { Button } from "../components/motion/button/index";
 import Badge from "../ui/Badge";
 import { Chain, type ChainItem } from "../ui/Chain";
@@ -431,7 +431,7 @@ export default function TaskDetail() {
                   >
                     <ChevronRight size={14} />
                   </span>
-                  <span className="sess-ico">🤖</span>
+                  <span className="sess-ico"><Bot size={13} /></span>
                   <span className="sess-name" title={task.title || task.code}>
                     {task.title || t("taskDetail.mainSession")}
                   </span>
@@ -445,7 +445,7 @@ export default function TaskDetail() {
                         className={`sess-row sub${sel === s.key ? " on" : ""}`}
                         onClick={() => setSel(s.key)}
                       >
-                        <span className="sess-ico">🧩</span>
+                        <span className="sess-ico sub"><Puzzle size={13} /></span>
                         <span className="sess-name" title={s.label}>
                           {s.label}
                         </span>
@@ -457,15 +457,21 @@ export default function TaskDetail() {
               </div>
               {sel === "main"
                 ? laneBlock(
-                    <span>
-                      🤖 <b>{t("taskDetail.mainAgent")}</b>
+                    <span className="td-lane-title">
+                      <span className="sess-ico">
+                        <Bot size={13} />
+                      </span>
+                      <b>{t("taskDetail.mainAgent")}</b>
                     </span>,
                     lanes.main,
                     live
                   )
                 : laneBlock(
-                    <span>
-                      🧩 <b>{lanes.subLanes.find((s) => s.key === sel)?.label}</b>{" "}
+                    <span className="td-lane-title">
+                      <span className="sess-ico sub">
+                        <Puzzle size={13} />
+                      </span>
+                      <b>{lanes.subLanes.find((s) => s.key === sel)?.label}</b>{" "}
                       <Badge className="ml-1">{t("taskDetail.subAgent")}</Badge>
                     </span>,
                     lanes.subLanes.find((s) => s.key === sel)?.evts || [],

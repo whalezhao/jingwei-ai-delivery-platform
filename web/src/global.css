@@ -308,6 +308,8 @@ body {
 .req-page {
   /* 铺满内容区：方案预览 + 右侧 AI 栏随窗口变宽，不再受 1440 总宽上限约束 */
   padding: 20px;
+  /* 页头 56px；定高后对话区用 flex 吃满剩余高度，输入框不会被挤出首屏 */
+  height: calc(100dvh - 56px);
 }
 
 /* 对话栏：浅灰底圆角盒，气泡浮在其上 */
@@ -1223,7 +1225,6 @@ a.wb-chip:hover {
 .rc-preview-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   flex-wrap: wrap;
   gap: 8px;
   padding: 8px 12px;
@@ -1234,12 +1235,33 @@ a.wb-chip:hover {
 .rc-preview-title {
   display: inline-flex;
   align-items: center;
+  margin-right: auto;
   font-size: 13px;
   font-weight: 600;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.rc-preview-full {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+.rc-preview-full:hover { background: rgba(0, 0, 0, 0.05); color: var(--ink); }
+/* 全屏预览：盖住应用头，但不盖模态/气泡（它们 z-index 更高） */
+.rc-preview.full {
+  position: fixed;
+  inset: 16px;
+  z-index: 60;
+  max-height: none;
+  min-height: 0;
+  box-shadow: 0 24px 64px rgba(20, 23, 28, 0.28);
 }
 .rc-preview-body {
   flex: 1;
@@ -1275,14 +1297,78 @@ a.wb-chip:hover {
 .td-lane-head {
   display: flex;
   align-items: center;
+  gap: 8px;
   justify-content: space-between;
   font-size: 13px;
-  margin-bottom: 6px;
+  margin-bottom: 8px;
+}
+.td-lane-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 .td-lane-count {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(20, 23, 28, 0.05);
   font-size: 11px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
+}
+
+/* 泳道里的思考链去掉卡片外框，用轨道把节点串成时间线；
+   聊天页共用同一个 Chain，视觉改动只作用于 .td-lane 内 */
+.td-lane .tc-chain {
+  padding: 0 0 0 2px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.td-lane .tc-chain-node {
+  position: relative;
+  gap: 10px;
+  padding-block: 0 12px;
+}
+.td-lane .tc-chain-node:last-child {
+  padding-block-end: 0;
+}
+.td-lane .tc-chain-node::before {
+  content: "";
+  position: absolute;
+  left: 11px;
+  top: 22px;
+  bottom: 0;
+  width: 1px;
+  background: color-mix(in srgb, var(--ink) 9%, transparent);
+}
+.td-lane .tc-chain-node:last-child::before {
+  display: none;
+}
+/* 图标垫在轨道上：白底遮住竖线，22px 与标题行高对齐 */
+.td-lane .tc-chain-icon {
+  position: relative;
+  z-index: 1;
+  width: 22px;
+  height: 22px;
+  margin-top: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--surface);
+}
+.td-lane .tc-chain-dot {
+  margin-top: 0;
+}
+.td-lane .tc-chain-title {
+  font-size: 13px;
+  line-height: 22px;
 }
 .tc-body {
   margin: 4px 0 0;
@@ -1579,25 +1665,26 @@ a.wb-chip.live:hover {
 /* ===== 任务详情：Claude 式会话树（主会话可折叠 + L 形连线子会话） ===== */
 .sess-tree {
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 10px;
   padding: 4px;
-  margin-bottom: 10px;
-  background: rgba(0, 0, 0, 0.015);
+  margin-bottom: 12px;
+  background: var(--surface);
 }
 .sess-row {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 5px 8px;
-  border-radius: 6px;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 7px;
   cursor: pointer;
-  transition: background 0.2s;
+  transition: background 0.2s, box-shadow 0.2s;
 }
 .sess-row:hover {
-  background: rgba(0, 0, 0, 0.04);
+  background: rgba(20, 23, 28, 0.035);
 }
 .sess-row.on {
-  background: rgba(43, 74, 203, 0.08);
+  background: color-mix(in srgb, var(--primary) 7%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 16%, transparent);
 }
 .sess-caret {
   display: inline-flex;
@@ -1616,7 +1703,19 @@ a.wb-chip.live:hover {
   visibility: hidden;
 }
 .sess-ico {
-  font-size: 13px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--primary) 9%, transparent);
+  color: var(--primary);
+}
+.sess-ico.sub {
+  background: color-mix(in srgb, var(--violet) 10%, transparent);
+  color: var(--violet);
 }
 .sess-name {
   flex: 1;
@@ -1630,8 +1729,22 @@ a.wb-chip.live:hover {
   font-weight: 600;
 }
 .sess-count {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(20, 23, 28, 0.05);
   font-size: 11px;
   color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.sess-row.on .sess-count {
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  color: var(--primary);
 }
 .sess-live {
   width: 7px;
@@ -1649,8 +1762,9 @@ a.wb-chip.live:hover {
   content: "";
   position: absolute;
   left: 14px;
-  top: -11px;
-  height: 50%;
+  /* 从上一行中心连到本行中心；行高随 22px 图标变高，固定 -11px 会断开 */
+  top: -17px;
+  height: calc(50% + 17px);
   border-left: 1px solid var(--line);
 }
 .sess-branch::after {
@@ -1658,7 +1772,7 @@ a.wb-chip.live:hover {
   position: absolute;
   left: 14px;
   top: 50%;
-  width: 9px;
+  width: 18px;
   border-top: 1px solid var(--line);
 }
 
@@ -1702,11 +1816,16 @@ a.wb-chip.live:hover {
 .rc-shell {
   display: flex;
   gap: 0;
-  align-items: flex-start;
+  align-items: stretch;
+  height: 100%;
 }
 .rc-shell .rc-main {
   flex: 1;
   min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 /* 主区 / AI 栏之间的分隔条：拖动改宽度（键盘 ←→ 也可调），双击复位 */
 .rc-split {
@@ -1778,17 +1897,13 @@ a.wb-chip.live:hover {
   align-items: center;
   gap: 6px;
 }
-.rc-dock .chat-box {
-  flex: 1;
-  height: auto;
-  min-height: 0;
-}
 .rc-dock .td-evt-wrap {
   flex: 1;
   min-height: 0;
   max-height: none;
   overflow-y: auto;
-  padding-right: 0;
+  /* 思考链去掉了卡片外框后不再自带内边距，留白由滚动容器统一给 */
+  padding: 10px 12px 12px;
 }
 
 
@@ -2107,6 +2222,7 @@ button.rc-fchip:hover { border-color: var(--accent); color: var(--accent); }
   align-items: baseline;
   flex-wrap: wrap;
   gap: 8px;
+  flex: none;
   padding-bottom: 10px;
   margin-bottom: 10px;
   border-bottom: 1px solid var(--line);
@@ -2120,15 +2236,106 @@ button.rc-fchip:hover { border-color: var(--accent); color: var(--accent); }
   color: var(--ink);
 }
 .rc-main-sub { flex: 1 1 100%; font-size: 12px; color: var(--muted); }
-.rc-main-body { min-width: 0; }
-.rc-grid {
-  display: grid;
-  grid-template-columns: 240px minmax(0, 1fr);
-  gap: 12px;
-  align-items: start;
+.rc-main-body {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
 }
-@media (max-width: 1023px) {
-  .rc-grid { grid-template-columns: minmax(0, 1fr); }
+.rc-grid {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  gap: 12px;
+  align-items: stretch;
+}
+@media (max-width: 1180px) {
+  /* 窄屏放不下并排栏：整页回到滚动布局 */
+  .req-page { height: auto; }
+  .rc-shell { height: auto; }
+  .rc-main { height: auto; overflow: visible; }
+  .rc-main-body { display: block; }
+  .rc-chatcol .chat-box { height: calc(100dvh - 320px); min-height: 480px; }
+}
+
+/* 需求信息：折叠块，默认收起，把首屏让给 AI 对话 */
+.rc-info-strip {
+  flex: none;
+  padding: 10px 18px;
+}
+.rc-info-strip > summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-2);
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.rc-info-strip > summary::-webkit-details-marker { display: none; }
+.rc-info-strip > summary::before {
+  content: "";
+  width: 0;
+  height: 0;
+  border-left: 5px solid currentColor;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform 0.15s;
+}
+.rc-info-strip[open] > summary { margin-bottom: 10px; }
+.rc-info-strip[open] > summary::before { transform: rotate(90deg); }
+.rc-info-strip .rc-desc {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 6px 24px;
+}
+.rc-info-strip .rc-desc > div {
+  grid-template-columns: 64px minmax(0, 1fr);
+}
+/* 描述通常较长，独占一行 */
+.rc-info-strip .rc-desc > div:first-child {
+  grid-column: 1 / -1;
+}
+
+/* 需求对话：AI 对话占中栏主区，文档预览退居右侧停靠栏 */
+.rc-chatcol {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.rc-chatcol .chat-box {
+  flex: 1;
+  height: auto;
+  min-height: 0;
+}
+/* 文档栏复用 .rc-dock 的吸顶与可拖宽度，外观交给内部的文件卡与预览卡 */
+.rc-dock.rc-docdock {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  gap: 12px;
+}
+.rc-docdock .rc-files {
+  flex: none;
+  max-height: 38%;
+  margin-bottom: 0;
+  overflow-y: auto;
+}
+.rc-docdock .rc-preview {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+}
+/* 测试卡固定在右下角，预览吃掉剩余高度 */
+.rc-docdock .rc-qa-card {
+  flex: none;
+  margin-bottom: 0;
 }
 .rc-msgs {
   flex: 1;
@@ -2149,8 +2356,9 @@ button.rc-fchip:hover { border-color: var(--accent); color: var(--accent); }
   height: 26px;
   border-radius: 50%;
 }
-.rc-msg.user .rc-msg-avatar { background: var(--accent); color: #fff; }
-.rc-msg.assistant .rc-msg-avatar { background: var(--accent-soft); color: var(--accent); }
+/* 头像是真实头像/logo，容器不再上底色，只负责对齐 */
+.rc-msg.user .rc-msg-avatar { background: none; color: inherit; }
+.rc-msg.assistant .rc-msg-avatar { background: none; color: inherit; }
 .rc-msg-body { flex: 1; min-width: 0; max-width: 100%; }
 .rc-msg.user .rc-msg-body { display: flex; flex-direction: column; align-items: flex-end; }
 .rc-msg-content {

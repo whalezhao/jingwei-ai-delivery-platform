@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { Plus, RefreshCw, Sparkles, X, Zap } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import Page from "../Page";
-import { qa, type QaCase, type QaCaseVersion, type QaFeature } from "../qa";
+import { qa, qaStream, type QaCase, type QaCaseVersion, type QaFeature } from "../qa";
 import DataTable, { type DataTableColumn } from "../ui/DataTable";
 import MiniTable from "../ui/MiniTable";
 import Badge from "../ui/Badge";
@@ -44,8 +44,20 @@ export default function QaFeaturePage() {
   const form = useForm(emptyForm);
   const [errors, setErrors] = useState<string[]>([]);
   const [aiOpen, setAiOpen] = useState(false);
-  const [aiPrompt, setAiPrompt] = useState("");
   const [aiBusy, setAiBusy] = useState(false);
+  const [aiInput, setAiInput] = useState("");
+  const [aiMessages, setAiMessages] = useState<
+    { role: "user" | "assistant"; content: string }[]
+  >([]);
+  const [aiYaml, setAiYaml] = useState<string | null>(null);
+  const [aiYamlErrors, setAiYamlErrors] = useState<string[]>([]);
+  // null = 还在查；false = 系统没配模型，生成必然失败，先把话说在前面
+  const [modelReady, setModelReady] = useState<boolean | null>(null);
+  const aiScrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    aiScrollRef.current?.scrollTo({ top: aiScrollRef.current.scrollHeight });
+  }, [aiMessages]);
   const [versionFor, setVersionFor] = useState<QaCase | null>(null);
   const [versions, setVersions] = useState<QaCaseVersion[]>([]);
   const [running, setRunning] = useState(false);
@@ -127,36 +139,83 @@ export default function QaFeaturePage() {
     }
   };
 
-  const draft = async () => {
+  const openAi = async () => {
+    setAiOpen(true);
+    setAiMessages([]);
+    setAiInput("");
+    setAiYaml(null);
+    setAiYamlErrors([]);
+    setModelReady(null);
+    try {
+      const system = await qa<{ has_model_config: boolean }>(`/api/systems/${systemId}`);
+      setModelReady(system.has_model_config);
+    } catch {
+      // 状态查不到不拦，真没配时发送会回同样的 400
+      setModelReady(true);
+    }
+  };
+
+  const aiSend = async () => {
+    const text = aiInput.trim();
+    if (!text || aiBusy) return;
+    const history = [...aiMessages, { role: "user" as const, content: text }];
+    setAiMessages([...history, { role: "assistant", content: "" }]);
+    setAiInput("");
     setAiBusy(true);
     try {
-      const r = await qa<{ reply: string; yaml: string | null; yaml_errors: string[] }>(
-        `/api/features/${fid}/ai/case-draft`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            messages: [{ role: "user", content: aiPrompt }],
-            current_yaml: null,
-          }),
+      await qaStream(
+        `/api/features/${fid}/ai/case-draft/stream`,
+        { messages: history, current_yaml: aiYaml },
+        (event, data) => {
+          if (event === "delta") {
+            setAiMessages((msgs) => {
+              const next = [...msgs];
+              const last = next[next.length - 1];
+              next[next.length - 1] = { ...last, content: last.content + (data.text || "") };
+              return next;
+            });
+          } else if (event === "done") {
+            // yaml 为 null = 这轮没给 YAML，保留右边已有的
+            if (data.yaml != null) {
+              setAiYaml(data.yaml);
+              setAiYamlErrors(data.yaml_errors || []);
+            }
+            setAiMessages((msgs) => {
+              const next = [...msgs];
+              next[next.length - 1] = {
+                role: "assistant",
+                content: data.reply || next[next.length - 1].content,
+              };
+              return next;
+            });
+          } else if (event === "error") {
+            toast.error(data.message || t("qa.case.aiNoYaml"));
+            setAiMessages((msgs) => {
+              const next = [...msgs];
+              next[next.length - 1] = { role: "assistant", content: data.message || "" };
+              return next;
+            });
+          }
         },
       );
-      if (!r.yaml) {
-        toast.warning(r.reply || t("qa.case.aiNoYaml"));
-        return;
-      }
-      setAiOpen(false);
-      setEditingId(null);
-      setErrors(r.yaml_errors || []);
-      form.reset({
-        ...emptyForm,
-        name: aiPrompt.slice(0, 40),
-        yaml_content: r.yaml,
-      });
     } catch (e: any) {
       toast.error(e.message);
+      setAiMessages((msgs) => msgs.slice(0, -1));
     } finally {
       setAiBusy(false);
     }
+  };
+
+  const aiAdopt = () => {
+    if (!aiYaml) return;
+    setAiOpen(false);
+    setEditingId(null);
+    setErrors(aiYamlErrors);
+    form.reset({
+      ...emptyForm,
+      name: aiMessages.find((m) => m.role === "user")?.content.slice(0, 40) || feature?.name || "",
+      yaml_content: aiYaml,
+    });
   };
 
   const openVersions = async (c: QaCase) => {
@@ -318,15 +377,7 @@ export default function QaFeaturePage() {
             <Plus className="size-4" />
             {t("qa.case.new")}
           </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            className="rounded-lg"
-            onClick={() => {
-              setAiPrompt("");
-              setAiOpen(true);
-            }}
-          >
+          <Button variant="outline" size="sm" className="rounded-lg" onClick={openAi}>
             <Sparkles className="size-4" />
             {t("qa.case.aiGen")}
           </Button>
@@ -436,32 +487,102 @@ export default function QaFeaturePage() {
           if (!next) setAiOpen(false);
         }}
       >
-        <CenterMorphModalContent ariaLabel={t("qa.case.aiGen")} className="max-w-[560px]">
-          <div className="p-6">
+        <CenterMorphModalContent ariaLabel={t("qa.case.aiGen")} className="max-w-[640px]">
+          <div className="flex max-h-[76vh] flex-col p-6">
             <h2 className="m-0 text-lg font-semibold tracking-[-0.01em] text-foreground">
               {t("qa.case.aiGen")}
             </h2>
-            <div className="mt-4">
-              <Textarea
-                rows={4}
-                value={aiPrompt}
-                onChange={setAiPrompt}
-                placeholder={t("qa.case.aiPrompt")}
-              />
-            </div>
-            <div className="mt-6 flex justify-end gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                className="rounded-lg"
-                onClick={() => setAiOpen(false)}
-              >
-                {t("common.cancel")}
-              </Button>
-              <Button size="sm" className="rounded-lg" onClick={draft} disabled={aiBusy}>
-                {t("qa.case.aiGenerate")}
-              </Button>
-            </div>
+            {modelReady === false ? (
+              <div className="mt-4 rounded-lg bg-warning/10 px-3 py-3 text-[13px] leading-relaxed text-foreground">
+                <p className="m-0">{t("qa.case.aiModelMissing")}</p>
+                <Link
+                  to={`/systems/${systemId}/qa?tab=config`}
+                  onClick={() => setAiOpen(false)}
+                  className="mt-2 inline-block font-medium text-primary hover:underline"
+                >
+                  {t("qa.case.aiGoConfig")}
+                </Link>
+              </div>
+            ) : (
+              <>
+                <div
+                  ref={aiScrollRef}
+                  className="mt-4 flex max-h-[45vh] min-h-24 flex-col gap-2 overflow-y-auto"
+                >
+                  {aiMessages.length === 0 ? (
+                    <p className="m-0 text-[13px] text-muted-foreground">
+                      {t("qa.case.aiPrompt")}
+                    </p>
+                  ) : (
+                    aiMessages.map((m, i) => (
+                      <div
+                        key={i}
+                        className={m.role === "user" ? "flex justify-end" : "flex justify-start"}
+                      >
+                        <div
+                          className={`max-w-[85%] whitespace-pre-wrap rounded-xl px-3 py-2 text-[13px] leading-relaxed text-foreground ${
+                            m.role === "user" ? "bg-primary/10" : "bg-muted"
+                          }`}
+                        >
+                          {m.content ||
+                            (aiBusy && i === aiMessages.length - 1 ? "…" : "")}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+                {aiYaml ? (
+                  <div className="mt-3 overflow-hidden rounded-lg border border-border">
+                    <div className="flex items-center justify-between border-b border-border bg-muted/50 px-3 py-1.5">
+                      <span className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+                        YAML
+                      </span>
+                      <button
+                        type="button"
+                        onClick={aiAdopt}
+                        className="text-[12px] font-medium text-primary hover:underline"
+                      >
+                        {t("qa.case.aiAdopt")}
+                      </button>
+                    </div>
+                    <pre className="m-0 max-h-40 overflow-auto p-3 font-mono text-[12px] leading-relaxed">
+                      {aiYaml}
+                    </pre>
+                    {aiYamlErrors.length > 0 && (
+                      <p className="m-0 border-t border-border px-3 py-2 text-[12px] text-danger">
+                        {aiYamlErrors.join("；")}
+                      </p>
+                    )}
+                  </div>
+                ) : null}
+                <div className="mt-3">
+                  <Textarea
+                    rows={3}
+                    value={aiInput}
+                    onChange={setAiInput}
+                    placeholder={t("qa.case.aiPrompt")}
+                  />
+                </div>
+                <div className="mt-4 flex justify-end gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="rounded-lg"
+                    onClick={() => setAiOpen(false)}
+                  >
+                    {t("common.cancel")}
+                  </Button>
+                  <Button
+                    size="sm"
+                    className="rounded-lg"
+                    onClick={aiSend}
+                    disabled={aiBusy || !aiInput.trim()}
+                  >
+                    {aiBusy ? t("qa.case.aiSending") : t("qa.case.aiSend")}
+                  </Button>
+                </div>
+              </>
+            )}
           </div>
         </CenterMorphModalContent>
       </CenterMorphModal>

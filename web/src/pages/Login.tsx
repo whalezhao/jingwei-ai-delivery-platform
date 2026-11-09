@@ -164,7 +164,7 @@ export default function Login() {
             </form>
 
             <p className="mt-8 text-center text-[11px] tracking-[0.14em] text-muted-foreground/70">
-              JINGWEI · {t("app.name")}
+              经纬 · {t("app.name")}
             </p>
           </div>
         </div>

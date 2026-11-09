@@ -43,6 +43,63 @@ export async function qa<T = any>(path: string, opts: RequestInit = {}): Promise
   return r.status === 204 ? (undefined as T) : ((await r.json()) as T);
 }
 
+/** 读 SSE：后端发 `event: delta|done|error` + 一行 JSON。 */
+export async function qaStream(
+  path: string,
+  body: unknown,
+  onEvent: (event: string, data: any) => void,
+): Promise<void> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (token.get()) headers["Authorization"] = `Bearer ${token.get()}`;
+  const r = await fetch(BASE + path, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  });
+  if (r.status === 401) {
+    token.clear();
+    goLogin();
+    throw new QaError(401, i18n.t("errors.notLoggedIn"));
+  }
+  if (!r.ok) {
+    let msg = `HTTP ${r.status}`;
+    try {
+      msg = (await r.json()).detail || msg;
+    } catch {
+      /* ignore */
+    }
+    throw new QaError(r.status, msg);
+  }
+  const reader = r.body?.getReader();
+  if (!reader) return;
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let cut = buffer.indexOf("\n\n");
+    while (cut >= 0) {
+      const frame = buffer.slice(0, cut);
+      buffer = buffer.slice(cut + 2);
+      let event = "message";
+      let data = "";
+      for (const line of frame.split("\n")) {
+        if (line.startsWith("event: ")) event = line.slice(7).trim();
+        else if (line.startsWith("data: ")) data += line.slice(6);
+      }
+      if (data) {
+        try {
+          onEvent(event, JSON.parse(data));
+        } catch {
+          /* 残缺帧直接丢，下一帧还能用 */
+        }
+      }
+      cut = buffer.indexOf("\n\n");
+    }
+  }
+}
+
 export interface QaSystem {
   id: number;
   group_id: number;
