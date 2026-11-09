@@ -382,6 +382,45 @@ async def test_run_claude_parses_huge_single_line(tmp_path, monkeypatch):
     assert evts[1]["kind"] == "result" and evts[1]["text"] == "ok"
 
 
+async def test_run_claude_nonzero_exit_after_success_result(tmp_path, monkeypatch):
+    """CLI 偶发收尾崩溃：result 已成功产出时退出码非 0 不再判失败，无成功 result 仍报错。"""
+    import sys
+
+    from vega.claude import ClaudeError, run_claude
+
+    stub = tmp_path / "claude-rc255"
+    stub.write_text(
+        f"#!{sys.executable}\n"
+        "import json, sys\n"
+        "print(json.dumps({'type': 'result', 'subtype': 'success', 'result': '答', "
+        "'is_error': False}), flush=True)\n"
+        "sys.exit(255)\n",
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+    monkeypatch.setattr(get_settings(), "claude_bin", str(stub))
+    evts = [e async for e in run_claude([], {}, prompt="hi")]
+    assert evts[-1]["kind"] == "result" and evts[-1]["text"] == "答"
+
+    fail = tmp_path / "claude-rc1"
+    fail.write_text(
+        f"#!{sys.executable}\n"
+        "import json, sys\n"
+        "print(json.dumps({'type': 'result', 'subtype': 'error_during_execution', "
+        "'result': '', 'is_error': True}), flush=True)\n"
+        "sys.exit(1)\n",
+        encoding="utf-8",
+    )
+    fail.chmod(0o755)
+    monkeypatch.setattr(get_settings(), "claude_bin", str(fail))
+    try:
+        [e async for e in run_claude([], {}, prompt="hi")]
+    except ClaudeError as e:
+        assert "退出码 1" in str(e)
+    else:
+        raise AssertionError("expected ClaudeError")
+
+
 async def test_run_claude_partial_deltas(tmp_path, monkeypatch):
     """partial 模式：增量帧逐条产出，整块事件带 streamed 标记供直播去重。"""
     import sys

@@ -16,10 +16,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 from collections.abc import AsyncIterator
 
 from .config import get_settings
+
+log = logging.getLogger(__name__)
 
 
 class ClaudeError(RuntimeError):
@@ -94,6 +97,7 @@ async def run_claude(
 
     stderr_task = asyncio.create_task(drain_stderr())
     terminal = ""  # 最后一次 result 事件的摘要：退出码非 0 时它是真正的死因（stderr 常只有无关告警）
+    result_ok = False  # 收到 subtype=success 的 result 后，退出码非 0 只当收尾异常
     # 本消息已经逐帧下发的块类型：整块事件仍产出（落库回放要用），但标 streamed 让直播端去重
     streamed: set[tuple[str, str]] = set()
     # 最后一次 API 调用的 input/usage：一轮里可能有多次（工具来回），最后一条才是
@@ -165,6 +169,7 @@ async def run_claude(
                         streamed.add((parent, "thinking"))
                         yield {"kind": "thinking_delta", "text": d["thinking"], "parent": parent}
             elif kind == "result":
+                result_ok = not evt.get("is_error") and evt.get("subtype") == "success"
                 terminal = json.dumps(
                     {k: evt.get(k) for k in ("subtype", "terminal_reason", "num_turns", "errors")},
                     ensure_ascii=False,
@@ -192,7 +197,10 @@ async def run_claude(
             proc.kill()
         stderr = await stderr_task
     rc = await proc.wait()
-    if rc != 0:
+    if rc != 0 and result_ok:
+        # 结果已经成功产出，退出码非 0 只是收尾阶段崩溃（偶发），按成功回放
+        log.warning("claude 已产出成功结果但退出码 %s，按成功处理：%s", rc, terminal)
+    elif rc != 0:
         raise ClaudeError(f"claude -p 退出码 {rc}: {terminal or '(无 result 事件)'} | {stderr[-300:]}")
 
 
