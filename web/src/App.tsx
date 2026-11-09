@@ -80,6 +80,7 @@ import {
 import FilterSelect from "./ui/FilterSelect";
 import { Toaster } from "./ui/toast";
 import { ConfirmHost } from "./ui/confirm";
+import StatusBar from "./components/StatusBar";
 
 type MenuItem = {
   path: string;
@@ -516,6 +517,7 @@ function Shell() {
             <Route path="/integrations" element={<Integrations />} />
           </Routes>
         </div>
+        <StatusBar />
       </AnimatedSidebarInset>
 
       <ProfileModal
@@ -530,13 +532,14 @@ function Shell() {
 }
 
 function SidebarTagline() {
-  const { t } = useTranslation();
   const { state } = useAnimatedSidebar();
   if (state === "collapsed") return null;
   return (
     <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
       <span className="size-1.5 shrink-0 rounded-full bg-[#B8893B]" />
-      <span className="truncate">{t("app.tagline")}</span>
+      <span className="truncate">
+        © {new Date().getFullYear()} 赵寒 · MIT License
+      </span>
     </div>
   );
 }

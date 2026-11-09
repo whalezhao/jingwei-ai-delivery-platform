@@ -21,6 +21,7 @@ from .routers import (
     requirements,
     runner_api,
     setup,
+    status,
     tasks,
     webhooks,
     workbench,
@@ -83,7 +84,7 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    for r in (am, auth, people, groups, projects, systems, requirements, tasks, nodes, runner_api, webhooks, integrations, setup, workbench, code_stats):
+    for r in (am, auth, people, groups, projects, systems, requirements, tasks, nodes, runner_api, webhooks, integrations, setup, status, workbench, code_stats):
         app.include_router(r.router)
     app.include_router(am.panel_router)
     return app

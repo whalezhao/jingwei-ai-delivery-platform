@@ -17,6 +17,13 @@ export const en = {
     allGroups: "All R&D groups",
     allProjects: "All projects",
   },
+  statusBar: {
+    ok: "All services normal",
+    down: "Service unreachable",
+    runners: "Runners {{online}}/{{total}} online",
+    queue: "Queue {{running}} running · {{queued}} waiting",
+    amOn: "Agent-Memory on",
+  },
   nav: {
     workbench: "Workbench",
     requirements: "Requirements",

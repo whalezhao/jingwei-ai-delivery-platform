@@ -2346,12 +2346,23 @@ button.rc-fchip:hover { border-color: var(--accent); color: var(--accent); }
   gap: 12px;
   align-items: stretch;
 }
-@media (max-width: 1180px) {
-  /* 窄屏放不下并排栏：整页回到滚动布局 */
+/* 1300 = 主区最小 720 + 分隔条 14 + 文档栏最小 300（含侧栏后约等于窗口宽） */
+@media (max-width: 1300px) {
+  /* 窄屏放不下并排栏：整页回到滚动布局，文档栏移到对话下方 */
   .req-page { height: auto; }
-  .rc-shell { height: auto; }
+  .rc-shell { height: auto; flex-direction: column; }
+  .rc-split { display: none; }
   .rc-main { height: auto; overflow: visible; }
   .rc-main-body { display: block; }
+  .rc-grid { display: block; }
+  /* 内联的 clamp 宽度只服务并排布局，窄屏下要压过它 */
+  .rc-dock.rc-docdock {
+    flex: none !important;
+    position: static;
+    height: auto;
+  }
+  .rc-dock.rc-docdock .rc-files { max-height: none; }
+  .rc-dock.rc-docdock .rc-preview { min-height: 320px; }
   .rc-chatcol .chat-box { height: calc(100dvh - 320px); min-height: 480px; }
 }
 

@@ -13,6 +13,13 @@ export const zh = {
     allGroups: "全部研发组",
     allProjects: "全部项目",
   },
+  statusBar: {
+    ok: "服务正常",
+    down: "服务连接失败",
+    runners: "执行器在线 {{online}}/{{total}}",
+    queue: "队列 执行 {{running}} · 排队 {{queued}}",
+    amOn: "Agent-Memory 已启用",
+  },
   nav: {
     workbench: "工作台",
     requirements: "需求池",
