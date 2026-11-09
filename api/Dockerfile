@@ -40,7 +40,7 @@ COPY --from=eclipse-temurin:25-jre-jammy /opt/java/openjdk /opt/java/openjdk
 RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
  && ln -sf /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
  && npm config set registry ${NPM_REGISTRY} \
- && npm install -g @anthropic-ai/claude-code @ast-grep/cli typescript typescript-language-server pyright \
+ && npm install -g @anthropic-ai/claude-code@2.1.311 @ast-grep/cli typescript typescript-language-server pyright \
  && uv tool install code-review-graph \
  && uv tool install serena-agent \
  && curl -fsSL "${JDTLS_URL}" -o /tmp/jdtls.tar.gz \
