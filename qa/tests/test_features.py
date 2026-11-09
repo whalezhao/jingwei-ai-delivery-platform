@@ -5,6 +5,7 @@ import uuid
 
 import pytest
 
+from app import schemas
 from app.case_versions import diff_text
 from app.coverage import compute_requirement_coverage
 from app.crypto import decrypt_secret, encrypt_secret
@@ -18,6 +19,13 @@ def test_crypto_roundtrip_and_prefix():
     assert token.startswith("enc:v1:")
     assert decrypt_secret(token) == "s3cret"
     assert decrypt_secret("plain") == "plain"
+
+
+def test_case_create_accepts_is_active():
+    # 新建用例的启用开关随请求发送；漏了这个字段会被 extra=forbid 挡成 422
+    body = schemas.TestCaseCreate(name="x", yaml_content="cases: []", is_active=False)
+    assert body.is_active is False
+    assert schemas.TestCaseCreate(name="x", yaml_content="cases: []").is_active is True
 
 
 def test_variable_key_validation():

@@ -149,6 +149,7 @@ class TestCaseCreate(In):
     priority: str | None = None
     defect_ids: str | None = Field(default=None, max_length=255)
     stage_override: str | None = None
+    is_active: bool = True
     change_source: str | None = None
     change_note: str | None = None
 
