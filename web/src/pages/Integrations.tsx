@@ -14,6 +14,8 @@ import {
   CenterMorphModalContent,
 } from "../components/motion/center-morph-modal";
 import { Input } from "../components/motion/input";
+import { Switch } from "../components/motion/switch";
+import { refreshAmEnabled } from "../am";
 import {
   Tabs,
   TabsContent,
@@ -231,6 +233,110 @@ function Credentials() {
           emptyText={t("common.noData")}
         />
       </div>
+    </div>
+  );
+}
+
+function AgentMemoryConfig() {
+  const { t } = useTranslation();
+  const [cfg, setCfg] = useState<{
+    url: string;
+    source: "db" | "env";
+    proxy_url: string;
+    proxy_source: "db" | "env";
+    enabled: boolean;
+  } | null>(null);
+  const [url, setUrl] = useState("");
+  const [proxy, setProxy] = useState("");
+  const [enabled, setEnabled] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(() => {
+    api<any>("/api/integrations/am")
+      .then((c) => {
+        setCfg(c);
+        setUrl(c.source === "db" ? c.url : "");
+        setProxy(c.proxy_source === "db" ? c.proxy_url : "");
+        setEnabled(c.enabled);
+      })
+      .catch((e) => toast.error(e.message));
+  }, []);
+  useEffect(load, [load]);
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      const c = await api<any>("/api/integrations/am", {
+        method: "PUT",
+        body: JSON.stringify({ url, proxy_url: proxy, enabled }),
+      });
+      setCfg(c);
+      setUrl(c.source === "db" ? c.url : "");
+      setProxy(c.proxy_source === "db" ? c.proxy_url : "");
+      setEnabled(c.enabled);
+      refreshAmEnabled();
+      toast.success(t("integrations.amSaved"));
+    } catch (e: any) {
+      toast.error(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!cfg) return null;
+  return (
+    <div className="rounded-xl border border-border bg-card p-4">
+      <p className="m-0 flex flex-wrap items-center gap-2 text-sm text-foreground">
+        {t("integrations.amIntro")}
+        {cfg.enabled ? (
+          <Badge tone={cfg.source === "db" ? "success" : "neutral"}>
+            {cfg.source === "db"
+              ? t("integrations.configured")
+              : t("integrations.configuredEnv")}
+          </Badge>
+        ) : (
+          <Badge>{t("integrations.amOff")}</Badge>
+        )}
+      </p>
+      <div className="my-4 grid max-w-[560px] gap-3">
+        <label className="grid gap-1 text-sm text-foreground">
+          {t("integrations.amHubLabel")}
+          <Input
+            value={url}
+            onChange={setUrl}
+            placeholder={t("integrations.amPlaceholder")}
+            classNames={{ field: "rounded-lg" }}
+          />
+        </label>
+        <label className="grid gap-1 text-sm text-foreground">
+          {t("integrations.amProxyLabel")}
+          <Input
+            value={proxy}
+            onChange={setProxy}
+            placeholder={t("integrations.amPlaceholder")}
+            classNames={{ field: "rounded-lg" }}
+          />
+        </label>
+        <div className="flex items-center gap-3">
+          <Switch checked={enabled} onCheckedChange={setEnabled} />
+          <span className="text-sm text-foreground">
+            {t("integrations.amEnable")}
+          </span>
+        </div>
+        <div>
+          <Button
+            size="sm"
+            className="h-11 rounded-lg px-4"
+            onClick={save}
+            disabled={busy}
+          >
+            {t("integrations.saveConnect")}
+          </Button>
+        </div>
+      </div>
+      <p className="m-0 text-xs text-muted-foreground">
+        {t("integrations.amHint")}
+      </p>
     </div>
   );
 }
@@ -501,6 +607,7 @@ export default function Integrations() {
           <TabsTrigger value="events">{t("integrations.tabEvents")}</TabsTrigger>
           <TabsTrigger value="notify">{t("integrations.tabNotify")}</TabsTrigger>
           <TabsTrigger value="mr">{t("integrations.tabMr")}</TabsTrigger>
+          <TabsTrigger value="am">Agent-Memory</TabsTrigger>
         </TabsList>
         <TabsContent value="cred">
           <Credentials />
@@ -513,6 +620,9 @@ export default function Integrations() {
         </TabsContent>
         <TabsContent value="mr">
           <MrReviews />
+        </TabsContent>
+        <TabsContent value="am">
+          <AgentMemoryConfig />
         </TabsContent>
       </Tabs>
     </Page>

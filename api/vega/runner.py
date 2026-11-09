@@ -441,6 +441,12 @@ class Runner:
         paths = ", ".join(line[3:].strip() for line in out.splitlines()[:10])
         raise RuntimeError(f"EGM 轮次写脏了基线仓库（已复原已跟踪文件）：{paths}")
 
+    @staticmethod
+    def _am_base(payload: dict) -> str | None:
+        """proxy 根地址：claude_env 的 ANTHROPIC_BASE_URL 去掉 /claude-code/<space>。"""
+        base = (payload.get("claude_env") or {}).get("ANTHROPIC_BASE_URL", "")
+        return base.split("/claude-code/")[0] or None
+
     async def _exec_plan_turn(self, task_id: int, payload: dict) -> None:
         payload["prompt"] = self._with_attachments(payload["prompt"], await self._attachment_paths(payload))
         payload["prompt"] = self._with_docs(payload["prompt"], await self._docs_paths(payload))
@@ -452,9 +458,10 @@ class Runner:
             payload["prompt"] = self._egm_prompt(payload, art)
 
         def args(replay: bool) -> list[str]:
+            am_url = self._am_base(payload)
             if art:
-                return egm_plan_args(payload["session_id"], replay, str(art))
-            return plan_args(payload["session_id"], replay)
+                return egm_plan_args(payload["session_id"], replay, str(art), am_url)
+            return plan_args(payload["session_id"], replay, am_url)
 
         try:
             text = await self._run_plan_claude(task_id, args(resume), payload)

@@ -10,6 +10,7 @@ import {
 } from "react-router-dom";
 import {
   Boxes,
+  Brain,
   ChevronDown,
   CirclePlay,
   Code2,
@@ -35,6 +36,7 @@ import LangSwitch from "./components/LangSwitch";
 import ProfileModal, { Me } from "./components/ProfileModal";
 import { avatarSrc } from "./components/PersonAvatar";
 import { GroupProvider, useGroup } from "./group";
+import { useAmEnabled } from "./am";
 import { AUTH_EVENT, api, goLogin, pingAuth, token } from "./api";
 import Login from "./pages/Login";
 import People from "./pages/People";
@@ -183,6 +185,49 @@ function SidebarBrand() {
   );
 }
 
+function AgentMemoryLink() {
+  const { t } = useTranslation();
+  const open = async () => {
+    // 先同步开标签页，避免 await 之后再 window.open 被浏览器当弹窗拦掉
+    const tab = window.open("about:blank", "_blank");
+    if (tab) tab.opener = null;
+    // 面板的登录态在 localStorage（tdai-panel.session）。/am/ 反代到面板，同源下
+    // 才能用本人绑定的 user_key 免登；未绑定时照常进面板登录页。
+    try {
+      const s = await api<{ bound: boolean; instance_id: string; user_key?: string; user?: unknown }>(
+        "/api/am/panel-session",
+      );
+      if (s.bound && s.user_key) {
+        localStorage.setItem(
+          "tdai-panel.session",
+          JSON.stringify({
+            authMethod: "user_key",
+            instanceId: s.instance_id,
+            instanceName: s.instance_id,
+            userKey: s.user_key,
+            user: s.user,
+          }),
+        );
+      }
+    } catch {
+      /* 后端不可达时照常打开面板，由面板自己要求登录 */
+    }
+    if (tab) tab.location.replace("/am/");
+    else location.assign("/am/");
+  };
+  return (
+    <button
+      type="button"
+      onClick={open}
+      title={t("app.agentMemory")}
+      className="inline-flex h-9 items-center gap-1.5 rounded-full border border-border bg-card px-2.5 text-sm text-muted-foreground transition-colors hover:border-(--color-border-strong) hover:text-foreground"
+    >
+      <Brain className="size-4" />
+      <span className="max-sm:hidden">{t("app.agentMemory")}</span>
+    </button>
+  );
+}
+
 function AvatarMenu({
   avatar,
   onProfile,
@@ -200,6 +245,8 @@ function AvatarMenu({
     token.clear();
     localStorage.removeItem("vega_admin");
     localStorage.removeItem("vega_user");
+    // 清掉点击顶栏时写给同源 /am/ 面板的会话，避免下一个人沿用上一个人的身份
+    localStorage.removeItem("tdai-panel.session");
     pingAuth();
     goLogin();
   };
@@ -267,6 +314,7 @@ function Shell() {
   const loc = useLocation();
   const nav = useNavigate();
   const { t } = useTranslation();
+  const amOn = useAmEnabled();
   const { projects, projectId, setProjectId, groups, groupId, setGroupId } =
     useGroup();
   const reduce = useReducedMotion();
@@ -422,6 +470,19 @@ function Shell() {
           </div>
 
           <div className="ml-auto flex items-center gap-2 lg:ml-0">
+            {amOn && <AgentMemoryLink />}
+            <a
+              href="https://github.com/whalezhao/jingwei-ai-delivery-platform"
+              target="_blank"
+              rel="noreferrer"
+              title="GitHub"
+              className="inline-flex size-9 items-center justify-center rounded-full border border-border bg-card text-muted-foreground transition-colors hover:border-(--color-border-strong) hover:text-foreground"
+            >
+              {/* GitHub 官方 mark（lucide 已移除品牌图标） */}
+              <svg viewBox="0 0 16 16" aria-hidden className="size-4" fill="currentColor">
+                <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z" />
+              </svg>
+            </a>
             <LangSwitch />
             <AvatarMenu
               avatar={myAvatar}

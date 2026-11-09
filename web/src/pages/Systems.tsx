@@ -7,6 +7,7 @@ import { api, isAdmin } from "../api";
 import type { MsgKey } from "../i18n";
 import { useGroup } from "../group";
 import AmSelect from "../components/AmSelect";
+import { useAmEnabled } from "../am";
 import Page from "../Page";
 import DataTable, { type DataTableColumn } from "../ui/DataTable";
 import Badge, { type BadgeTone } from "../ui/Badge";
@@ -92,6 +93,7 @@ const empty = {
 export default function Systems() {
   const { t } = useTranslation();
   const nav = useNavigate();
+  const amOn = useAmEnabled();
   const { groupId, projectId, refreshSystems } = useGroup();
   const [rows, setRows] = useState<System[]>([]);
   const [groups, setGroups] = useState<any[]>([]);
@@ -564,29 +566,39 @@ export default function Systems() {
                   classNames={{ field: "rounded-lg" }}
                 />
               </Field>
-              <Field label={t("systems.amTeam")} tip={t("systems.amTeamTooltip")}>
-                <AmSelect
-                  kind="team"
-                  value={form.values.am_team_id}
-                  onChange={(v) =>
-                    form.reset({
-                      ...form.values,
-                      am_team_id: v ?? "",
-                      am_agent_id: "",
-                    })
-                  }
-                  placeholder={t("systems.amTeamPlaceholder")}
-                />
-              </Field>
-              <Field label={t("systems.amAgent")} tip={t("systems.amAgentTooltip")}>
-                <AmSelect
-                  kind="agent"
-                  teamId={effTeam}
-                  value={form.values.am_agent_id}
-                  onChange={(v) => form.set("am_agent_id", v ?? "")}
-                  placeholder={t("systems.amAgentPlaceholder")}
-                />
-              </Field>
+              {amOn && (
+                <Field
+                  label={t("systems.amTeam")}
+                  tip={t("systems.amTeamTooltip")}
+                >
+                  <AmSelect
+                    kind="team"
+                    value={form.values.am_team_id}
+                    onChange={(v) =>
+                      form.reset({
+                        ...form.values,
+                        am_team_id: v ?? "",
+                        am_agent_id: "",
+                      })
+                    }
+                    placeholder={t("systems.amTeamPlaceholder")}
+                  />
+                </Field>
+              )}
+              {amOn && (
+                <Field
+                  label={t("systems.amAgent")}
+                  tip={t("systems.amAgentTooltip")}
+                >
+                  <AmSelect
+                    kind="agent"
+                    teamId={effTeam}
+                    value={form.values.am_agent_id}
+                    onChange={(v) => form.set("am_agent_id", v ?? "")}
+                    placeholder={t("systems.amAgentPlaceholder")}
+                  />
+                </Field>
+              )}
               {!editing?.id ? (
                 <Field
                   label={t("systems.runBootstrap")}

@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import { api, isAdmin } from "../api";
 import type { MsgKey } from "../i18n";
 import AmSelect from "../components/AmSelect";
+import { useAmEnabled } from "../am";
 import Page from "../Page";
 import DataTable, { type DataTableColumn } from "../ui/DataTable";
 import Badge, { type BadgeTone } from "../ui/Badge";
@@ -111,6 +112,7 @@ const dangerLinkClass =
 export default function Groups() {
   const { t } = useTranslation();
   const nav = useNavigate();
+  const amOn = useAmEnabled();
   const [rows, setRows] = useState<Group[]>([]);
   const [keyword, setKeyword] = useState("");
   const [mkeyword, setMkeyword] = useState("");
@@ -444,19 +446,25 @@ export default function Groups() {
           "—"
         ),
     },
-    {
-      title: t("groups.colAmTeam"),
-      dataIndex: "am_team_id",
-      width: 130,
-      render: (v) =>
-        v ? (
-          <span className="truncate">
-            {teamNames[v] || <span className="font-mono text-[11px]">{v}</span>}
-          </span>
-        ) : (
-          "—"
-        ),
-    },
+    ...(amOn
+      ? ([
+          {
+            title: t("groups.colAmTeam"),
+            dataIndex: "am_team_id",
+            width: 130,
+            render: (v: string) =>
+              v ? (
+                <span className="truncate">
+                  {teamNames[v] || (
+                    <span className="font-mono text-[11px]">{v}</span>
+                  )}
+                </span>
+              ) : (
+                "—"
+              ),
+          },
+        ] satisfies DataTableColumn<Group>[])
+      : []),
     {
       title: t("groups.colLlm"),
       width: 100,
@@ -791,14 +799,16 @@ export default function Groups() {
                   </MultiSelectContent>
                 </MultiSelect>
               </Field>
-              <Field label={t("groups.amTeam")}>
-                <AmSelect
-                  kind="team"
-                  value={form.values.am_team_id}
-                  onChange={(v) => form.set("am_team_id", v ?? "")}
-                  placeholder={t("groups.amTeamPlaceholder")}
-                />
-              </Field>
+              {amOn && (
+                <Field label={t("groups.amTeam")}>
+                  <AmSelect
+                    kind="team"
+                    value={form.values.am_team_id}
+                    onChange={(v) => form.set("am_team_id", v ?? "")}
+                    placeholder={t("groups.amTeamPlaceholder")}
+                  />
+                </Field>
+              )}
               <Input
                 label={t("groups.llmBaseUrl")}
                 value={form.values.llm_base_url}

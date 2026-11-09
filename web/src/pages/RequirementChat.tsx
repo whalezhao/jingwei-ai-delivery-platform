@@ -37,6 +37,7 @@ import {
 import Markdown from "react-markdown";
 import { useTranslation } from "react-i18next";
 import AmSelect from "../components/AmSelect";
+import { useAmEnabled } from "../am";
 import PersonAvatar from "../components/PersonAvatar";
 import { LogoMark } from "../components/Logo";
 import DocPreview from "../components/DocPreview";
@@ -1268,6 +1269,7 @@ export default function RequirementChat() {
   const { id } = useParams();
   const reqId = Number(id);
   const nav = useNavigate();
+  const amOn = useAmEnabled();
 
   const [req, setReq] = useState<any>(null);
   // 需求已被他人认领：后端 403，页面只给提示，不渲染详情
@@ -2487,43 +2489,45 @@ export default function RequirementChat() {
                 >
                   <Paperclip size={14} />
                 </button>
-                <Popover trigger="hover" side="top" align="start" sideOffset={8}>
-                  <PopoverTrigger>
-                    <button type="button" className={`rc-tool-btn${teamId || agentId ? " on" : ""}`}>
-                      <Users size={14} />
-                      <span>{agentName || teamName || t("reqChat.assets")}</span>
-                    </button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-[280px] p-3">
-                    <div className="rc-assets" ref={assetsRef}>
-                      <AmSelect
-                        kind="team"
-                        size="small"
-                        style={{ width: 240 }}
-                        prefix={<Building2 size={14} />}
-                        value={teamId}
-                        onLabelChange={setTeamName}
-                        onChange={(v) => {
-                          setTeamId(v ?? null);
-                          setAgentId(null); // 专家属于团队：换团队后旧专家不再适用
-                        }}
-                        placeholder={t("reqChat.teamDefault")}
-                      />
-                      <AmSelect
-                        kind="agent"
-                        size="small"
-                        teamId={teamId ?? undefined}
-                        style={{ width: 240 }}
-                        prefix={<Bot size={14} />}
-                        value={agentId}
-                        onLabelChange={setAgentName}
-                        onChange={(v) => setAgentId(v ?? null)}
-                        placeholder={t("reqChat.agentDefault")}
-                      />
-                      <div className="rc-assets-tip">{t("reqChat.senderTip")}</div>
-                    </div>
-                  </PopoverContent>
-                </Popover>
+                {amOn && (
+                  <Popover trigger="hover" side="top" align="start" sideOffset={8}>
+                    <PopoverTrigger>
+                      <button type="button" className={`rc-tool-btn${teamId || agentId ? " on" : ""}`}>
+                        <Users size={14} />
+                        <span>{agentName || teamName || t("reqChat.assets")}</span>
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-[280px] p-3">
+                      <div className="rc-assets" ref={assetsRef}>
+                        <AmSelect
+                          kind="team"
+                          size="small"
+                          style={{ width: 240 }}
+                          prefix={<Building2 size={14} />}
+                          value={teamId}
+                          onLabelChange={setTeamName}
+                          onChange={(v) => {
+                            setTeamId(v ?? null);
+                            setAgentId(null); // 专家属于团队：换团队后旧专家不再适用
+                          }}
+                          placeholder={t("reqChat.teamDefault")}
+                        />
+                        <AmSelect
+                          kind="agent"
+                          size="small"
+                          teamId={teamId ?? undefined}
+                          style={{ width: 240 }}
+                          prefix={<Bot size={14} />}
+                          value={agentId}
+                          onLabelChange={setAgentName}
+                          onChange={(v) => setAgentId(v ?? null)}
+                          placeholder={t("reqChat.agentDefault")}
+                        />
+                        <div className="rc-assets-tip">{t("reqChat.senderTip")}</div>
+                      </div>
+                    </PopoverContent>
+                  </Popover>
+                )}
                 {chatMode === "plan" && (
                   <Popover trigger="hover" side="top" align="start" sideOffset={8}>
                     <PopoverTrigger>

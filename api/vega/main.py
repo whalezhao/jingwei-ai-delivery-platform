@@ -50,6 +50,9 @@ async def lifespan(app: FastAPI):
             except Exception:  # noqa: BLE001
                 logging.getLogger(__name__).warning("octo 全局 token 解密失败（VEGA_SECRET_KEY 换过？）")
 
+        # 集成中心录入的 agent-memory proxy 地址：装进进程内 settings
+        await am.apply_proxy_url(db)
+
     sched = None
     if not get_settings().database_url.startswith("sqlite") or _scheduler_wanted():
         from .scheduler import start_scheduler
@@ -82,6 +85,7 @@ def create_app() -> FastAPI:
     )
     for r in (am, auth, people, groups, projects, systems, requirements, tasks, nodes, runner_api, webhooks, integrations, setup, workbench, code_stats):
         app.include_router(r.router)
+    app.include_router(am.panel_router)
     return app
 
 

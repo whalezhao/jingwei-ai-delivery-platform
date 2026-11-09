@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
+import { useAmEnabled } from "../am";
 import AvatarPicker from "./AvatarPicker";
 import { Button } from "./motion/button/index";
 import {
@@ -54,6 +55,7 @@ export default function ProfileModal({
   onClose: () => void;
 }) {
   const { t } = useTranslation();
+  const amOn = useAmEnabled();
   const form = useForm(emptyProfile);
   const [pw, setPw] = useState(emptyPw);
   const [pwErr, setPwErr] = useState("");
@@ -225,14 +227,18 @@ export default function ProfileModal({
                   onChange={(v) => form.set("llm_effort", v)}
                 />
               </Field>
-              <Input
-                label={t("profileModal.amKeyLabel")}
-                type="password"
-                value={form.values.am_user_key}
-                onChange={(v) => form.set("am_user_key", v)}
-                placeholder={me.has_am_key ? t("profileModal.configuredKeep") : ""}
-                classNames={{ field: "rounded-lg" }}
-              />
+              {amOn && (
+                <Input
+                  label={t("profileModal.amKeyLabel")}
+                  type="password"
+                  value={form.values.am_user_key}
+                  onChange={(v) => form.set("am_user_key", v)}
+                  placeholder={
+                    me.has_am_key ? t("profileModal.configuredKeep") : ""
+                  }
+                  classNames={{ field: "rounded-lg" }}
+                />
+              )}
 
               <Section>{t("profileModal.pwSection")}</Section>
               <Input

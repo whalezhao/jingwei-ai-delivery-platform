@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { api, isAdmin } from "../api";
 import type { MsgKey } from "../i18n";
 import { useGroup } from "../group";
+import { useAmEnabled } from "../am";
 import Page from "../Page";
 import PersonAvatar from "../components/PersonAvatar";
 import AvatarPicker from "../components/AvatarPicker";
@@ -82,6 +83,7 @@ const empty = {
 export default function People() {
   const { t } = useTranslation();
   const { groupId } = useGroup();
+  const amOn = useAmEnabled();
   const [rows, setRows] = useState<Person[]>([]);
   const [editing, setEditing] = useState<Person | null>(null);
   const [keyword, setKeyword] = useState("");
@@ -552,16 +554,18 @@ export default function People() {
                   onChange={(v) => form.set("llm_effort", v)}
                 />
               </Field>
-              <Input
-                type="password"
-                label={t("people.amKey")}
-                value={form.values.am_user_key}
-                onChange={(v) => form.set("am_user_key", v)}
-                placeholder={
-                  editing?.has_am_key ? t("people.configuredKeep") : ""
-                }
-                classNames={{ field: "rounded-lg" }}
-              />
+              {amOn && (
+                <Input
+                  type="password"
+                  label={t("people.amKey")}
+                  value={form.values.am_user_key}
+                  onChange={(v) => form.set("am_user_key", v)}
+                  placeholder={
+                    editing?.has_am_key ? t("people.configuredKeep") : ""
+                  }
+                  classNames={{ field: "rounded-lg" }}
+                />
+              )}
             </div>
             <div className="flex justify-end gap-2 border-t border-border px-6 py-3">
               <Button

@@ -204,12 +204,13 @@ async def run_claude(
         raise ClaudeError(f"claude -p 退出码 {rc}: {terminal or '(无 result 事件)'} | {stderr[-300:]}")
 
 
-def plan_args(session_id: str, resume: bool) -> list[str]:
+def plan_args(session_id: str, resume: bool, am_url: str | None = None) -> list[str]:
     flag = "--resume" if resume else "--session-id"
     # 问答跑在常驻仓基线目录（多个任务共用的检出），Bash 不能整体放行：
     # 一条写命令就把基线弄脏，后续 fetch/checkout 全被本地改动挡住。
     # 只留只读工具 + memory-bridge 的检索 curl（限定 agent-memory 代理地址）。
-    am = get_settings().am_base_url.rstrip("/")
+    # am_url 由 runner 从任务 payload 的 claude_env 推出来，跟集成中心配置保持一致。
+    am = (am_url or get_settings().am_base_url).rstrip("/")
     return [
         "--permission-mode",
         "plan",
@@ -241,7 +242,9 @@ def _rule_path(p: str) -> str:
     return "/" + p
 
 
-def egm_plan_args(session_id: str, resume: bool, artifact_dir: str) -> list[str]:
+def egm_plan_args(
+    session_id: str, resume: bool, artifact_dir: str, am_url: str | None = None
+) -> list[str]:
     """EGM 方案轮（brainstorm / draft / resolve）。
 
     与 plan_args 的差别只有两处，但都是硬需求：要开子代理（六视角、评委），
@@ -251,7 +254,7 @@ def egm_plan_args(session_id: str, resume: bool, artifact_dir: str) -> list[str]
     git status 断言兜底。
     """
     flag = "--resume" if resume else "--session-id"
-    am = get_settings().am_base_url.rstrip("/")
+    am = (am_url or get_settings().am_base_url).rstrip("/")
     art = _rule_path(artifact_dir)
     return [
         "--allowedTools",

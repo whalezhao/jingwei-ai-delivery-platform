@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +13,13 @@ from ..config import get_settings
 from ..crypto import encrypt
 from ..db import get_db
 from ..models import AppSetting, DevGroup, GitlabEvent, MrReview, NotifyLog, Person, System
+from .am import (
+    AM_ENABLED_KEY,
+    AM_PROXY_KEY,
+    AM_URL_KEY,
+    apply_proxy_url,
+    env_proxy_url,
+)
 
 router = APIRouter(prefix="/api/integrations", tags=["integrations"])
 
@@ -56,6 +63,72 @@ async def set_octo(
     await db.commit()
     env = bool(get_settings().octo_bot_token)
     return {"has_token": bool(token) or env, "source": "db" if token else ("env" if env else None)}
+
+
+class AmIn(BaseModel):
+    url: str | None = None  # 空 = 清除（回退 .env 的 VEGA_AM_HUB_BASE_URL）
+    proxy_url: str | None = None  # 空 = 清除（回退 .env 的 VEGA_AM_BASE_URL）
+    enabled: bool | None = None  # 缺省 = 不改开关
+
+
+async def _am_config(db: AsyncSession) -> dict:
+    row = await db.get(AppSetting, AM_URL_KEY)
+    prow = await db.get(AppSetting, AM_PROXY_KEY)
+    on = await db.get(AppSetting, AM_ENABLED_KEY)
+    return {
+        "url": row.value if row and row.value else get_settings().am_hub_base_url,
+        "source": "db" if row and row.value else "env",
+        "proxy_url": prow.value if prow and prow.value else env_proxy_url(),
+        "proxy_source": "db" if prow and prow.value else "env",
+        "enabled": bool(on and on.value == "1"),
+    }
+
+
+@router.get("/am")
+async def am_config(
+    db: AsyncSession = Depends(get_db), _me: Person = Depends(require_admin)
+) -> dict:
+    """agent-memory 面板/代理地址与启用开关：反代、免登校验、团队/资产选择、LLM 流量都读它。"""
+    return await _am_config(db)
+
+
+async def _set_url(db: AsyncSession, key: str, value: str) -> None:
+    row = await db.get(AppSetting, key)
+    if value:
+        if row:
+            row.value = value
+        else:
+            db.add(AppSetting(key=key, value=value))
+    elif row:
+        await db.delete(row)
+
+
+@router.put("/am")
+async def set_am(
+    data: AmIn, db: AsyncSession = Depends(get_db), _me: Person = Depends(require_admin)
+) -> dict:
+    url = (data.url or "").strip().rstrip("/")
+    proxy = (data.proxy_url or "").strip().rstrip("/")
+    for value, label in ((url, "地址"), (proxy, "代理地址")):
+        if value and not value.startswith(("http://", "https://")):
+            raise HTTPException(400, f"{label}需以 http:// 或 https:// 开头")
+    if data.enabled and not (url or get_settings().am_hub_base_url.strip()):
+        raise HTTPException(400, "启用前请先填写面板地址")
+    if data.url is not None:
+        await _set_url(db, AM_URL_KEY, url)
+    if data.proxy_url is not None:
+        await _set_url(db, AM_PROXY_KEY, proxy)
+    if data.enabled is not None:
+        on = await db.get(AppSetting, AM_ENABLED_KEY)
+        if data.enabled and not on:
+            db.add(AppSetting(key=AM_ENABLED_KEY, value="1"))
+        elif data.enabled:
+            on.value = "1"
+        elif on:
+            await db.delete(on)
+    await db.commit()
+    await apply_proxy_url(db)
+    return await _am_config(db)
 
 
 @router.get("/octo-groups")
