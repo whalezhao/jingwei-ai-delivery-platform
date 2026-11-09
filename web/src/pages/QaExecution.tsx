@@ -1,6 +1,6 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
-import { Bot, RefreshCw, X } from "lucide-react";
+import { Bot, RefreshCw, Trophy, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import Page from "../Page";
 import type { MsgKey } from "../i18n";
@@ -10,10 +10,6 @@ import MiniTable from "../ui/MiniTable";
 import Badge, { type BadgeTone } from "../ui/Badge";
 import { toast } from "../ui/toast";
 import { Button } from "../components/motion/button/index";
-import {
-  CenterMorphModal,
-  CenterMorphModalContent,
-} from "../components/motion/center-morph-modal";
 import { Drawer } from "../components/motion/drawer";
 import type { TableColumn } from "../components/motion/table";
 
@@ -40,6 +36,20 @@ const BATCH_ST: Record<string, [BadgeTone, MsgKey]> = {
 
 const ACTIVE = new Set(["queued", "preparing", "running", "parsing"]);
 
+// 评估结论的枚举是给机器看的，界面上换成中文
+const VERDICT: Record<string, [BadgeTone, MsgKey]> = {
+  healthy: ["success", "qa.exec.vHealthy"],
+  risky: ["warning", "qa.exec.vRisky"],
+  needs_attention: ["danger", "qa.exec.vAttention"],
+};
+
+// 逐条诊断的责任归属：这条失败该修谁
+const OWNER: Record<string, [BadgeTone, MsgKey]> = {
+  case: ["info", "qa.exec.ownerCase"],
+  product: ["danger", "qa.exec.ownerProduct"],
+  env: ["neutral", "qa.exec.ownerEnv"],
+};
+
 export default function QaExecutionPage() {
   const { t } = useTranslation();
   const { bid } = useParams();
@@ -47,7 +57,7 @@ export default function QaExecutionPage() {
   const [caseRun, setCaseRun] = useState<QaRunItem | null>(null);
   const [cases, setCases] = useState<any[]>([]);
   const [ai, setAi] = useState<any>(null);
-  const [aiOpen, setAiOpen] = useState(false);
+  const [aiLoaded, setAiLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const load = async () => {
@@ -55,6 +65,7 @@ export default function QaExecutionPage() {
       setBatch(await qa<QaBatchDetail>(`/api/batches/${bid}`));
       const a = await qa(`/api/batches/${bid}/ai-check`).catch(() => null);
       setAi(a);
+      setAiLoaded(true);
     } catch (e: any) {
       toast.error(e.message);
     }
@@ -62,6 +73,37 @@ export default function QaExecutionPage() {
   useEffect(() => {
     load();
   }, [bid]);
+
+  const allPassed =
+    !!batch &&
+    batch.total > 0 &&
+    batch.failed === 0 &&
+    batch.passed === batch.total;
+  const hasFailure =
+    batch?.status === "failed" ||
+    batch?.status === "partial" ||
+    batch?.status === "completed_with_failures" ||
+    (batch?.failed ?? 0) > 0;
+  const autoTried = useRef(false);
+
+  // 有失败才评估；成功没有评估的意义。后端在批次收尾时也会入队一次，这里只补漏。
+  useEffect(() => {
+    if (!hasFailure || !aiLoaded || autoTried.current) return;
+    if (ai && ai.status !== "none") return;
+    autoTried.current = true;
+    qa(`/api/batches/${bid}/ai-check`, { method: "POST" })
+      .then(setAi)
+      .catch(() => {});
+  }, [hasFailure, aiLoaded, ai, bid]);
+
+  // 评估在 API 进程里异步跑，pending 时自动轮询，不用手动刷新
+  useEffect(() => {
+    if (ai?.status !== "pending") return;
+    const id = setInterval(() => {
+      qa(`/api/batches/${bid}/ai-check`).then(setAi).catch(() => {});
+    }, 4000);
+    return () => clearInterval(id);
+  }, [ai?.status, bid]);
 
   const report = async (run: QaRunItem) => {
     try {
@@ -121,17 +163,20 @@ export default function QaExecutionPage() {
   };
 
   const runAi = async () => {
+    setBusy(true);
     try {
       const r = await qa(`/api/batches/${bid}/ai-check`, { method: "POST" });
       setAi(r);
-      setAiOpen(true);
       toast.info(t("qa.exec.aiQueued"));
     } catch (e: any) {
       toast.error(e.message);
+    } finally {
+      setBusy(false);
     }
   };
 
   if (!batch) return null;
+  const aiVerdict = ai?.verdict ? VERDICT[ai.verdict] : undefined;
   const canRerun = batch.status !== "running" && batch.status !== "queued";
   const batchPair = BATCH_ST[batch.status];
 
@@ -146,7 +191,6 @@ export default function QaExecutionPage() {
     [t("qa.stats.cases"), `${batch.passed}/${batch.total} ${t("qa.stats.passed")}`],
     [t("qa.batch.failed"), batch.failed],
     [t("qa.batch.duration"), dur(batch.duration_ms)],
-    [t("qa.exec.aiVerdict"), batch.ai_verdict || ai?.verdict || "—"],
   ];
 
   const columns: DataTableColumn<QaRunItem>[] = [
@@ -270,10 +314,6 @@ export default function QaExecutionPage() {
             <RefreshCw className="size-4" />
             {t("qa.common.refresh")}
           </Button>
-          <Button variant="outline" size="sm" className="rounded-lg" onClick={runAi}>
-            <Bot className="size-4" />
-            {t("qa.exec.aiCheck")}
-          </Button>
           {canRerun && (
             <Button variant="outline" size="sm" className="rounded-lg" onClick={rerunBatch} disabled={busy}>
               {t("qa.exec.rerunFailed")}
@@ -290,6 +330,118 @@ export default function QaExecutionPage() {
           </div>
         ))}
       </div>
+
+      {allPassed ? (
+        <div className="mb-4 flex items-center gap-4 rounded-xl border border-success/25 bg-success/5 p-5">
+          <span className="grid size-11 shrink-0 place-items-center rounded-full bg-success/10 text-success">
+            <Trophy className="size-5" />
+          </span>
+          <div className="min-w-0">
+            <div className="text-[15px] font-semibold text-foreground">{t("qa.exec.passed")}</div>
+            <div className="mt-1 text-[13px] text-muted-foreground">
+              {t("qa.exec.passedSummary", {
+                passed: batch.passed,
+                total: batch.total,
+                duration: dur(batch.duration_ms),
+              })}
+            </div>
+            <div className="mt-0.5 text-[12px] text-muted-foreground">{t("qa.exec.passedNote")}</div>
+          </div>
+        </div>
+      ) : (
+        <div className="mb-4 rounded-xl border border-border bg-card p-5">
+          <div className="flex flex-wrap items-center gap-2">
+            <Bot className="size-4 text-primary" />
+            <span className="text-[14px] font-semibold text-foreground">{t("qa.exec.aiCheck")}</span>
+            {ai?.status === "done" && (
+              <Badge tone={aiVerdict?.[0] ?? "neutral"}>
+                {aiVerdict ? t(aiVerdict[1]) : ai.verdict || "—"}
+              </Badge>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              className="ml-auto rounded-lg"
+              onClick={runAi}
+              disabled={busy || ai?.status === "pending"}
+            >
+              <RefreshCw className="size-3.5" />
+              {t("qa.exec.reassess")}
+            </Button>
+          </div>
+          <div className="mt-3 text-[13px] leading-relaxed text-foreground">
+            {ai?.status === "done" ? (
+              <div className="space-y-3">
+                {ai.summary && <p className="m-0 text-[14px]">{ai.summary}</p>}
+                {ai.reasons?.length > 0 && (
+                  <div>
+                    <div className="mb-1 font-semibold">{t("qa.exec.findings")}</div>
+                    <ul className="m-0 list-disc pl-5 text-muted-foreground">
+                      {ai.reasons.map((r: string, i: number) => (
+                        <li key={i}>{r}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {ai.diagnoses?.length > 0 && (
+                  <div>
+                    <div className="mb-1 font-semibold">{t("qa.exec.diagnoses")}</div>
+                    <ul className="m-0 list-disc pl-5">
+                      {ai.diagnoses.map((d: any, i: number) => (
+                        <li key={i} className="mb-1.5">
+                          <div className="flex flex-wrap items-center gap-2">
+                            {d.case && <span className="font-medium">{d.case}</span>}
+                            {d.owner && (
+                              <Badge tone={OWNER[d.owner]?.[0] ?? "neutral"}>
+                                {OWNER[d.owner] ? t(OWNER[d.owner][1]) : d.owner}
+                              </Badge>
+                            )}
+                          </div>
+                          {d.cause && <div className="mt-0.5">{d.cause}</div>}
+                          {d.action && (
+                            <div className="mt-0.5 text-[12px] text-muted-foreground">
+                              {t("qa.exec.suggestion")}
+                              {d.action}
+                            </div>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {ai.advice?.length > 0 && (
+                  <div>
+                    <div className="mb-1 font-semibold">{t("qa.exec.advice")}</div>
+                    <ul className="m-0 list-disc pl-5 text-muted-foreground">
+                      {ai.advice.map((r: string, i: number) => (
+                        <li key={i}>{r}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                <div className="text-[12px] text-muted-foreground">
+                  {[
+                    ai.model_name ? t("qa.exec.byModel", { model: ai.model_name }) : null,
+                    ai.created_at ? new Date(ai.created_at).toLocaleString() : null,
+                    t("qa.exec.disclaimer"),
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </div>
+              </div>
+            ) : ai?.status === "failed" ? (
+              <span className="text-muted-foreground">
+                {t("qa.exec.aiUnavailable")}
+                {ai.error ? ` · ${ai.error}` : ""}
+              </span>
+            ) : ai?.status === "pending" ? (
+              <span className="text-muted-foreground">{t("qa.exec.aiPending")}</span>
+            ) : (
+              <span className="text-muted-foreground">{t("qa.exec.aiEmpty")}</span>
+            )}
+          </div>
+        </div>
+      )}
 
       <DataTable<QaRunItem>
         rowKey="id"
@@ -331,59 +483,6 @@ export default function QaExecutionPage() {
           </div>
         </div>
       </Drawer>
-
-      <CenterMorphModal
-        open={aiOpen}
-        onOpenChange={(next) => {
-          if (!next) setAiOpen(false);
-        }}
-      >
-        <CenterMorphModalContent ariaLabel={t("qa.exec.aiCheck")} className="max-w-[680px]">
-          <div className="p-6">
-            <h2 className="m-0 text-lg font-semibold tracking-[-0.01em] text-foreground">
-              {t("qa.exec.aiCheck")}
-            </h2>
-            {ai ? (
-              <div className="mt-4 text-[13px] leading-relaxed text-foreground">
-                <p className="m-0 flex flex-wrap items-center gap-2">
-                  <Badge tone={ai.verdict === "pass" ? "success" : ai.verdict === "fail" ? "danger" : "neutral"}>
-                    {ai.verdict || ai.status}
-                  </Badge>
-                  {ai.summary}
-                </p>
-                {ai.reasons?.length > 0 && (
-                  <>
-                    <h4 className="mb-1 mt-3 text-[13px] font-semibold">{t("qa.exec.reasons")}</h4>
-                    <ul className="m-0 list-disc pl-5">
-                      {ai.reasons.map((r: string, i: number) => (
-                        <li key={i}>{r}</li>
-                      ))}
-                    </ul>
-                  </>
-                )}
-                {ai.advice?.length > 0 && (
-                  <>
-                    <h4 className="mb-1 mt-3 text-[13px] font-semibold">{t("qa.exec.advice")}</h4>
-                    <ul className="m-0 list-disc pl-5">
-                      {ai.advice.map((r: string, i: number) => (
-                        <li key={i}>{r}</li>
-                      ))}
-                    </ul>
-                  </>
-                )}
-                {ai.error && <p className="muted mt-3">{ai.error}</p>}
-              </div>
-            ) : (
-              <p className="mt-4 text-[13px] text-muted-foreground">{t("qa.exec.aiRunning")}</p>
-            )}
-            <div className="mt-6 flex justify-end">
-              <Button size="sm" className="rounded-lg" onClick={() => setAiOpen(false)}>
-                {t("common.close")}
-              </Button>
-            </div>
-          </div>
-        </CenterMorphModalContent>
-      </CenterMorphModal>
     </Page>
   );
 }

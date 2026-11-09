@@ -164,7 +164,7 @@ export interface QaVar {
 
 export interface QaEnv {
   id: string;
-  system_id: number;
+  project_id: number;
   name: string;
   base_url: string | null;
   is_default: boolean;
@@ -199,6 +199,7 @@ export interface QaBatch {
   name: string;
   trigger: string;
   environment_name: string | null;
+  pinned: boolean;
   parent_batch_id: string | null;
   created_at: string;
   created_by_name: string | null;
@@ -280,6 +281,23 @@ export interface QaSummary {
   started_at: string | null;
   ended_at: string | null;
   updated_at: string | null;
+}
+
+/** 需求卡里的执行记录（run 维度） */
+export interface QaTestRun {
+  run_id: string;
+  batch_id: string;
+  task_id: string;
+  name: string | null;
+  trigger: string | null;
+  environment_name: string | null;
+  status: string;
+  total: number;
+  passed: number;
+  failed: number;
+  created_at: string | null;
+  started_at: string | null;
+  ended_at: string | null;
 }
 
 export interface QaWorkerStatus {

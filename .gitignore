@@ -20,3 +20,6 @@ __pycache__/
 node_modules/
 dist/
 *.tsbuildinfo
+
+# 本地工具
+.serena/

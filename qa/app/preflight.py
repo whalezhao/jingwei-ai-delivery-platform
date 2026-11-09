@@ -10,11 +10,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .api.task_common import resolve_run_groups
 from .config import get_settings
-from .environments import EnvironmentResolutionError, resolve_run_environments
+from .environments import (
+    EnvironmentResolutionError,
+    environment_for_system,
+    resolve_run_environments,
+)
 from .modelconfig import missing_fields
 from .models import (
     System,
-    SystemEnvironment,
     SystemModelConfig,
     SystemModelHealth,
     TestTask,
@@ -124,14 +127,9 @@ async def run_system_preflight(
             )
         )
 
-    env = (
-        await db.execute(
-            select(SystemEnvironment).where(
-                SystemEnvironment.system_id == system.id,
-                SystemEnvironment.name == environment_name,
-            )
-        )
-    ).scalar_one_or_none()
+    env = await environment_for_system(
+        db, system.id, environment_name=environment_name
+    )
     url = env.base_url if env is not None else None
     async with httpx.AsyncClient(
         timeout=_PROBE_TIMEOUT, trust_env=False, follow_redirects=False
@@ -198,7 +196,9 @@ async def run_preflight(
             db, task, system_ids, environment_name=environment_name
         )
         checks.append(
-            _check("environment", True, f"环境「{environment_name}」在所选系统下都存在")
+            _check(
+                "environment", True, f"环境「{environment_name}」在所选系统所属项目下都存在"
+            )
         )
     except EnvironmentResolutionError as exc:
         checks.append(_check("environment", False, str(exc)))

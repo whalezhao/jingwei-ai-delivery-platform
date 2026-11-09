@@ -54,7 +54,9 @@ async def apply_summary(db: AsyncSession, run: Run, data: SummaryData) -> None:
         )
         await db.execute(
             stmt.on_conflict_do_update(
-                constraint="uq_case_results_identity",
+                # 按列而不是约束名：现有库里的约束叫 uq_qa_case_results_identity，
+                # 写死名字会在收尾阶段炸掉（run 永远停在 parsing）
+                index_elements=["run_id", "midscene_document_id", "case_index"],
                 set_={
                     "test_case_id": test_case_id,
                     "name": outcome.name,

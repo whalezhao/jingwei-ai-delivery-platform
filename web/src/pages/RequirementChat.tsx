@@ -20,6 +20,7 @@ import {
   Globe,
   Inbox,
   Lightbulb,
+  ListChecks,
   LoaderCircle,
   Maximize2,
   MessageSquare,
@@ -28,6 +29,7 @@ import {
   Pencil,
   PenLine,
   Search,
+  Target,
   Users,
   Wrench,
   X,
@@ -41,7 +43,7 @@ import DocPreview from "../components/DocPreview";
 import { rawNode } from "../eventNodes";
 import { api, isAdmin, token } from "../api";
 import i18n, { type MsgKey } from "../i18n";
-import { pct, qa, type QaEnv, type QaSummary } from "../qa";
+import { qa, type QaEnv, type QaTestRun } from "../qa";
 import { Button } from "../components/motion/button/index";
 import { Drawer } from "../components/motion/drawer";
 import {
@@ -102,6 +104,29 @@ const STATUS: Record<string, [BadgeTone, MsgKey]> = {
   online: ["violet", "requirements.status.online"],
 };
 
+
+/** 需求卡里的执行记录状态：与 QaExecution 的 run 标签保持一致 */
+const QA_RUN_ST: Record<string, [BadgeTone, MsgKey]> = {
+  queued: ["neutral", "qa.status.queued"],
+  preparing: ["info", "qa.runStatus.preparing"],
+  running: ["info", "qa.status.running"],
+  parsing: ["info", "qa.runStatus.parsing"],
+  succeeded: ["success", "qa.runStatus.succeeded"],
+  failed: ["danger", "qa.status.failed"],
+  cancelled: ["neutral", "qa.status.cancelled"],
+  timed_out: ["danger", "qa.runStatus.timed_out"],
+};
+
+/** 执行时间压到「月/日 时:分」，0.3 米宽的侧栏里放得下 */
+const fmtQaTime = (iso: string | null) =>
+  iso
+    ? new Date(iso).toLocaleString(undefined, {
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : "";
 /** 空对话时的起手示例（按当前讨论模式给，比一个光标干等着好）。 */
 const examplesFor = (mode: "requirement" | "plan") =>
   mode === "requirement"
@@ -1258,8 +1283,8 @@ export default function RequirementChat() {
   // 当前展开的批注角标 key（章节规范化标题或 "doc"）；方案一滚动就收起
   const [annoOpen, setAnnoOpen] = useState<string | null>(null);
   const [reviewBusy, setReviewBusy] = useState(false);
-  // 测试域：需求维度的最近一次测试摘要（QA 后台不可达时保持 null，不阻塞页面）
-  const [qaSummary, setQaSummary] = useState<QaSummary | null>(null);
+  // 测试域：需求关联的最新几条执行记录（QA 后台不可达时保持空，不阻塞页面）
+  const [qaRuns, setQaRuns] = useState<QaTestRun[]>([]);
   const [qaEnvs, setQaEnvs] = useState<QaEnv[]>([]);
   const [qaOpen, setQaOpen] = useState(false);
   const [qaEnv, setQaEnv] = useState<string | undefined>();
@@ -1368,9 +1393,9 @@ export default function RequirementChat() {
   }, []);
 
   const loadQa = () =>
-    qa<QaSummary>(`/api/requirements/${reqId}/test-summary`)
-      .then(setQaSummary)
-      .catch(() => setQaSummary(null));
+    qa<QaTestRun[]>(`/api/requirements/${reqId}/tests?limit=3`)
+      .then(setQaRuns)
+      .catch(() => setQaRuns([]));
   useEffect(() => {
     loadQa();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1899,16 +1924,6 @@ export default function RequirementChat() {
       </div>
     );
   const st = STATUS[req.status];
-  const qaTone: BadgeTone =
-    qaSummary?.status === "completed"
-      ? "success"
-      : qaSummary?.status === "completed_with_failures"
-        ? "warning"
-        : qaSummary?.status === "failed"
-          ? "danger"
-          : qaSummary?.status === "running"
-            ? "info"
-            : "neutral";
   const chatable = req.status === "claimed";
   // 阶段：需求文档未定稿 → 需求讨论（AI 可改文档）；已定稿 → 方案讨论；方案定稿 → 开发阶段
   const planFinal = ["confirmed", "archived", "online"].includes(req.status);
@@ -2254,6 +2269,7 @@ export default function RequirementChat() {
             )}
           </div>
         <div className="chat-box">
+          <span className="chat-glow" aria-hidden />
           {(ctxDoc || ctxPlan) && req.status !== "pool" && (
             <div className="rc-filecards">
               <span className="rc-filecards-label">{t("reqChat.introduced")}</span>
@@ -2311,11 +2327,19 @@ export default function RequirementChat() {
               {msgs.length === 0 && !busy && !streaming && (
                 <div className="rc-examples">
                   <div className="rc-examples-title">{t("reqChat.tryThese")}</div>
-                  {examples.map((e, i) => (
-                    <button key={i} type="button" className="rc-example" onClick={() => send(e)}>
-                      {e}
-                    </button>
-                  ))}
+                  <div className="rc-example-grid">
+                    {examples.map((e, i) => {
+                      const Icon = [Target, ListChecks, FileText][i] ?? Lightbulb;
+                      return (
+                        <button key={i} type="button" className="rc-example" onClick={() => send(e)}>
+                          <span className="rc-example-icon">
+                            <Icon size={14} />
+                          </span>
+                          <span className="rc-example-row">{e}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
               {(msgs.length > 0 || busy || streaming) && (
@@ -2853,27 +2877,40 @@ export default function RequirementChat() {
             </div>
               <div className="panel rc-qa-card">
                 <h4>{t("qa.req.cardTitle")}</h4>
-                {qaSummary && qaSummary.status !== "none" ? (
-                  <div className="flex flex-col gap-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Badge tone={qaTone}>{t(`qa.status.${qaSummary.status}` as MsgKey)}</Badge>
-                      {qaSummary.pass_rate != null && (
-                        <span className="mono">{pct(qaSummary.pass_rate)}</span>
-                      )}
-                      {qaSummary.total > 0 && (
-                        <span className="muted">
-                          {qaSummary.passed}/{qaSummary.total}
-                        </span>
-                      )}
-                    </div>
-                    {qaSummary.batch_id && (
-                      <Link to={`/qa/batches/${qaSummary.batch_id}`}>{t("qa.batch.detail")}</Link>
-                    )}
-                  </div>
+                {qaRuns.length > 0 ? (
+                  <ul className="rc-qa-runs">
+                    {qaRuns.map((r) => {
+                      // run 成功只代表跑完了；有用例失败时卡片上要显示失败
+                      const [tone, label] =
+                        r.status === "succeeded" && r.failed > 0
+                          ? (["danger", "qa.status.failed"] as [BadgeTone, MsgKey])
+                          : QA_RUN_ST[r.status] ?? (["neutral", "qa.status.draft"] as [BadgeTone, MsgKey]);
+                      return (
+                        <li key={r.run_id}>
+                          <Link to={`/qa/batches/${r.batch_id}`} className="rc-qa-run">
+                            <span className="rc-qa-run-top">
+                              <span className="rc-qa-run-name">
+                                {r.name || t("qa.req.cardTitle")}
+                              </span>
+                              <Badge tone={tone}>{t(label as MsgKey)}</Badge>
+                            </span>
+                            <span className="rc-qa-run-meta">
+                              {r.total > 0 && (
+                                <span className="mono">
+                                  {r.passed}/{r.total}
+                                </span>
+                              )}
+                              <span>{fmtQaTime(r.created_at)}</span>
+                            </span>
+                          </Link>
+                        </li>
+                      );
+                    })}
+                  </ul>
                 ) : (
                   <div className="muted">{t("qa.req.none")}</div>
                 )}
-                <div className="mt-2 flex flex-wrap items-center gap-3">
+                <div className="rc-qa-actions">
                   <Button
                     size="sm"
                     className="rounded-lg"
@@ -2882,7 +2919,9 @@ export default function RequirementChat() {
                   >
                     {t("qa.req.start")}
                   </Button>
-                  <Link to={`/systems/${req.system_id}/qa?tab=batches`}>{t("qa.req.history")}</Link>
+                  <Link className="rc-qa-history" to={`/systems/${req.system_id}/qa?tab=batches`}>
+                    {t("qa.req.history")}
+                  </Link>
                 </div>
                 {req.status !== "online" && (
                   <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>

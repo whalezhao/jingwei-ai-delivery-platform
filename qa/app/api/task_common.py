@@ -140,7 +140,7 @@ async def _ensure_base_url_available(
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
             "；".join(problems)
-            + "，但用例里引用了 ${BASE_URL}；请到系统环境里补上地址后再执行",
+            + "，但用例里引用了 ${BASE_URL}；请到项目环境里补上地址后再执行",
         )
 
 
@@ -160,6 +160,7 @@ async def spawn_runs(
     批次是用户视角的「一次执行」，run 是技术粒度（一次 midscene 进程只能跑一个系统）。
     `case_ids` 用于「只重跑失败用例」：只跑指定用例，仍然按系统拆 run。
     """
+    await ensure_batch_slot(db, task.id)
     cases_by_project = await _cases_by_system(db, task)
     if case_ids is not None:
         wanted = set(case_ids)
@@ -269,6 +270,33 @@ async def failed_case_ids(
     return resolvable, unresolved
 
 
+async def delete_batches(db, batch_ids: list[uuid.UUID]) -> tuple[list[str], list[str]]:
+    """删批次及其 run / AI 结论，返回待清理的 (工作目录, midscene runId)。"""
+    if not batch_ids:
+        return [], []
+    run_ids = set(
+        (await db.execute(select(Run.id).where(Run.batch_id.in_(batch_ids)))).scalars()
+    )
+    dirs: list[str] = []
+    midscene_ids: list[str] = []
+    if run_ids:
+        rows = (
+            await db.execute(
+                select(Run.work_dir, Run.midscene_run_id).where(Run.id.in_(run_ids))
+            )
+        ).all()
+        dirs = [work_dir for work_dir, _ in rows if work_dir]
+        midscene_ids = [mid for _, mid in rows if mid]
+        await db.execute(delete(Run).where(Run.id.in_(run_ids)))
+    await db.execute(
+        delete(AiCheck).where(
+            AiCheck.entity_type == "batch", AiCheck.entity_id.in_(batch_ids)
+        )
+    )
+    await db.execute(delete(RunBatch).where(RunBatch.id.in_(batch_ids)))
+    return dirs, midscene_ids
+
+
 async def delete_tasks(db, tasks: list[TestTask]) -> tuple[list[str], list[str]]:
     """删任务并**连带删掉它的执行记录**，返回待清理的 (工作目录, midscene runId)。
 
@@ -282,33 +310,21 @@ async def delete_tasks(db, tasks: list[TestTask]) -> tuple[list[str], list[str]]
             await db.execute(select(RunBatch.id).where(RunBatch.task_id.in_(task_ids)))
         ).scalars()
     )
+    dirs, midscene_ids = await delete_batches(db, batch_ids)
+
+    # 没有批次的老 run（batch_id 为空）也要跟着任务删
     run_ids = set(
         (await db.execute(select(Run.id).where(Run.task_id.in_(task_ids)))).scalars()
     )
-    if batch_ids:
-        # 批次下可能还有 task_id 对不上的 run，一并清掉，别留半截批次
-        run_ids.update(
-            (await db.execute(select(Run.id).where(Run.batch_id.in_(batch_ids)))).scalars()
-        )
-
-    dirs: list[str] = []
-    midscene_ids: list[str] = []
     if run_ids:
         rows = (
             await db.execute(
                 select(Run.work_dir, Run.midscene_run_id).where(Run.id.in_(run_ids))
             )
         ).all()
-        dirs = [work_dir for work_dir, _ in rows if work_dir]
-        midscene_ids = [mid for _, mid in rows if mid]
+        dirs += [work_dir for work_dir, _ in rows if work_dir]
+        midscene_ids += [mid for _, mid in rows if mid]
         await db.execute(delete(Run).where(Run.id.in_(run_ids)))
-    if batch_ids:
-        await db.execute(
-            delete(AiCheck).where(
-                AiCheck.entity_type == "batch", AiCheck.entity_id.in_(batch_ids)
-            )
-        )
-        await db.execute(delete(RunBatch).where(RunBatch.id.in_(batch_ids)))
     await db.execute(
         delete(AiCheck).where(
             AiCheck.entity_type == "task", AiCheck.entity_id.in_(task_ids)
@@ -325,6 +341,64 @@ def purge_artifacts(dirs: list[str], midscene_ids: list[str]) -> None:
         work_dirs=dirs,
         midscene_run_ids=midscene_ids,
     )
+
+
+BATCH_KEEP = 10
+
+
+async def _active_batch_ids(db, batch_ids: list[uuid.UUID]) -> set[uuid.UUID]:
+    if not batch_ids:
+        return set()
+    return set(
+        (
+            await db.execute(
+                select(Run.batch_id)
+                .where(
+                    Run.batch_id.in_(batch_ids),
+                    Run.status.in_(ACTIVE_RUN_STATUSES),
+                )
+                .distinct()
+            )
+        ).scalars()
+    )
+
+
+async def ensure_batch_slot(db, task_id: uuid.UUID) -> None:
+    """新批次会把最旧的挤出去；可能被挤掉的都冻结了就提前拦住并提示。"""
+    rows = (
+        await db.execute(
+            select(RunBatch.id, RunBatch.pinned)
+            .where(RunBatch.task_id == task_id)
+            .order_by(RunBatch.created_at.desc())
+        )
+    ).all()
+    if len(rows) < BATCH_KEEP:
+        return
+    # 新建一条后，最新的 BATCH_KEEP 条保留，其余都是候选
+    if not [row for row in rows[BATCH_KEEP - 1 :] if not row.pinned]:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"执行记录最多保留 {BATCH_KEEP} 条，多出的记录都已冻结；请先解冻一条再执行",
+        )
+
+
+async def trim_task_batches(db, task_id: uuid.UUID) -> None:
+    """调用方 commit 新批次后裁剪：只留最近 BATCH_KEEP 条，冻结和还在跑的不动。"""
+    rows = (
+        await db.execute(
+            select(RunBatch.id, RunBatch.pinned)
+            .where(RunBatch.task_id == task_id)
+            .order_by(RunBatch.created_at.desc())
+        )
+    ).all()
+    victims = [row[0] for row in rows[BATCH_KEEP:] if not row[1]]
+    active = await _active_batch_ids(db, victims)
+    victims = [batch_id for batch_id in victims if batch_id not in active]
+    if not victims:
+        return
+    dirs, midscene_ids = await delete_batches(db, victims)
+    await db.commit()
+    purge_artifacts(dirs, midscene_ids)
 
 
 async def active_task_ids(db, task_ids: list[uuid.UUID]) -> set[uuid.UUID]:

@@ -1,4 +1,5 @@
 import type { CSSProperties } from "react";
+import { useTranslation } from "react-i18next";
 
 /**
  * 经纬标识：墨黑方块里一个米白 V，一根金线横向穿过。
@@ -112,40 +113,63 @@ export function LogoMark({
 export default function Logo({
   size = 22,
   onDark = false,
-  showEn = true,
+  showCategory = true,
   style,
 }: {
   size?: number;
   /** 墨色底上用米白字，色值随底翻转。 */
   onDark?: boolean;
-  showEn?: boolean;
+  /** 紧凑场景（窄屏登录卡等）省略品类名，只留 Mark + 经纬。 */
+  showCategory?: boolean;
   style?: CSSProperties;
 }) {
+  const { i18n, t } = useTranslation();
+  const en = (i18n.resolvedLanguage || i18n.language || "zh").startsWith("en");
+  const brandFont = en ? size * 0.5 : size * 0.66;
+  const secondary = onDark ? "rgba(244,241,232,0.55)" : "var(--ink-2)";
+  // 金线只在这一处分隔品牌与品类；墨底上提亮到 75%，纸底 55%
+  const hairline = onDark
+    ? "rgba(184,137,59,0.75)"
+    : "rgba(184,137,59,0.55)";
+
   return (
     <span
       style={{
         display: "inline-flex",
         alignItems: "center",
-        gap: size * 0.34,
+        gap: size * 0.3,
         whiteSpace: "nowrap",
         userSelect: "none",
         ...style,
       }}
     >
       <LogoMark size={size} />
-      <span style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+      {en ? (
         <span
           style={{
-            fontSize: size * 0.66,
+            fontFamily: "var(--font-mono)",
+            fontSize: brandFont,
             fontWeight: 600,
             lineHeight: 1,
-            letterSpacing: "0.02em",
+            letterSpacing: "0.14em",
             color: onDark ? CREAM : "var(--ink)",
           }}
         >
-          经纬
+          JINGWEI
         </span>
-        {showEn ? (
+      ) : (
+        <span style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+          <span
+            style={{
+              fontSize: brandFont,
+              fontWeight: 600,
+              lineHeight: 1,
+              letterSpacing: "0.02em",
+              color: onDark ? CREAM : "var(--ink)",
+            }}
+          >
+            经纬
+          </span>
           <span
             style={{
               fontFamily: "var(--font-mono)",
@@ -153,13 +177,37 @@ export default function Logo({
               fontWeight: 500,
               lineHeight: 1.2,
               letterSpacing: "0.14em",
-              color: onDark ? "rgba(244,241,232,0.52)" : "var(--ink-2)",
+              color: secondary,
             }}
           >
-            R&D DELIVERY PLATFORM
+            JINGWEI
           </span>
-        ) : null}
-      </span>
+        </span>
+      )}
+      {showCategory ? (
+        <>
+          <span
+            aria-hidden
+            style={{
+              width: 1,
+              height: Math.round(brandFont * 0.6),
+              flexShrink: 0,
+              background: hairline,
+            }}
+          />
+          <span
+            style={{
+              fontSize: Math.min(12, Math.max(11, size * 0.42)),
+              fontWeight: 400,
+              lineHeight: 1.2,
+              color: secondary,
+              whiteSpace: "nowrap",
+            }}
+          >
+            {t("app.name")}
+          </span>
+        </>
+      ) : null}
     </span>
   );
 }

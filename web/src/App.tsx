@@ -27,7 +27,9 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { motion, useReducedMotion } from "motion/react";
 import type { MsgKey } from "./i18n";
+import { SPRING_LAYOUT } from "./lib/ease";
 import Logo, { LogoMark } from "./components/Logo";
 import LangSwitch from "./components/LangSwitch";
 import ProfileModal, { Me } from "./components/ProfileModal";
@@ -267,6 +269,8 @@ function Shell() {
   const { t } = useTranslation();
   const { projects, projectId, setProjectId, groups, groupId, setGroupId } =
     useGroup();
+  const reduce = useReducedMotion();
+  const [hoveredNav, setHoveredNav] = useState<string | null>(null);
   const [myAvatar, setMyAvatar] = useState<string | null>(null);
   const [meRecord, setMeRecord] = useState<Me | null>(null);
   const [profileOpen, setProfileOpen] = useState(false);
@@ -311,6 +315,11 @@ function Shell() {
           <SidebarBrand />
         </AnimatedSidebarHeader>
         <AnimatedSidebarContent>
+          {/* 织纹：一根经线串起所有菜单，每条菜单一根纬线，激活项金纬（对齐登录页） */}
+          <div
+            className="nav-weave"
+            onMouseLeave={() => setHoveredNav(null)}
+          >
           {GROUPS.map((groupKey) => (
             <AnimatedSidebarGroup key={groupKey}>
               <AnimatedSidebarGroupLabel>
@@ -322,7 +331,28 @@ function Shell() {
                     const Icon = item.icon;
                     const active = activePath(item);
                     return (
-                      <AnimatedSidebarMenuItem key={item.path}>
+                      <AnimatedSidebarMenuItem
+                        key={item.path}
+                        onMouseEnter={() => setHoveredNav(item.path)}
+                      >
+                        {active && (
+                          <motion.span
+                            layoutId="nav-weave-tick"
+                            transition={
+                              reduce ? { duration: 0 } : SPRING_LAYOUT
+                            }
+                            className="nav-weave-tick"
+                          />
+                        )}
+                        {!active && hoveredNav === item.path && (
+                          <motion.span
+                            layoutId="nav-weave-hover"
+                            transition={
+                              reduce ? { duration: 0 } : SPRING_LAYOUT
+                            }
+                            className="nav-hover-line"
+                          />
+                        )}
                         <AnimatedSidebarMenuButton
                           icon={
                             <Icon
@@ -346,6 +376,7 @@ function Shell() {
               </AnimatedSidebarGroupContent>
             </AnimatedSidebarGroup>
           ))}
+          </div>
         </AnimatedSidebarContent>
         <AnimatedSidebarFooter className="px-4 py-3">
           <SidebarTagline />
@@ -363,7 +394,7 @@ function Shell() {
           </AnimatedSidebarTrigger>
 
           <div className="md:hidden">
-            <Logo size={24} />
+            <Logo size={24} showCategory={false} />
           </div>
 
           <div className="ml-auto flex items-center gap-2 max-lg:order-last max-lg:w-full">

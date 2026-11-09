@@ -21,7 +21,7 @@ from .yamlcheck import validate as validate_yaml
 
 SUCCESS_STATUSES = {"success", "passed"}
 
-SYSTEM_PROMPT = """你是 UI 自动化测试用例修复助手。用户会给你一份 midscene 用例 YAML，\
+SYSTEM_PROMPT = """你是 UI 自动化测试用例修复助手。用户会给你一份用例 YAML，\
 以及它在最近一次真实执行中的失败步骤和错误理由。请判断失败是「用例写得不对」还是\
 「页面/产品问题」，然后输出一份可以直接执行的完整 YAML。
 

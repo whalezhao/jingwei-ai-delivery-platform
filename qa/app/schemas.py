@@ -300,6 +300,10 @@ class TaskPreflightIn(In):
     environment_name: str | None = Field(default=None, max_length=64)
 
 
+class BatchPinIn(In):
+    pinned: bool
+
+
 class CaseIdList(In):
     case_ids: list[uuid.UUID] = []
 
@@ -394,6 +398,7 @@ class BatchOut(BaseModel):
     name: str
     trigger: str
     environment_name: str | None = None
+    pinned: bool = False
     parent_batch_id: uuid.UUID | None = None
     created_at: datetime
     created_by_name: str | None = None
@@ -475,7 +480,7 @@ class EnvironmentVariableOut(BaseModel):
 class EnvironmentOut(BaseModel):
     model_config = ORM
     id: uuid.UUID
-    system_id: int
+    project_id: int
     name: str
     base_url: str | None
     is_default: bool

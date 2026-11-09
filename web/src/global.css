@@ -312,15 +312,112 @@ body {
   height: calc(100dvh - 56px);
 }
 
-/* 对话栏：浅灰底圆角盒，气泡浮在其上 */
+@property --chat-glow {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+
+/* 对话栏：中性浅灰底圆角盒，气泡浮在其上；不用纸色，长对话更清爽 */
 .chat-box {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: calc(100dvh - 220px);
   min-height: 480px;
-  background: var(--background);
+  background: #f7f7f8;
   border-radius: 12px;
   padding: 12px;
+  /* 光晕只在盒内：filter 的模糊结果不受元素自身 clip-path 约束，靠父级裁剪兜住 */
+  overflow: hidden;
+  /* 给 ::before 建立层叠上下文，让光晕落在底色之上、消息之下 */
+  isolation: isolate;
+}
+/* 边：四角各一团颜色，糊到看不清边界，混成一片从边缘向内晕开的雾气 */
+.chat-box::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  z-index: -1;
+  background:
+    radial-gradient(45% 40% at 0% 0%, rgba(43, 74, 203, 0.34), transparent 70%),
+    radial-gradient(42% 38% at 100% 0%, rgba(106, 90, 205, 0.3), transparent 70%),
+    radial-gradient(46% 42% at 100% 100%, rgba(184, 137, 59, 0.32), transparent 70%),
+    radial-gradient(42% 38% at 0% 100%, rgba(63, 127, 166, 0.26), transparent 70%);
+  background-size: 160% 160%;
+  filter: blur(30px);
+  animation:
+    chat-haze 26s ease-in-out infinite alternate,
+    chat-glow-breathe 4s ease-in-out infinite;
+  pointer-events: none;
+}
+/* 边的动效：靛青→紫→金→青的一段弧沿边游走，重模糊后化成雾，不留描边 */
+.chat-box .chat-glow {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: inherit;
+  padding: 4px;
+  background: conic-gradient(
+    from var(--chat-glow),
+    rgba(43, 74, 203, 0) 0deg,
+    rgba(43, 74, 203, 0.8) 40deg,
+    rgba(106, 90, 205, 0.75) 75deg,
+    rgba(184, 137, 59, 0.7) 110deg,
+    rgba(63, 127, 166, 0.55) 145deg,
+    rgba(43, 74, 203, 0) 200deg,
+    rgba(43, 74, 203, 0) 360deg
+  );
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  filter: blur(14px);
+  animation: chat-glow-spin 6s linear infinite, chat-glow-breathe 4s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes chat-glow-spin {
+  to { --chat-glow: 360deg; }
+}
+/* 面：几色混在一起的斜光带，本身糊开，左右两边继续向外晕染 */
+.chat-box::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -80%;
+  width: 55%;
+  transform: skewX(-18deg);
+  background: linear-gradient(
+    100deg,
+    rgba(43, 74, 203, 0) 0%,
+    rgba(43, 74, 203, 0.02) 28%,
+    rgba(106, 90, 205, 0.02) 50%,
+    rgba(184, 137, 59, 0.02) 72%,
+    rgba(184, 137, 59, 0) 100%
+  );
+  filter: blur(40px);
+  animation: chat-sheen 7s ease-in-out infinite;
+  pointer-events: none;
+  clip-path: inset(0 round 12px);
+}
+@keyframes chat-haze {
+  from { background-position: 0% 0%; }
+  to { background-position: 70% 60%; }
+}
+@keyframes chat-glow-breathe {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 0.95; }
+}
+@keyframes chat-sheen {
+  /* skew 会把光带的上下两端各推出一段，起点要退到完全在盒外 */
+  0%, 55% { left: -80%; }
+  100% { left: 130%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-box::before,
+  .chat-box::after,
+  .chat-box .chat-glow { animation: none !important; }
 }
 
 /* 池中/已定稿的占位态：居中一列 */
@@ -1840,11 +1937,12 @@ a.wb-chip.live:hover {
   touch-action: none;
   outline: none;
 }
+/* 平时不画线：长直线夹在圆角面板之间太生硬；只在悬停/拖动时提示可拖 */
 .rc-split::before {
   content: "";
   width: 2px;
   border-radius: 2px;
-  background: rgba(5, 5, 5, 0.08);
+  background: transparent;
   transition: background 0.2s;
 }
 .rc-split:hover::before,
@@ -1885,7 +1983,6 @@ a.wb-chip.live:hover {
   padding: 10px 12px;
   font-size: 13px;
   font-weight: 600;
-  border-bottom: 1px solid var(--line);
   flex-shrink: 0;
 }
 /* 英文标题比中文长，窄栏下别被挤成两行 */
@@ -2337,6 +2434,46 @@ button.rc-fchip:hover { border-color: var(--accent); color: var(--accent); }
   flex: none;
   margin-bottom: 0;
 }
+/* 需求侧栏的测试卡：最多三条执行记录 */
+.rc-qa-runs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.rc-qa-run {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(20, 23, 28, 0.02);
+  color: inherit;
+  text-decoration: none;
+  transition: background 0.15s ease;
+}
+.rc-qa-run:hover { background: rgba(43, 74, 203, 0.06); }
+.rc-qa-run-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.rc-qa-run-name {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12.5px;
+  color: var(--ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rc-qa-run-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.rc-qa-actions { display: flex; align-items: center; gap: 12px; margin-top: 10px; }
+.rc-qa-history { font-size: 12px; color: var(--accent); text-decoration: none; }
+.rc-qa-history:hover { text-decoration: underline; }
 .rc-msgs {
   flex: 1;
   min-height: 0;
@@ -2359,7 +2496,8 @@ button.rc-fchip:hover { border-color: var(--accent); color: var(--accent); }
 /* 头像是真实头像/logo，容器不再上底色，只负责对齐 */
 .rc-msg.user .rc-msg-avatar { background: none; color: inherit; }
 .rc-msg.assistant .rc-msg-avatar { background: none; color: inherit; }
-.rc-msg-body { flex: 1; min-width: 0; max-width: 100%; }
+/* 气泡按内容收窄，最宽 70%，像微信那样留出对侧空白 */
+.rc-msg-body { flex: 0 1 auto; width: fit-content; min-width: 0; max-width: 70%; }
 .rc-msg.user .rc-msg-body { display: flex; flex-direction: column; align-items: flex-end; }
 .rc-msg-content {
   font-size: 13px;
@@ -2375,6 +2513,16 @@ button.rc-fchip:hover { border-color: var(--accent); color: var(--accent); }
   background: var(--accent-soft);
   white-space: pre-wrap;
 }
+/* AI 正文也放进气泡；思考链与工具过程留在气泡外，避免把过程痕迹染成一大块 */
+.rc-msg.assistant .md-body {
+  width: fit-content;
+  max-width: 100%;
+  padding: 7px 11px;
+  border-radius: 10px;
+  /* 对话底色是纸色，气泡用白色 + 细线才拉得开对比 */
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
 .rc-msg.user .rc-msg-content .rc-fchip { margin-top: 6px; margin-right: 4px; }
 .rc-bubble-name { font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: 2px; }
 .rc-examples {
@@ -2389,19 +2537,55 @@ button.rc-fchip:hover { border-color: var(--accent); color: var(--accent); }
   padding: 4px 0;
 }
 .rc-examples-title { font-size: 12px; color: var(--muted); }
+/* 三张淡彩小卡：图标在上，提示语做成卡里的白条 */
+.rc-example-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
 .rc-example {
-  padding: 8px 10px;
-  border: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  padding: 12px;
+  border: 0;
+  border-radius: 12px;
+  background: linear-gradient(
+    135deg,
+    rgba(43, 74, 203, 0.08),
+    rgba(106, 90, 205, 0.06) 55%,
+    rgba(184, 137, 59, 0.05)
+  );
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 0.18s ease, filter 0.18s ease;
+}
+.rc-example:hover { transform: translateY(-1px); filter: saturate(1.15); }
+.rc-example-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.65);
+  color: var(--accent);
+}
+.rc-example-row {
+  display: block;
+  padding: 9px 10px;
   border-radius: 8px;
   background: var(--surface);
+  box-shadow: 0 1px 2px rgba(20, 23, 28, 0.05);
   font-size: 12.5px;
   line-height: 1.5;
   color: var(--ink-2);
-  text-align: left;
-  cursor: pointer;
-  transition: border-color 0.18s ease, color 0.18s ease;
 }
-.rc-example:hover { border-color: var(--accent); color: var(--accent); }
+@media (max-width: 900px) {
+  .rc-example-grid { grid-template-columns: 1fr; }
+}
 .rc-composer {
   position: relative;
   flex: none;
@@ -2588,3 +2772,81 @@ button.rc-fchip:hover { border-color: var(--accent); color: var(--accent); }
 .rc-send:hover:not(:disabled) { background: var(--accent-deep); }
 .rc-send:disabled { opacity: 0.4; cursor: default; }
 .rc-send.stop { background: var(--danger); }
+
+/* 侧栏织纹：一根经线串起全部菜单，每条菜单一根纬线，激活项换成金纬（呼应登录页） */
+.nav-weave {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px; /* 原来是 content 的 gap-2，包了一层后由这里接管 */
+}
+.nav-weave::before {
+  content: "";
+  position: absolute;
+  left: 8px; /* 与品牌 mark 的左缘对齐 */
+  top: 16px;
+  bottom: 16px;
+  width: 1px;
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    rgba(20, 23, 28, 0.15) 8%,
+    rgba(20, 23, 28, 0.15) 92%,
+    transparent
+  );
+}
+/* 分组标签让出经线，别让竖线贴着首字 */
+.nav-weave [data-slot="sidebar-group-label"] { padding-left: 12px; }
+/* 菜单整体右移，给织纹留出独立的一列 */
+.nav-weave [data-slot="sidebar-menu"] { padding-left: 10px; }
+.nav-weave [data-slot="sidebar-menu-item"]::before {
+  content: "";
+  position: absolute;
+  /* 横纬穿过经线，止于图标前 2px */
+  left: -11px;
+  top: 50%;
+  width: 20px;
+  height: 1px;
+  transform: translateY(-50%);
+  background: rgba(20, 23, 28, 0.15);
+  pointer-events: none;
+  transition: background-color 0.18s ease;
+}
+/* 激活纬线用 motion 渲染，换菜单时沿经线滑过去（与激活衬底同一套布局动画） */
+.nav-weave-tick {
+  position: absolute;
+  left: -11px;
+  top: 50%;
+  width: 20px;
+  height: 2px;
+  margin-top: -1px;
+  border-radius: 1px;
+  background: var(--neon, #b8893b);
+  pointer-events: none;
+}
+/* 激活项的衬底与图标一起转金，避免靛青压在金纬上 */
+.nav-weave [aria-current="page"] > [class~="bg-muted"] {
+  background: rgba(184, 137, 59, 0.1);
+}
+.nav-weave [aria-current="page"] svg { color: var(--neon, #b8893b); }
+/* hover 指示：同一位置的细纬线，换行时沿经线滑动；金色比激活项细一档 */
+.nav-hover-line {
+  position: absolute;
+  left: -11px;
+  top: 50%;
+  width: 20px;
+  height: 1px;
+  margin-top: -0.5px;
+  border-radius: 1px;
+  background: var(--neon, #b8893b);
+  pointer-events: none;
+}
+[data-state="collapsed"] .nav-weave::before,
+[data-state="collapsed"] .nav-weave [data-slot="sidebar-menu-item"]::before,
+[data-state="collapsed"] .nav-weave-tick,
+[data-state="collapsed"] .nav-hover-line {
+  display: none;
+}
+/* 收起成图标轨时没有织纹，菜单要回到居中 */
+[data-state="collapsed"] .nav-weave [data-slot="sidebar-menu"] { padding-left: 0; }

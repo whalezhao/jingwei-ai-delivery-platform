@@ -83,6 +83,15 @@ class DevGroup(Base):
     project_id: Mapped[int | None] = mapped_column(Integer)
 
 
+class Project(Base):
+    """Vega 项目。只读。"""
+
+    __tablename__ = "project"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(128))
+
+
 class GroupMember(Base):
     """Vega 研发组成员。只读，用于权限判断。"""
 
@@ -201,27 +210,27 @@ class SystemModelHealth(Base):
     )
 
 
-class SystemEnvironment(Timestamped, Base):
-    """系统的一套测试环境（地址 + 变量）。
+class ProjectEnvironment(Timestamped, Base):
+    """项目的一套测试环境（一份地址 + 一组变量），项目下所有系统共用。
 
-    任务只存环境名；执行时按系统解析成对应环境。
+    任务只存环境名；执行时按系统所属项目解析成同名的项目环境。
     """
 
-    __tablename__ = "qa_system_environments"
+    __tablename__ = "qa_project_environments"
     __table_args__ = (
-        UniqueConstraint("system_id", "name", name="uq_qa_system_environments_name"),
-        Index("ix_qa_system_environments_system", "system_id"),
+        UniqueConstraint("project_id", "name", name="uq_qa_project_environments_name"),
+        Index("ix_qa_project_environments_project", "project_id"),
         Index(
-            "uq_qa_system_environments_default",
-            "system_id",
+            "uq_qa_project_environments_default",
+            "project_id",
             unique=True,
             postgresql_where=text("is_default"),
         ),
     )
 
     id: Mapped[uuid.UUID] = _pk()
-    system_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("dev_system.id", ondelete="CASCADE"), nullable=False
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("project.id", ondelete="CASCADE"), nullable=False
     )
     name: Mapped[str] = mapped_column(String(64), nullable=False)
     base_url: Mapped[str | None] = mapped_column(String(512))
@@ -231,23 +240,23 @@ class SystemEnvironment(Timestamped, Base):
     )
 
 
-class SystemEnvironmentVariable(Timestamped, Base):
+class ProjectEnvironmentVariable(Timestamped, Base):
     """环境变量。密钥值在库里是 Fernet 密文，接口只回 value_set。"""
 
-    __tablename__ = "qa_system_environment_variables"
+    __tablename__ = "qa_project_environment_variables"
     __table_args__ = (
         UniqueConstraint(
-            "environment_id", "key", name="uq_qa_system_environment_variables_key"
+            "environment_id", "key", name="uq_qa_project_environment_variables_key"
         ),
         Index(
-            "ix_qa_system_environment_variables_env", "environment_id"
+            "ix_qa_project_environment_variables_env", "environment_id"
         ),
     )
 
     id: Mapped[uuid.UUID] = _pk()
     environment_id: Mapped[uuid.UUID] = mapped_column(
         PGUUID(as_uuid=True),
-        ForeignKey("qa_system_environments.id", ondelete="CASCADE"),
+        ForeignKey("qa_project_environments.id", ondelete="CASCADE"),
         nullable=False,
     )
     key: Mapped[str] = mapped_column(String(128), nullable=False)
@@ -501,6 +510,8 @@ class RunBatch(Timestamped, Base):
     )
     # 环境名快照：环境改名/删除后历史批次仍能显示当时跑的是什么
     environment_name: Mapped[str | None] = mapped_column(String(64))
+    # 冻结的执行记录不参与「每任务保留最近 N 条」的自动清理
+    pinned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_by: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("person.id", ondelete="SET NULL")
     )
@@ -551,7 +562,7 @@ class Run(Timestamped, Base):
     # 环境快照：id 用于追溯，name/base_url 用于环境被改名/删除后仍可读
     environment_id: Mapped[uuid.UUID | None] = mapped_column(
         PGUUID(as_uuid=True),
-        ForeignKey("qa_system_environments.id", ondelete="SET NULL"),
+        ForeignKey("qa_project_environments.id", ondelete="SET NULL"),
     )
     environment_name: Mapped[str | None] = mapped_column(String(64))
     environment_base_url: Mapped[str | None] = mapped_column(String(512))

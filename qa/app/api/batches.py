@@ -30,9 +30,15 @@ from ..models import (
 from ..schemas import (
     BatchDetailOut,
     BatchListOut,
+    BatchPinIn,
 )
 from .runs import _resolve_data_path
-from .task_common import active_task_ids, failed_case_ids, spawn_runs
+from .task_common import (
+    active_task_ids,
+    failed_case_ids,
+    spawn_runs,
+    trim_task_batches,
+)
 
 router = APIRouter(prefix="/api/batches", tags=["batches"])
 
@@ -238,6 +244,7 @@ def _batch_item(batch: RunBatch, agg: dict, task: dict, ai: tuple) -> dict:
         "name": batch.name,
         "trigger": batch.trigger,
         "environment_name": batch.environment_name,
+        "pinned": batch.pinned,
         "parent_batch_id": batch.parent_batch_id,
         "created_at": batch.created_at,
         "started_at": agg.get("started_at"),
@@ -363,6 +370,20 @@ async def get_batch(
     )
 
 
+@router.post("/{batch_id}/pin")
+async def set_batch_pinned(
+    batch_id: uuid.UUID, body: BatchPinIn, user: CurrentPerson, db: DbSession
+) -> dict:
+    """冻结/解冻一条执行记录：冻结的不参与按任务自动清理。"""
+    batch = await db.get(RunBatch, batch_id)
+    if batch is None:
+        raise HTTPException(404, "执行记录不存在")
+    await require_system_access(db, batch.system_id, user, "member")
+    batch.pinned = body.pinned
+    await db.commit()
+    return {"id": str(batch.id), "pinned": batch.pinned}
+
+
 # ------------------------------------------------------------- 重跑失败用例
 
 
@@ -413,6 +434,7 @@ async def _rerun_failed(
         environment_name=environment_name,
     )
     await db.commit()
+    await trim_task_batches(db, task.id)
     return {
         "batch_id": str(batch.id),
         "run_ids": [str(run.id) for run in runs],

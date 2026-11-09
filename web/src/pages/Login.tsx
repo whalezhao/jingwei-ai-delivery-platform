@@ -72,9 +72,6 @@ export default function Login() {
 
         <div className="relative">
           <Logo size={44} onDark />
-          <p className="mt-5 text-[13px] tracking-[0.18em] text-[#F4F1E8]/45">
-            {t("app.name")}
-          </p>
         </div>
 
         <div className="relative max-w-[460px] pt-16">
@@ -110,7 +107,7 @@ export default function Login() {
         <div className="flex flex-1 items-center justify-center py-8">
           <div className="w-full max-w-[396px] rounded-2xl border border-[rgba(20,23,28,0.08)] bg-white p-8 shadow-[0_1px_2px_rgba(20,23,28,0.04),0_28px_56px_-32px_rgba(20,23,28,0.22)] sm:p-10">
             <div className="mb-8 lg:hidden">
-              <Logo size={30} />
+              <Logo size={30} showCategory={false} />
             </div>
             <h2 className="m-0 text-[26px] font-semibold leading-tight tracking-[-0.02em] text-foreground">
               {t("login.title")}

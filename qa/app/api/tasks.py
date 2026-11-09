@@ -543,24 +543,41 @@ async def list_task_features(
 async def set_task_features(
     task_id: uuid.UUID, body: FeatureIdList, user: CurrentPerson, db: DbSession
 ) -> dict[str, int]:
+    """整体替换功能组合，并重做用例快照（与创建时同一套规则）。
+
+    允许跨系统：任务归属系统跟创建时一样取最小 system_id；执行仍按功能所属系统拆 run。
+    """
     task = await require_task(db, task_id, user, "member")
-    await db.execute(delete(TaskFeature).where(TaskFeature.task_id == task_id))
-    if body.feature_ids:
-        found = set(
-            (
-                await db.execute(
-                    select(Feature.id).where(
-                        Feature.id.in_(body.feature_ids),
-                        Feature.system_id == task.system_id,
-                    )
-                )
-            ).scalars()
+    if not body.feature_ids:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "请至少选择一个功能")
+    if task_id in await active_task_ids(db, [task_id]):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "该任务有执行正在进行或排队中，请先取消或等它结束"
         )
-        if missing := set(body.feature_ids) - found:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST, f"{len(missing)} 个功能不存在或不属于该系统"
+    features = list(
+        (
+            await db.execute(select(Feature).where(Feature.id.in_(body.feature_ids)))
+        ).scalars()
+    )
+    if missing := set(body.feature_ids) - {f.id for f in features}:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, f"{len(missing)} 个功能不存在"
+        )
+    system_ids = {f.system_id for f in features}
+    for system_id in sorted(system_ids):
+        await require_system_access(db, system_id, user, "member")
+    if task.environment_name:
+        # 换功能可能换掉系统，原环境名必须在每个新系统里都有定义，免得存完就跑不起来
+        try:
+            await resolve_run_environments(
+                db, task, system_ids, environment_name=task.environment_name
             )
-        for feature_id in body.feature_ids:
-            db.add(TaskFeature(task_id=task_id, feature_id=feature_id))
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+    await db.execute(delete(TaskFeature).where(TaskFeature.task_id == task_id))
+    await db.execute(delete(TaskCase).where(TaskCase.task_id == task_id))
+    case_count = await attach_features(db, task, body.feature_ids)
+    task.system_id = min(system_ids)
     await db.commit()
-    return {"count": len(body.feature_ids)}
+    return {"count": len(body.feature_ids), "case_count": case_count}

@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, status
 
 from ..deps import CurrentPerson, DbSession
 from ..schemas import TaskRunIn
-from .task_common import require_task, spawn_runs
+from .task_common import require_task, spawn_runs, trim_task_batches
 
 router = APIRouter(tags=["tasks"])
 
@@ -40,6 +40,7 @@ async def run_task(
             }
         )
     await db.commit()
+    await trim_task_batches(db, task.id)
     return {
         "task_id": str(task.id),
         "batch_id": batches[0]["batch_id"],

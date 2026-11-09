@@ -7,7 +7,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, HTTPException, Query, status
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from ..config import get_settings
 from ..deps import CurrentPerson, DbSession, is_qa, require_system_access
@@ -17,6 +17,7 @@ from ..models import (
     Run,
     RunBatch,
     TaskCase,
+    TaskFeature,
     TestTask,
     WorkerHeartbeat,
 )
@@ -267,48 +268,46 @@ async def requirement_tests(
     db: DbSession,
     limit: int = Query(default=30, le=100),
 ) -> list[dict]:
-    """该需求的历史测试（批次维度，新到旧）。"""
+    """该需求关联的执行记录（run 维度，新到旧）。
+
+    需求关联的是「功能」，测试往往从系统的执行记录页发起，任务的 requirement_id
+    是空的；因此按功能反查，兼容直接在需求上发起的那部分任务。
+    """
     requirement = await _requirement_or_404(db, requirement_id)
     await require_system_access(db, requirement.system_id, user)
+    feature_task_ids = select(TaskFeature.task_id).join(
+        Feature, Feature.id == TaskFeature.feature_id
+    ).where(Feature.requirement_id == requirement_id)
     rows = (
         await db.execute(
-            select(RunBatch, TestTask)
-            .join(TestTask, TestTask.id == RunBatch.task_id)
-            .where(TestTask.requirement_id == requirement_id)
-            .order_by(RunBatch.created_at.desc())
+            select(Run, RunBatch)
+            .join(RunBatch, RunBatch.id == Run.batch_id)
+            .join(TestTask, TestTask.id == Run.task_id)
+            .where(
+                or_(
+                    TestTask.requirement_id == requirement_id,
+                    Run.task_id.in_(feature_task_ids),
+                )
+            )
+            .order_by(Run.created_at.desc())
             .limit(limit)
         )
     ).all()
-    aggregates = await _run_aggregates(db, [batch.id for batch, _ in rows])
     return [
         {
-            "batch_id": str(batch.id),
-            "task_id": str(batch.task_id) if batch.task_id else None,
+            "run_id": str(run.id),
+            "batch_id": str(run.batch_id),
+            "task_id": str(run.task_id),
             "name": batch.name,
             "trigger": batch.trigger,
-            "environment_name": batch.environment_name,
-            "created_at": batch.created_at.isoformat() if batch.created_at else None,
-            "started_at": (
-                aggregates[batch.id]["started_at"].isoformat()
-                if aggregates.get(batch.id, {}).get("started_at")
-                else None
-            ),
-            "ended_at": (
-                aggregates[batch.id]["ended_at"].isoformat()
-                if aggregates.get(batch.id, {}).get("ended_at")
-                else None
-            ),
-            "status": derive_status(
-                aggregates.get(batch.id, {}).get("statuses", []),
-                real_failed=(
-                    aggregates.get(batch.id, {}).get("failed", 0)
-                    - aggregates.get(batch.id, {}).get("excluded_failed", 0)
-                ),
-                excluded_runs=aggregates.get(batch.id, {}).get("excluded_runs", 0),
-            ),
-            "total": aggregates.get(batch.id, {}).get("total", 0),
-            "passed": aggregates.get(batch.id, {}).get("passed", 0),
-            "failed": aggregates.get(batch.id, {}).get("failed", 0),
+            "environment_name": run.environment_name,
+            "status": run.status,
+            "total": run.total,
+            "passed": run.passed,
+            "failed": run.failed,
+            "created_at": run.created_at.isoformat() if run.created_at else None,
+            "started_at": run.started_at.isoformat() if run.started_at else None,
+            "ended_at": run.ended_at.isoformat() if run.ended_at else None,
         }
-        for batch, _task in rows
+        for run, batch in rows
     ]

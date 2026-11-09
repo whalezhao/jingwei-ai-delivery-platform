@@ -1,4 +1,4 @@
-# JINGWEI — R&D Delivery Platform
+# JINGWEI — AI R&D Delivery Platform
 
 English | [简体中文](README.md)
 

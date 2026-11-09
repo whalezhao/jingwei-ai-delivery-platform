@@ -1,4 +1,4 @@
-# 经纬 · JINGWEI — 研发交付平台
+# 经纬 · JINGWEI — AI 研发交付平台
 
 [English](README.en.md) | 简体中文
 

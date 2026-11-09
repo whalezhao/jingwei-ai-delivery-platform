@@ -10,6 +10,7 @@
 """
 
 import asyncio
+import logging
 import os
 import signal
 import uuid
@@ -19,6 +20,8 @@ from pathlib import Path
 
 from .parsers import read_tail
 from .staging import StagedRun
+
+log = logging.getLogger(__name__)
 
 TERMINATE_GRACE_SECONDS = 8
 POLL_INTERVAL_SECONDS = 0.5
@@ -73,7 +76,9 @@ async def execute(
     """
     binary = runner_root / "node_modules" / ".bin" / "midscene-test"
     if not binary.exists():
-        return ExecOutcome(None, "", spawn_error=f"找不到执行器 {binary}")
+        # 路径属于第三方执行器，界面上的报错不带它的产品名，细节留在日志里
+        log.warning("执行器缺失：%s", binary)
+        return ExecOutcome(None, "", spawn_error="找不到测试执行器：执行环境未就绪")
 
     argv = [
         str(binary),
@@ -100,7 +105,8 @@ async def execute(
         )
     except OSError as exc:
         stdout_handle.close()
-        return ExecOutcome(None, "", spawn_error=f"启动执行器失败：{exc}")
+        log.warning("启动执行器失败：%s", exc)
+        return ExecOutcome(None, "", spawn_error="启动测试执行器失败")
 
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout_ms / 1000

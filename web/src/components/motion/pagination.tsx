@@ -106,10 +106,14 @@ export function Pagination({
   const clamp = (value: number) => Math.min(total, Math.max(1, Math.round(value)));
   const [internal, setInternal] = useState(() => clamp(defaultPage));
   const current = clamp(page ?? internal);
+  // 首次挂载时内容还在加载，分页会被布局推移；共享布局会把这当成一次「从旧位置滑来」，
+  // 刷新时看起来就是圆点从屏幕外飞进来。翻过页之后再启用布局动画。
+  const [animated, setAnimated] = useState(false);
 
   const go = (next: number) => {
     const target = clamp(next);
     if (target === current) return;
+    setAnimated(true);
     if (page === undefined) setInternal(target);
     onPageChange?.(target);
   };
@@ -182,7 +186,7 @@ export function Pagination({
                 return (
                   <motion.li
                     key={item}
-                    layout={reduce ? false : "position"}
+                    layout={reduce || !animated ? false : "position"}
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0, transition: fade }}
@@ -217,7 +221,7 @@ export function Pagination({
               return (
                 <motion.li
                   key={item}
-                  layout={reduce ? false : "position"}
+                  layout={reduce || !animated ? false : "position"}
                   initial={{ opacity: 0, scale: reduce ? 1 : 0.8 }}
                   animate={{ opacity: 1, scale: 1 }}
                   exit={{ opacity: 0, scale: reduce ? 1 : 0.8, transition: fade }}
@@ -238,7 +242,7 @@ export function Pagination({
                         {isCurrent ? (
                           <motion.span
                             aria-hidden="true"
-                            layoutId={reduce ? undefined : "pagination-current"}
+                            layoutId={reduce || !animated ? undefined : "pagination-current"}
                             transition={SPRING_LAYOUT}
                             className="absolute inset-0 rounded-full bg-foreground"
                           />

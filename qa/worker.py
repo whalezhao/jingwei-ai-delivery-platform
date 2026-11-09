@@ -27,14 +27,17 @@ from sqlalchemy import and_, delete, func, or_, select, update
 
 from app.config import get_settings
 from app.db import SessionLocal, engine
-from app.environments import ensure_default_environment, load_environment_variables
+from app.environments import (
+    environment_for_system,
+    load_environment_variables,
+)
 from app.modelconfig import missing_fields
 from app.models import (
     AppSetting,
     CaseResult,
     Feature,
     System,
-    SystemEnvironment,
+    ProjectEnvironment,
     SystemModelConfig,
     Run,
     RunBatch,
@@ -393,6 +396,25 @@ async def _render_report_markdown(runner_root: Path, report_path: Path) -> None:
 
 
 async def process(run_id: uuid.UUID) -> None:
+    """包一层收尾保护：内部异常也要把 run 落成失败，不能让它永远停在 parsing。"""
+    try:
+        await _process(run_id)
+    except Exception as exc:
+        log.exception("run %s 处理异常退出", run_id)
+        try:
+            async with SessionLocal() as db:
+                run = await db.get(Run, run_id)
+                if run is not None and run.status in OCCUPYING_STATUSES:
+                    run.status = "failed"
+                    run.ended_at = datetime.now(UTC)
+                    run.error_message = f"执行异常中断：{type(exc).__name__}"
+                    await refresh_task_status(db, run.task_id)
+                    await db.commit()
+        except Exception:
+            log.exception("run %s 的失败状态也没能落库", run_id)
+
+
+async def _process(run_id: uuid.UUID) -> None:
     """准备 → 执行 → 落库。
 
     刻意拆成两段短事务：midscene 一次跑十几分钟，如果把 session 一直开着，
@@ -441,19 +463,12 @@ async def process(run_id: uuid.UUID) -> None:
 
         env_row = None
         if run.environment_id:
-            env_row = await db.get(SystemEnvironment, run.environment_id)
+            env_row = await db.get(ProjectEnvironment, run.environment_id)
         if env_row is None and run.system_id:
-            env_name = (run.environment_name or "默认").strip() or "默认"
-            env_row = (
-                await db.execute(
-                    select(SystemEnvironment).where(
-                        SystemEnvironment.system_id == run.system_id,
-                        SystemEnvironment.name == env_name,
-                    )
-                )
-            ).scalar_one_or_none()
-            if env_row is None and env_name == "默认":
-                env_row = await ensure_default_environment(db, run.system_id)
+            # 老 run 或环境被删：按系统所属项目重找同名环境，默认环境按需补建
+            env_row = await environment_for_system(
+                db, run.system_id, environment_name=run.environment_name
+            )
 
         plain_vars: dict[str, str] = {}
         secret_vars: dict[str, str] = {}

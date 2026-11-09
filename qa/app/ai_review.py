@@ -25,7 +25,6 @@ from .db import SessionLocal
 from .modelconfig import missing_fields
 from .models import (
     AiCheck,
-    AppSetting,
     CaseResult,
     CaseStability,
     SystemModelConfig,
@@ -222,20 +221,18 @@ async def assess_batch(db: AsyncSession, batch: RunBatch) -> tuple[dict[str, Any
 async def enqueue_batch_check(db: AsyncSession, batch_id: uuid.UUID) -> None:
     """worker 在批次收尾时调用：同一批次只入队一次。
 
-    设置里勾了「仅评估有失败的批次」时，全绿的批次直接跳过 —— 每次评估都是一次
-    真实的模型调用，而全绿批次没有需要诊断的东西。
+    全绿的批次直接跳过 —— 每次评估都是一次真实的模型调用，而全部通过的批次
+    没有需要诊断的东西。
     """
-    setting = await db.get(AppSetting, 1)
-    if setting is not None and setting.ai_assess_failures_only:
-        failed = (
-            await db.execute(
-                select(func.coalesce(func.sum(Run.failed), 0)).where(
-                    Run.batch_id == batch_id, Run.failure_kind.is_(None)
-                )
+    failed = (
+        await db.execute(
+            select(func.coalesce(func.sum(Run.failed), 0)).where(
+                Run.batch_id == batch_id, Run.failure_kind.is_(None)
             )
-        ).scalar_one()
-        if int(failed) == 0:
-            return
+        )
+    ).scalar_one()
+    if int(failed) == 0:
+        return
 
     exists = (
         await db.execute(

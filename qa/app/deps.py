@@ -17,9 +17,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .config import get_settings
 from .db import get_db
 from .models import (
+    DevGroup,
     Feature,
     GroupTechLead,
     Person,
+    Project,
     System,
     SystemOwner,
     TestCase,
@@ -113,6 +115,35 @@ async def require_system_access(
         return system
     if await _can_write_system(db, system, person):
         return system
+    raise HTTPException(status.HTTP_403_FORBIDDEN, "需要系统负责人、研发组负责人或 QA 权限")
+
+
+async def project_system_ids(db: AsyncSession, project_id: int) -> list[int]:
+    return list(
+        (
+            await db.execute(
+                select(System.id)
+                .join(DevGroup, DevGroup.id == System.group_id)
+                .where(DevGroup.project_id == project_id)
+            )
+        ).scalars()
+    )
+
+
+async def require_project_access(
+    db: AsyncSession, project_id: int, person: Person, minimum: str = "view"
+) -> Project:
+    """项目级写权限 = 能写项目下任一系统（负责人/研发组负责人/QA/管理员）。"""
+    project = await db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "项目不存在")
+    if minimum == "view":
+        return project
+    writable = await writable_system_ids(db, person)
+    if writable is None:
+        return project
+    if set(await project_system_ids(db, project_id)) & writable:
+        return project
     raise HTTPException(status.HTTP_403_FORBIDDEN, "需要系统负责人、研发组负责人或 QA 权限")
 
 
