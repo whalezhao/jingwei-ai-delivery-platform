@@ -81,6 +81,9 @@ import FilterSelect from "./ui/FilterSelect";
 import { Toaster } from "./ui/toast";
 import { ConfirmHost } from "./ui/confirm";
 import StatusBar from "./components/StatusBar";
+import GrokBall from "./components/GrokBall";
+import { useAiBallEnabled } from "./aiball";
+import { setBallBase } from "./ball";
 
 type MenuItem = {
   path: string;
@@ -316,6 +319,7 @@ function Shell() {
   const nav = useNavigate();
   const { t } = useTranslation();
   const amOn = useAmEnabled();
+  const ballOn = useAiBallEnabled();
   const { projects, projectId, setProjectId, groups, groupId, setGroupId } =
     useGroup();
   const reduce = useReducedMotion();
@@ -339,6 +343,12 @@ function Shell() {
     refreshMe();
     window.addEventListener("vega-me-updated", refreshMe);
     return () => window.removeEventListener("vega-me-updated", refreshMe);
+  }, [loc.pathname]);
+
+  // 非 AI 页面回到待机；需求对话 / 任务详情各自按工作状态接管
+  useEffect(() => {
+    if (loc.pathname.startsWith("/reqs/") || loc.pathname.startsWith("/tasks/")) return;
+    setBallBase("02");
   }, [loc.pathname]);
 
   const activePath = (item: MenuItem) =>
@@ -427,6 +437,11 @@ function Shell() {
           ))}
           </div>
         </AnimatedSidebarContent>
+        {ballOn && (
+          <div className="shrink-0 px-4 pb-2">
+            <GrokBall />
+          </div>
+        )}
         <AnimatedSidebarFooter className="px-4 py-3">
           <SidebarTagline />
         </AnimatedSidebarFooter>

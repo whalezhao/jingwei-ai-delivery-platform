@@ -8,6 +8,7 @@ import { useTranslation } from "react-i18next";
 import Markdown from "react-markdown";
 import { rawNode } from "../eventNodes";
 import { api } from "../api";
+import { ballForAgentEvent, flashBall, setBallBase } from "../ball";
 import i18n, { type MsgKey } from "../i18n";
 import Page from "../Page";
 import DocPreview from "../components/DocPreview";
@@ -182,6 +183,23 @@ export default function TaskDetail() {
     }
   };
 
+  // 任务状态 → 表情球：排队/执行/完成/失败
+  const ballStatus = useRef<string | null>(null);
+  useEffect(() => {
+    const s = d?.task?.status;
+    if (!s || s === ballStatus.current) return;
+    ballStatus.current = s;
+    if (s === "pending") setBallBase("35");
+    else if (s === "queued") setBallBase("31");
+    else if (s === "done") {
+      flashBall("33", 2800);
+      setBallBase("02");
+    } else if (s === "failed") {
+      flashBall("34", 3200);
+      setBallBase("02");
+    } else setBallBase("32"); // running / pushed / mr_created / reviewing / cicd
+  }, [d?.task?.status]);
+
   useEffect(() => {
     if (denied) return; // 403 已经定论，别再每 5 秒锤一次
     reload().catch(() => {});
@@ -215,6 +233,8 @@ export default function TaskDetail() {
             if (evt.type === "dev_raw" && ids.has(evt.task_id)) {
               // 归一化块自带 kind；system 事件只有 type/subtype，补上 raw 才走原始事件分支
               const e = evt.event || {};
+              const emo = ballForAgentEvent(e);
+              if (emo) setBallBase(emo);
               const kind = e.kind || "raw";
               setEvents((list) => [
                 ...list,

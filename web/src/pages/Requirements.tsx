@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { CheckCircle2, Circle, Plus, Search } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { api, isAdmin } from "../api";
+import { flashBall } from "../ball";
 import { useGroup } from "../group";
 import Page from "../Page";
 import type { MsgKey } from "../i18n";
@@ -132,6 +133,7 @@ export default function Requirements() {
     if (systemFilter) p.set("system_id", String(systemFilter));
     const data = await api<Req[]>(`/api/requirements?${p}`);
     setRows(data);
+    if (!data.length) flashBall("12", 3600); // 失落：列表空空
     if (isAdmin()) setSetup(await api<Setup>("/api/setup"));
     // QA 未部署/不可达时不阻塞需求列表，测试列显示 —
     const ids = data.map((r) => r.id).join(",");

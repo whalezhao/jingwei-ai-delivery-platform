@@ -24,6 +24,7 @@ from .am import (
 router = APIRouter(prefix="/api/integrations", tags=["integrations"])
 
 _OCTO_KEY = "octo_bot_token"
+_AI_BALL_KEY = "ai_ball_enabled"
 
 
 class OctoIn(BaseModel):
@@ -129,6 +130,35 @@ async def set_am(
     await db.commit()
     await apply_proxy_url(db)
     return await _am_config(db)
+
+
+class AiBallIn(BaseModel):
+    enabled: bool
+
+
+@router.get("/ai-ball")
+async def ai_ball_config(
+    db: AsyncSession = Depends(get_db), _me: Person = Depends(current_person)
+) -> dict:
+    """侧栏 AI 表情球开关。默认开，只有显式存过 "0" 才关。"""
+    row = await db.get(AppSetting, _AI_BALL_KEY)
+    return {"enabled": not row or row.value != "0"}
+
+
+@router.put("/ai-ball")
+async def set_ai_ball(
+    data: AiBallIn, db: AsyncSession = Depends(get_db), _me: Person = Depends(require_admin)
+) -> dict:
+    row = await db.get(AppSetting, _AI_BALL_KEY)
+    if data.enabled:
+        if row:
+            await db.delete(row)  # 默认开，删掉即恢复
+    elif row:
+        row.value = "0"
+    else:
+        db.add(AppSetting(key=_AI_BALL_KEY, value="0"))
+    await db.commit()
+    return {"enabled": data.enabled}
 
 
 @router.get("/octo-groups")

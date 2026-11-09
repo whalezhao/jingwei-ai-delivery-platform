@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { Search, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { api } from "../api";
+import { api, isAdmin } from "../api";
+import { flashBall } from "../ball";
+import { refreshAiBallEnabled, useAiBallEnabled } from "../aiball";
 import type { MsgKey } from "../i18n";
 import Page from "../Page";
 import DataTable, { type DataTableColumn } from "../ui/DataTable";
@@ -318,7 +320,13 @@ function AgentMemoryConfig() {
           />
         </label>
         <div className="flex items-center gap-3">
-          <Switch checked={enabled} onCheckedChange={setEnabled} />
+          <Switch
+            checked={enabled}
+            onCheckedChange={(v) => {
+              setEnabled(v);
+              flashBall("13", 1800); // 惊讶
+            }}
+          />
           <span className="text-sm text-foreground">
             {t("integrations.amEnable")}
           </span>
@@ -336,6 +344,48 @@ function AgentMemoryConfig() {
       </div>
       <p className="m-0 text-xs text-muted-foreground">
         {t("integrations.amHint")}
+      </p>
+    </div>
+  );
+}
+
+function AiMoodConfig() {
+  const { t } = useTranslation();
+  const on = useAiBallEnabled();
+  const [busy, setBusy] = useState(false);
+
+  const toggle = async (v: boolean) => {
+    setBusy(true);
+    try {
+      await api("/api/integrations/ai-ball", {
+        method: "PUT",
+        body: JSON.stringify({ enabled: v }),
+      });
+      refreshAiBallEnabled();
+    } catch (e: any) {
+      toast.error(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="max-w-[560px]">
+      <p className="mt-0 text-sm text-muted-foreground">
+        {t("integrations.aiMoodIntro")}
+      </p>
+      <div className="mt-4 flex items-center gap-3">
+        <Switch
+          checked={!!on}
+          disabled={on === null || busy || !isAdmin()}
+          onCheckedChange={toggle}
+        />
+        <span className="text-sm text-foreground">
+          {t("integrations.aiMoodEnable")}
+        </span>
+      </div>
+      <p className="mt-3 text-xs text-muted-foreground">
+        {t("integrations.aiMoodHint")}
       </p>
     </div>
   );
@@ -608,6 +658,7 @@ export default function Integrations() {
           <TabsTrigger value="notify">{t("integrations.tabNotify")}</TabsTrigger>
           <TabsTrigger value="mr">{t("integrations.tabMr")}</TabsTrigger>
           <TabsTrigger value="am">Agent-Memory</TabsTrigger>
+          <TabsTrigger value="mood">{t("integrations.tabAiMood")}</TabsTrigger>
         </TabsList>
         <TabsContent value="cred">
           <Credentials />
@@ -623,6 +674,9 @@ export default function Integrations() {
         </TabsContent>
         <TabsContent value="am">
           <AgentMemoryConfig />
+        </TabsContent>
+        <TabsContent value="mood">
+          <AiMoodConfig />
         </TabsContent>
       </Tabs>
     </Page>

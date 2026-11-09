@@ -43,6 +43,7 @@ import { LogoMark } from "../components/Logo";
 import DocPreview from "../components/DocPreview";
 import { rawNode } from "../eventNodes";
 import { api, isAdmin, token } from "../api";
+import { ballForAgentEvent, flashBall, setBallBase } from "../ball";
 import i18n, { type MsgKey } from "../i18n";
 import { qa, type QaEnv, type QaTestRun } from "../qa";
 import { Button } from "../components/motion/button/index";
@@ -1515,7 +1516,9 @@ export default function RequirementChat() {
                 // 断线期间回复可能已生成落库：最后一条是 assistant 就解除等待态；
                 // 反之最后一条是 user 说明本轮还在跑（刷新/重连后恢复等待态，思考块才可见）
                 const last = replay[replay.length - 1];
+                if (replay.length > 0) flashBall("37", 2400); // 复述回忆：回放历史
                 if (last && last.role === "assistant") {
+                  setBallBase("35");
                   streamingAcc = "";
                   setStreaming("");
                   // 回放里已带该轮过程事件，实时态清空避免同一条链画两遍
@@ -1525,6 +1528,7 @@ export default function RequirementChat() {
                   setBusy(false);
                   busyRef.current = false;
                 } else if (last && last.role === "user") {
+                  setBallBase("32");
                   setBusy(true);
                   busyRef.current = true;
                   // 本轮已经跑出来的过程事件随 ready 补发：重连/刷新后思考链不空白
@@ -1537,6 +1541,8 @@ export default function RequirementChat() {
                 }
               } else if (evt.type === "plan_raw") {
                 const e = evt.event || {};
+                const emo = ballForAgentEvent(e);
+                if (emo) setBallBase(emo);
                 if (e.subtype === "thinking_tokens") {
                   // 每 token 一跳，按 32 token 一档节流，避免每秒几十次重渲
                   const n = e.estimated_tokens || 0;
@@ -1569,9 +1575,12 @@ export default function RequirementChat() {
               } else if (evt.type === "plan_usage") {
                 setCtxUsage({ ...(evt.usage || {}), window: evt.window || 0 });
               } else if (evt.type === "plan_text") {
+                setBallBase("39"); // 输出回复
                 streamingAcc += evt.text;
                 setStreaming(streamingAcc);
               } else if (evt.type === "plan_done") {
+                flashBall("33", 2600); // 任务完成
+                setBallBase("35"); // 回到等待输入
                 streamingAcc = "";
                 setStreaming("");
                 // 消息自带本轮过程事件 → 链随消息渲染；实时态清掉，避免重复
@@ -1582,6 +1591,8 @@ export default function RequirementChat() {
                 setBusy(false);
                 busyRef.current = false;
               } else if (evt.type === "plan_error") {
+                flashBall("34", 3200); // 出错
+                setBallBase("35");
                 streamingAcc = "";
                 setStreaming("");
                 setErr(evt.error || i18n.t("reqChat.execFailed"));
@@ -1591,12 +1602,16 @@ export default function RequirementChat() {
                 // 评审是独立任务，不影响主对话的等待态；报告直接进抽屉列表
                 const r = evt.review;
                 setReviews((list) => [r, ...list.filter((x) => x.id !== r.id)]);
+                // 评审是独立任务：完成时给一次性反馈，主状态仍等用户 / 主对话
                 if (r.status === "done") {
+                  flashBall(r.blockers ? "34" : "33", 2600);
                   if (r.blockers)
                     toast.warning(i18n.t("reqChat.reviewDoneBlockers", { n: r.blockers }));
                   else toast.success(i18n.t("reqChat.reviewDoneOk"));
-                } else if (r.status !== "running")
+                } else if (r.status !== "running") {
+                  flashBall("34", 2600);
                   toast.warning(i18n.t("reqChat.reviewUnfinished", { status: r.status }));
+                }
               }
             },
             chatMode,
@@ -1606,6 +1621,7 @@ export default function RequirementChat() {
         }
         if (ac.signal.aborted) return;
         failures += 1;
+        flashBall("36", 3000); // 联网加载：断线重连中
         if (failures >= 2 && streamingAcc === "") setErr(i18n.t("reqChat.connLost"));
         await new Promise((r) => setTimeout(r, 2000));
       }
@@ -1614,6 +1630,11 @@ export default function RequirementChat() {
     return () => ac.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reqId, chatMode, streamNonce]);
+
+  // 进入这个页面默认在等用户发话；后续由 SSE 状态接管
+  useEffect(() => {
+    setBallBase("35");
+  }, [reqId]);
 
   /** 逐个上传待发附件；任何一个失败就整轮不发，已传的留作下次重试（会重复，但不会丢内容）。 */
   const uploadFiles = async (list: LocalFile[]): Promise<number[]> => {
@@ -1712,6 +1733,7 @@ export default function RequirementChat() {
     ]);
     setBusy(true);
     busyRef.current = true;
+    setBallBase("30"); // 思考中
     try {
       await api(`/api/requirements/${reqId}/plan/messages`, {
         method: "POST",
@@ -1753,6 +1775,8 @@ export default function RequirementChat() {
 
   /** 停止本轮：后端立即落「已停止」消息并让 runner 杀掉 claude，plan_done 会清等待态。 */
   const stop = async () => {
+    flashBall("41", 2600); // 停止终止
+    setBallBase("35");
     try {
       await api(`/api/requirements/${reqId}/plan/stop`, { method: "POST" });
     } catch (e: any) {
@@ -2443,6 +2467,8 @@ export default function RequirementChat() {
                   const m = /(?:^|\s)\/(\S*)$/.exec(v);
                   setSlash(m ? m[1] : null);
                 }}
+                onFocus={() => setBallBase("16")} // 专注
+                onBlur={() => !busyRef.current && setBallBase("35")}
                 onKeyDown={(e) => {
                   if (e.key === "Escape") {
                     setSlash(null);
