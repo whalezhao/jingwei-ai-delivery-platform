@@ -347,6 +347,8 @@ class PlanMessage(Base):
     content: Mapped[str] = mapped_column(Text)
     # 两种讨论各一条会话历史：requirement / plan。历史行默认 plan（双模式上线前只有方案讨论）
     mode: Mapped[str] = mapped_column(String(16), default="plan")
+    # 本轮由 EGM 设计技能接管（brainstorm/draft/resolve）；工作台方案卡片据此标 EGM 参与
+    egm: Mapped[bool] = mapped_column(Boolean, default=False)
     # 该轮用户在输入框选的团队/专家（空 = 项目/研发组默认）；每轮随请求头生效
     team_id: Mapped[str | None] = mapped_column(String(64))
     agent_id: Mapped[str | None] = mapped_column(String(64))

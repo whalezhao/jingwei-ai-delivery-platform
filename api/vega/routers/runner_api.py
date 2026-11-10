@@ -350,6 +350,7 @@ async def _finish_plan_turn(db: AsyncSession, task: RunnerTask, body: TaskResult
     if not req:
         return
     mode = (task.payload or {}).get("mode", "plan")
+    egm_used = bool((body.data or {}).get("egm"))
     if body.status == "done":
         text = body.data.get("text", "")
         draft = (body.data.get("design_draft") or "").strip()
@@ -357,7 +358,9 @@ async def _finish_plan_turn(db: AsyncSession, task: RunnerTask, body: TaskResult
             # EGM 把方案写在 design_draft.md 里；平台包成方案块，「采用此方案」流程不变
             block = f"<!-- vega:plan:begin -->\n{draft}\n<!-- vega:plan:end -->"
             text = f"{text}\n\n{block}" if text.strip() else block
-        msg = PlanMessage(requirement_id=req.id, role="assistant", content=text, mode=mode)
+        msg = PlanMessage(
+            requirement_id=req.id, role="assistant", content=text, mode=mode, egm=egm_used
+        )
         db.add(msg)
         # 不自动成版：AI 只在交出方案时用标记包住正文，人点「采用此方案」才建 PlanVersion
         await db.flush()
@@ -373,7 +376,9 @@ async def _finish_plan_turn(db: AsyncSession, task: RunnerTask, body: TaskResult
         # 失败也落 assistant 消息：SSE 只在失败瞬间在线才收得到 plan_error，
         # 不落库的话重放里最后一条永远是 user，前端 busy 永不清（页面像卡死）
         text = f"⚠️ 本轮生成失败：{body.error or '执行失败'}"
-        msg = PlanMessage(requirement_id=req.id, role="assistant", content=text, mode=mode)
+        msg = PlanMessage(
+            requirement_id=req.id, role="assistant", content=text, mode=mode, egm=egm_used
+        )
         db.add(msg)
         await db.flush()
         events = await _bind_plan_events(db, task, msg)

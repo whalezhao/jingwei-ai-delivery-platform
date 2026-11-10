@@ -476,6 +476,8 @@ class Runner:
         data: dict = {"text": text}
         if art:
             data.update(self._egm_artifacts(art))
+            # 本轮确实用了 EGM（brainstorm 只出 concepts_brief，也要算「参与过」）
+            data["egm"] = egm
             if payload.get("git_http_url"):
                 self._assert_baseline_clean(payload["cwd"])
         await self._result(task_id, "done", data=data)

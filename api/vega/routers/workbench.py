@@ -131,6 +131,7 @@ async def workbench(
     # 定稿文档版本 + 定稿方案版本 + 定稿时间：阶段卡片的必要信息（不读 content 大字段）
     docs: dict[int, dict] = {}
     plan_versions: dict[int, dict] = {}
+    egm_reqs: set[int] = set()
     if reqs:
         rid_list = [r.id for r in reqs]
         rows = (
@@ -156,6 +157,18 @@ async def workbench(
         ).all()
         for rid, version, created in rows:
             plan_versions[rid] = {"version": version, "time": _iso(created)}
+        rows = (
+            await db.execute(
+                select(PlanMessage.requirement_id)
+                .where(
+                    PlanMessage.requirement_id.in_(rid_list),
+                    PlanMessage.mode == "plan",
+                    PlanMessage.egm.is_(True),
+                )
+                .distinct()
+            )
+        ).scalars().all()
+        egm_reqs = set(rows)
 
     tasks = (
         await db.scalars(
@@ -314,6 +327,7 @@ async def workbench(
                 "plan_final": r.status in ("confirmed", "archived", "online"),  # 方案定稿节点
                 "doc": docs.get(r.id),  # 定稿文档版本/文件名/定稿时间（需求定稿卡片的核心信息）
                 "plan": plan_versions.get(r.id),  # 定稿方案版本号 + 定稿时间
+                "plan_egm": r.id in egm_reqs,  # 方案讨论中用过 EGM 设计技能
                 # 轨道按项目配置裁剪：没配就没有这两段，终点改为 octo 通知负责人
                 "review_on": bool(p.audit_prefixes),
                 "merge_on": bool(p.auto_approve_prefixes),

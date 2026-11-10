@@ -575,10 +575,11 @@ body {
 .wb-flow {
   position: relative;
   overflow-x: auto;
-  padding: 20px 24px 24px;
+  /* 底部多留一条，缩放控件悬在画布外，不压住最后一行卡片 */
+  padding: 22px 24px 58px;
   min-height: 160px;
-  background-image: radial-gradient(rgba(20, 23, 28, 0.06) 1px, transparent 1px);
-  background-size: 20px 20px;
+  background-image: radial-gradient(rgba(20, 23, 28, 0.05) 1px, transparent 1px);
+  background-size: 22px 22px;
   background-position: 12px 12px;
 }
 .wb-live-chip {
@@ -591,10 +592,10 @@ body {
   gap: 6px;
   font-size: 12px;
   color: var(--success);
-  background: rgba(30, 138, 91, 0.08);
-  border: 1px solid rgba(30, 138, 91, 0.35);
-  border-radius: 12px;
-  padding: 1px 10px;
+  background: rgba(30, 138, 91, 0.06);
+  border: 1px solid rgba(30, 138, 91, 0.22);
+  border-radius: 4px;
+  padding: 1px 8px;
 }
 .wb-live-chip i {
   width: 6px;
@@ -603,42 +604,178 @@ body {
   background: var(--success);
   animation: wb-pulse 1.6s ease-in-out infinite;
 }
+/* 表头下沿：与侧栏「经线」同一种渐隐细线 */
+.wb-lane-rule {
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(20, 23, 28, 0.15) 6%,
+    rgba(20, 23, 28, 0.15) 94%,
+    transparent
+  );
+}
+/* 泳道表头：字号/字距对齐侧栏分组标签，图标与菜单同一套 lucide 线性图标 */
+.wb-lane-head {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 6px;
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.wb-lane-icon {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+}
+.wb-lane-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* 画布缩放控件与「Ctrl + 滚轮」提示 */
+.wb-zoom {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid rgba(20, 23, 28, 0.12);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 6px 18px rgba(20, 23, 28, 0.08);
+  backdrop-filter: blur(6px);
+}
+.wb-zoom button {
+  min-width: 28px;
+  height: 26px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink-2);
+  font-family: var(--vega-font);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.wb-zoom button:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.wb-zoom button:active {
+  transform: translateY(1px);
+}
+.wb-zoom button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.wb-hint {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  z-index: 3;
+  transform: translateX(-50%);
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: rgba(20, 23, 28, 0.84);
+  color: #fff;
+  font-size: 12px;
+  pointer-events: none;
+  animation: wb-hint-in 0.16s ease-out;
+}
+@keyframes wb-hint-in {
+  from { opacity: 0; transform: translate(-50%, -4px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
 @keyframes wb-blink {
   50% { opacity: 0.35; }
 }
 
-/* 一块面板装下所有需求：每个需求一行（标题行 + 状态卡片链），不额外分组 */
-.wb-board {
-  display: flex;
-  flex-direction: column;
-  gap: 22px;
+/* 流程图容器：G6 画布按行计算尺寸，外层保留横向滚动与点阵底 */
+/* 卡片 = 纸面：暖白、发丝级墨线、小圆角，不用投影堆层次 */
+.wb-card {
+  background: #fffefb;
+  border: 1px solid rgba(20, 23, 28, 0.11);
+  border-radius: 8px;
+  padding: 12px 13px;
+  box-shadow: none;
+  transition: border-color 0.2s, background 0.2s;
 }
-.wb-line {
-  position: relative;
-  z-index: 1;
-  animation: wb-in 0.45s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+.wb-card:hover {
+  border-color: rgba(20, 23, 28, 0.22);
 }
+/* 需求卡：状态用左侧一道渐隐的笔触表示，不用色块 */
 .wb-req-card {
-  flex: 0 0 220px;
-  width: 220px;
-  padding: 8px 10px;
+  position: relative;
+  width: 100%;
+  padding: 11px 12px 11px 15px;
   cursor: pointer;
-  border-left: 3px solid var(--accent);
+  --wb-state: rgba(20, 23, 28, 0.32);
+}
+.wb-req-card::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 6px;
+  bottom: 7px;
+  width: 3px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, var(--wb-state) 0%, var(--wb-state) 62%, transparent 100%);
+}
+.wb-req-card.s-claimed {
+  --wb-state: var(--accent);
+}
+.wb-req-card.s-confirmed {
+  --wb-state: var(--success);
+}
+.wb-req-card.s-online {
+  --wb-state: #6b4bbd;
 }
 .wb-req-card:hover {
-  border-color: rgba(43, 74, 203, 0.45);
+  border-color: rgba(20, 23, 28, 0.22);
 }
 .wb-req-top {
   display: flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
-  margin-bottom: 4px;
+  margin-bottom: 6px;
+}
+/* 需求类型：Bug 走警示色，需求保持中性淡底，不抢状态色 */
+.wb-req-type {
+  flex: none;
+  font-size: 10.5px;
+  line-height: 16px;
+  padding: 0 5px;
+  border-radius: 3px;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  background: rgba(20, 23, 28, 0.045);
+}
+.wb-req-type.bug {
+  color: var(--warning);
+  background: rgba(178, 107, 18, 0.1);
 }
 .wb-req-title {
   font-size: 13px;
   font-weight: 600;
-  line-height: 1.4;
+  line-height: 1.45;
+  letter-spacing: 0.002em;
   color: var(--ink);
   overflow: hidden;
   display: -webkit-box;
@@ -646,183 +783,151 @@ body {
   -webkit-box-orient: vertical;
 }
 .wb-req-meta {
-  margin-top: 4px;
+  margin-top: 6px;
   font-size: 11px;
-  line-height: 1.4;
+  line-height: 1.45;
   color: var(--muted);
-  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
   word-break: break-word;
-}
-@keyframes wb-in {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-}
-
-.wb-card {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 12px 14px;
-  box-shadow: 0 1px 2px rgba(20, 23, 28, 0.05);
-  transition: box-shadow 0.25s, transform 0.25s, border-color 0.25s;
-}
-.wb-card:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(20, 23, 28, 0.08);
 }
 
 .wb-req-code {
-  font-size: 11px;
+  margin-left: auto;
+  font-size: 10.5px;
   color: var(--muted);
   letter-spacing: 0.02em;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
-/* 状态轨道：每个状态一张卡，卡间虚线流动 + 箭头指示方向（颜色跟随目标节点）。
-   只渲染已到达的节点；专家卡在该状态上方，箭头朝下表示「专家支持该状态」 */
-.wb-chain {
-  display: flex;
-  align-items: flex-end;
-  width: max-content;
-}
+/* G6 节点内部：内容贴底，与同一行的其它节点对齐 */
 .wb-node {
-  flex: 0 0 auto;
-  min-width: 112px;
   display: flex;
   flex-direction: column;
+  width: 100%;
+  justify-content: flex-end;
 }
+/* 阶段：淡墨晕染区分状态，边框只做收边，动效留给连线 */
 .wb-step {
-  flex: none;
-  min-width: 112px;
+  width: 100%;
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  gap: 3px;
-  padding: 8px 10px;
-  border: 1px solid var(--line);
-  border-left: 3px solid rgba(20, 23, 28, 0.12);
-  border-radius: 10px;
-  background: var(--surface);
-  box-shadow: 0 1px 2px rgba(20, 23, 28, 0.05);
+  gap: 2px;
+  padding: 9px 11px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: rgba(20, 23, 28, 0.025);
 }
 .wb-step b {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   font-size: 12px;
   font-weight: 600;
+  letter-spacing: 0.01em;
   color: var(--ink);
   white-space: nowrap;
 }
+/* 方案由 EGM 设计技能参与：图标跟标题同一行、不参与省略 */
+.wb-step .wb-egm {
+  display: inline-flex;
+  flex: none;
+}
 .wb-step small {
   font-size: 11px;
-  color: var(--muted);
+  color: var(--ink-2);
   white-space: nowrap;
-  max-width: 220px;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 /* 阶段卡的时间：比正文再弱一档，不抢「做了什么」的信息 */
 .wb-step time {
+  margin-top: 1px;
   font-size: 10px;
   color: var(--muted);
-  opacity: 0.8;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 .wb-step.ok {
-  border-left-color: var(--success);
+  background: rgba(30, 138, 91, 0.065);
+  border-color: rgba(30, 138, 91, 0.14);
+}
+.wb-step.ok b {
+  color: #1b6a49;
 }
 .wb-step.ok small {
-  color: var(--success);
+  color: #2f6f52;
 }
 .wb-step.live {
-  border-color: rgba(43, 74, 203, 0.35);
-  border-left-color: var(--accent);
-  animation: wb-breathe 2.4s ease-in-out infinite;
+  background: rgba(43, 74, 203, 0.06);
+  border-color: rgba(43, 74, 203, 0.16);
 }
 .wb-step.live b,
 .wb-step.live small {
-  color: var(--accent);
+  color: var(--accent-deep);
 }
 .wb-step.bad {
-  border-color: rgba(194, 57, 52, 0.35);
-  border-left-color: var(--danger);
   background: rgba(194, 57, 52, 0.06);
-  animation: wb-breathe-bad 2.4s ease-in-out infinite;
+  border-color: rgba(194, 57, 52, 0.16);
 }
 .wb-step.bad b,
 .wb-step.bad small {
   color: var(--danger);
 }
 .wb-step.idle {
-  border-style: dashed;
-  opacity: 0.62;
+  background: transparent;
+  border: 1px dashed rgba(20, 23, 28, 0.16);
+}
+.wb-step.idle b {
+  color: var(--muted);
+  font-weight: 500;
+}
+.wb-step.idle small,
+.wb-step.idle time {
+  color: rgba(20, 23, 28, 0.38);
 }
 
-.wb-link {
-  flex: 0 0 34px;
-  align-self: flex-end;
-  margin: 0 3px 25px;
-  height: 2px;
-  position: relative;
-  color: rgba(20, 23, 28, 0.22);
-  background-image: repeating-linear-gradient(90deg, currentColor 0 5px, transparent 5px 10px);
-  background-size: 10px 2px;
-}
-.wb-link::after {
-  content: "";
-  position: absolute;
-  right: -1px;
-  top: -3px;
-  border-left: 6px solid currentColor;
-  border-top: 4px solid transparent;
-  border-bottom: 4px solid transparent;
-}
-.wb-link.ok {
-  color: var(--success);
-}
-.wb-link.live {
-  color: var(--accent);
-  animation: wb-flow 0.7s linear infinite;
-}
-.wb-link.bad {
-  color: var(--danger);
-  animation: wb-flow 0.7s linear infinite, wb-blink 1.1s ease-in-out infinite;
-}
-@keyframes wb-flow {
-  to { background-position-x: 10px; }
-}
-
-/* 状态 → 专家：竖向单流向箭头（专家是被依赖方） */
+/* 专家 → 阶段：谁负责哪个阶段。箭头朝下指向阶段卡，和横向主流程不冲突 */
 .wb-vlink {
-  width: 2px;
-  height: 18px;
-  margin: 4px 0;
-  align-self: center;
   position: relative;
-  color: rgba(20, 23, 28, 0.22);
-  background-image: repeating-linear-gradient(180deg, currentColor 0 4px, transparent 4px 8px);
-  background-size: 2px 8px;
+  width: 1px;
+  height: 14px;
+  margin: 3px 0;
+  align-self: center;
+  color: rgba(20, 23, 28, 0.2);
+  background-image: repeating-linear-gradient(180deg, currentColor 0 3px, transparent 3px 6px);
+  background-size: 1px 6px;
 }
 .wb-vlink::after {
   content: "";
   position: absolute;
-  left: -3px;
-  bottom: -1px;
+  left: 50%;
+  bottom: -4px;
+  width: 0;
+  height: 0;
+  transform: translateX(-50%);
+  border-left: 3.5px solid transparent;
+  border-right: 3.5px solid transparent;
   border-top: 5px solid currentColor;
-  border-left: 4px solid transparent;
-  border-right: 4px solid transparent;
 }
 .wb-vlink.ok {
-  color: var(--success);
+  color: rgba(30, 138, 91, 0.45);
 }
 .wb-vlink.live {
-  color: var(--accent);
+  color: rgba(43, 74, 203, 0.5);
   animation: wb-flow-v 0.7s linear infinite;
 }
 .wb-vlink.bad {
-  color: var(--danger);
-  animation: wb-flow-v 0.7s linear infinite, wb-blink 1.1s ease-in-out infinite;
+  color: rgba(194, 57, 52, 0.5);
+  animation: wb-flow-v 0.7s linear infinite;
 }
 @keyframes wb-flow-v {
-  to { background-position-y: 8px; }
+  to { background-position-y: 6px; }
 }
 /* 任务卡并进阶段节点：同一阶段的多个任务纵向排列 */
 .wb-cards {
@@ -830,84 +935,115 @@ body {
   flex-direction: column;
   gap: 8px;
 }
+/* 专家：一方小印，细墨线框 + 小圆点，不用药丸 */
 .wb-expert {
-  min-width: 112px;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  padding: 5px 8px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
-  box-shadow: 0 1px 2px rgba(20, 23, 28, 0.05);
+  max-width: 100%;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: transparent;
+  border: 1px solid rgba(20, 23, 28, 0.14);
+}
+.wb-expert::before {
+  content: "";
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: rgba(20, 23, 28, 0.35);
+  flex: none;
 }
 .wb-expert span {
-  font-size: 10px;
+  font-size: 9.5px;
+  letter-spacing: 0.02em;
   color: var(--muted);
+  white-space: nowrap;
 }
 .wb-expert b {
+  min-width: 0;
   font-size: 11px;
   font-weight: 600;
   color: var(--ink);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wb-node.ok .wb-expert {
+  border-color: rgba(30, 138, 91, 0.22);
+  background: rgba(30, 138, 91, 0.04);
+}
+.wb-node.ok .wb-expert::before {
+  background: var(--success);
+}
+.wb-node.ok .wb-expert b {
+  color: #1b6a49;
 }
 .wb-node.live .wb-expert {
-  border-color: rgba(43, 74, 203, 0.35);
+  border-color: rgba(43, 74, 203, 0.22);
+  background: rgba(43, 74, 203, 0.045);
+}
+.wb-node.live .wb-expert::before {
+  background: var(--accent);
 }
 .wb-node.live .wb-expert b {
-  color: var(--accent);
+  color: var(--accent-deep);
 }
 .wb-node.bad .wb-expert {
-  border-color: rgba(194, 57, 52, 0.35);
+  border-color: rgba(194, 57, 52, 0.22);
+  background: rgba(194, 57, 52, 0.04);
+}
+.wb-node.bad .wb-expert::before {
+  background: var(--danger);
 }
 .wb-node.bad .wb-expert b {
   color: var(--danger);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .wb-link,
-  .wb-vlink,
-  .wb-step.live,
-  .wb-step.bad {
+  .wb-vlink {
     animation: none;
   }
 }
 
 .wb-task {
-  width: 240px;
-  border-left: 3px solid rgba(20, 23, 28, 0.16);
+  position: relative;
+  width: 100%;
+  padding: 9px 11px 9px 13px;
+  --wb-state: rgba(20, 23, 28, 0.26);
+}
+.wb-task::before {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 7px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, var(--wb-state) 0%, var(--wb-state) 62%, transparent 100%);
 }
 .wb-task.live {
-  border-color: rgba(43, 74, 203, 0.35);
-  border-left-color: var(--accent);
-  animation: wb-breathe 2.4s ease-in-out infinite;
+  --wb-state: var(--accent);
 }
 .wb-task.ok {
-  border-color: rgba(30, 138, 91, 0.35);
-  border-left-color: var(--success);
+  --wb-state: var(--success);
 }
 .wb-task.bad {
-  border-color: rgba(194, 57, 52, 0.35);
-  border-left-color: var(--danger);
-  animation: wb-breathe-bad 2.4s ease-in-out infinite;
-}
-@keyframes wb-breathe {
-  50% { box-shadow: 0 0 0 4px rgba(43, 74, 203, 0.12); }
-}
-@keyframes wb-breathe-bad {
-  50% { box-shadow: 0 0 0 4px rgba(194, 57, 52, 0.12); }
+  --wb-state: var(--danger);
 }
 .wb-task-head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   min-width: 0;
 }
 .wb-task-title {
   flex: 1;
   min-width: 0;
   font-weight: 600;
-  font-size: 13px;
+  font-size: 12.5px;
+  letter-spacing: 0.002em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -929,15 +1065,17 @@ body {
 .wb-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 9px;
+  gap: 5px;
+  margin-top: 8px;
 }
 .wb-chip {
-  font-size: 11px;
-  padding: 1px 7px;
-  border-radius: 6px;
-  background: rgba(20, 23, 28, 0.045);
-  color: rgba(20, 23, 28, 0.68);
+  font-size: 10.5px;
+  line-height: 17px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: rgba(20, 23, 28, 0.035);
+  color: var(--ink-2);
+  letter-spacing: 0.01em;
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -954,13 +1092,13 @@ a.wb-chip:hover {
   filter: brightness(0.96);
   box-shadow: inset 0 0 0 1px rgba(20, 23, 28, 0.08);
 }
-.wb-chip.ok { background: rgba(30, 138, 91, 0.08); color: var(--success); }
-.wb-chip.bad { background: rgba(194, 57, 52, 0.06); color: var(--danger); }
-.wb-chip.wait { background: rgba(178, 107, 18, 0.10); color: var(--warning); }
+.wb-chip.ok { background: rgba(30, 138, 91, 0.07); color: #1b6a49; }
+.wb-chip.bad { background: rgba(194, 57, 52, 0.06); color: #a8322d; }
+.wb-chip.wait { background: rgba(178, 107, 18, 0.08); color: var(--warning); }
 /* 卡片上的补充说明：评审摘要 / octo 通知对象 */
 .wb-note {
-  margin-top: 8px;
-  font-size: 12px;
+  margin-top: 7px;
+  font-size: 11.5px;
   line-height: 1.5;
   color: var(--muted);
   display: -webkit-box;
@@ -971,9 +1109,9 @@ a.wb-chip:hover {
 .wb-error {
   margin-top: 9px;
   font-size: 12px;
-  color: var(--danger);
-  background: rgba(194, 57, 52, 0.06);
-  border-radius: 8px;
+  color: #a8322d;
+  background: rgba(194, 57, 52, 0.055);
+  border-radius: 4px;
   padding: 4px 9px;
   overflow: hidden;
   text-overflow: ellipsis;

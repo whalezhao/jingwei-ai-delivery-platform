@@ -1044,9 +1044,7 @@ export function AnimatedSidebarMenuButton({
   const panel = useAnimatedSidebarPanel();
   const textLabel = typeof children === "string" ? children : undefined;
 
-  const select = (
-    event: React.MouseEvent<HTMLAnchorElement | HTMLButtonElement>,
-  ) => {
+  const select = (event: React.MouseEvent<HTMLElement>) => {
     if (disabled) {
       event.preventDefault();
       return;
@@ -1065,6 +1063,56 @@ export function AnimatedSidebarMenuButton({
       context.setOpen(true);
     }
   };
+
+  /** 折叠成图标栏后，hover 让这一项从图标展开成带文字的浮层，允许溢出侧栏盖到内容区 */
+  const [fly, setFly] = useState<null | {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  }>(null);
+  const closeTimer = useRef<number | null>(null);
+  const cancelClose = useCallback(() => {
+    if (closeTimer.current) window.clearTimeout(closeTimer.current);
+    closeTimer.current = null;
+  }, []);
+  const closeFly = useCallback(() => {
+    cancelClose();
+    setFly(null);
+  }, [cancelClose]);
+  const scheduleClose = useCallback(() => {
+    cancelClose();
+    closeTimer.current = window.setTimeout(() => setFly(null), 180);
+  }, [cancelClose]);
+  const openFly = (el: HTMLElement | null) => {
+    if (!panel.collapsed || !textLabel || !el) return;
+    cancelClose();
+    const rect = el.getBoundingClientRect();
+    setFly({
+      left: rect.left,
+      top: rect.top,
+      width: rect.width,
+      height: rect.height,
+    });
+  };
+  const flyEl = useRef<HTMLDivElement | null>(null);
+  /** 浮层盖住图标后浏览器会给图标补 leave：指针其实还在浮层里就不关 */
+  const leaveTrigger = (event: React.PointerEvent) => {
+    const rect = flyEl.current?.getBoundingClientRect();
+    if (
+      rect &&
+      event.clientX >= rect.left &&
+      event.clientX <= rect.right &&
+      event.clientY >= rect.top &&
+      event.clientY <= rect.bottom
+    )
+      return;
+    scheduleClose();
+  };
+  useEffect(() => {
+    if (!panel.collapsed) closeFly();
+  }, [panel.collapsed, closeFly]);
+  useEffect(() => () => cancelClose(), [cancelClose]);
 
   const content = (
     <>
@@ -1136,7 +1184,7 @@ export function AnimatedSidebarMenuButton({
     className,
   );
 
-  return href ? (
+  const trigger = href ? (
     <motion.a
       href={href}
       target={target}
@@ -1148,9 +1196,10 @@ export function AnimatedSidebarMenuButton({
       aria-expanded={ariaExpanded}
       aria-disabled={disabled || undefined}
       aria-label={panel.collapsed ? textLabel : undefined}
-      title={panel.collapsed ? textLabel : undefined}
       tabIndex={disabled ? -1 : undefined}
       onClick={select}
+      onPointerEnter={(event) => openFly(event.currentTarget)}
+      onPointerLeave={leaveTrigger}
       whileTap={context.reduce || disabled ? undefined : { scale: 0.98 }}
       transition={SPRING_PRESS}
       className={interactiveClassName}
@@ -1164,13 +1213,47 @@ export function AnimatedSidebarMenuButton({
       aria-current={isActive ? "page" : undefined}
       aria-expanded={ariaExpanded}
       aria-label={panel.collapsed ? textLabel : undefined}
-      title={panel.collapsed ? textLabel : undefined}
       onClick={select}
+      onPointerEnter={(event) => openFly(event.currentTarget)}
+      onPointerLeave={leaveTrigger}
       whileTap={context.reduce || disabled ? undefined : { scale: 0.98 }}
       transition={SPRING_PRESS}
       className={interactiveClassName}
     >
       {content}
     </motion.button>
+  );
+
+  return (
+    <>
+      {trigger}
+      {panel.collapsed && textLabel && fly
+        ? createPortal(
+            <motion.div
+              key={`fly-${textLabel}`}
+              ref={flyEl}
+              initial={{ width: fly.width, opacity: 0.4 }}
+              animate={{ width: "auto", opacity: 1 }}
+              transition={context.reduce ? { duration: 0 } : SPRING_LAYOUT}
+              style={{ left: fly.left, top: fly.top, height: fly.height }}
+              className={cn(
+                "fixed z-[60] flex cursor-pointer items-center gap-2.5 overflow-hidden rounded-xl border border-border bg-background px-3 text-sm font-medium whitespace-nowrap shadow-[0_10px_28px_rgba(20,23,28,0.16)]",
+                isActive ? "text-foreground" : "text-muted-foreground",
+              )}
+              onPointerEnter={cancelClose}
+              onPointerLeave={scheduleClose}
+              onClick={(event) => {
+                setFly(null);
+                select(event);
+              }}
+              aria-hidden="true"
+            >
+              {icon}
+              <span>{children}</span>
+            </motion.div>,
+            document.body,
+          )
+        : null}
+    </>
   );
 }
