@@ -52,7 +52,7 @@ services:
       <<: *no-proxy
       # 必填：外部 PG（如 内网主机 上现成的实例）或内置 db（--profile bundled-db）都填这里；
       # 沿用现成 SQLite 文件也行：sqlite+aiosqlite:////data/vega.db
-      VEGA_DATABASE_URL: postgresql+asyncpg://vega:${POSTGRES_PASSWORD:?请在 .env 设置 POSTGRES_PASSWORD}@db:5432/vega
+      VEGA_DATABASE_URL: ${VEGA_DATABASE_URL:-postgresql+asyncpg://vega:${POSTGRES_PASSWORD:?请在 .env 设置 POSTGRES_PASSWORD}@db:5432/vega}
     volumes:
       - ./data:/data
     depends_on:
@@ -93,7 +93,7 @@ services:
     restart: unless-stopped
     environment:
       <<: *no-proxy
-      DATABASE_URL: postgresql+asyncpg://vega:${POSTGRES_PASSWORD:?请在 .env 设置 POSTGRES_PASSWORD}@db:5432/vega
+      DATABASE_URL: ${VEGA_DATABASE_URL:-postgresql+asyncpg://vega:${POSTGRES_PASSWORD:?请在 .env 设置 POSTGRES_PASSWORD}@db:5432/vega}
       VEGA_SECRET_KEY: ${VEGA_SECRET_KEY:?请在 .env 设置 VEGA_SECRET_KEY}
       ENVIRONMENT_SECRET_KEY: ${QA_ENVIRONMENT_SECRET_KEY:-dev-environment-key-change-me}
       # 测试通知复用 Vega 集成中心的 octo 全局 bot（配置仍以集成中心录入的为准）
@@ -141,7 +141,7 @@ services:
     init: true
     environment:
       <<: *no-proxy
-      DATABASE_URL: postgresql+asyncpg://vega:${POSTGRES_PASSWORD:?请在 .env 设置 POSTGRES_PASSWORD}@db:5432/vega
+      DATABASE_URL: ${VEGA_DATABASE_URL:-postgresql+asyncpg://vega:${POSTGRES_PASSWORD:?请在 .env 设置 POSTGRES_PASSWORD}@db:5432/vega}
       VEGA_SECRET_KEY: ${VEGA_SECRET_KEY:?请在 .env 设置 VEGA_SECRET_KEY}
       ENVIRONMENT_SECRET_KEY: ${QA_ENVIRONMENT_SECRET_KEY:-dev-environment-key-change-me}
       OCTO_API_URL: ${VEGA_OCTO_API_URL:-}
