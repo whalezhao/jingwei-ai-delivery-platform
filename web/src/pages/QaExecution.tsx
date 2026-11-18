@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { Bot, RefreshCw, Trophy, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import Page from "../Page";
@@ -53,6 +53,7 @@ const OWNER: Record<string, [BadgeTone, MsgKey]> = {
 export default function QaExecutionPage() {
   const { t } = useTranslation();
   const { bid } = useParams();
+  const navigate = useNavigate();
   const [batch, setBatch] = useState<QaBatchDetail | null>(null);
   const [caseRun, setCaseRun] = useState<QaRunItem | null>(null);
   const [cases, setCases] = useState<any[]>([]);
@@ -105,14 +106,7 @@ export default function QaExecutionPage() {
     return () => clearInterval(id);
   }, [ai?.status, bid]);
 
-  const report = async (run: QaRunItem) => {
-    try {
-      const r = await qa<{ url: string }>(`/api/runs/${run.id}/report-url`);
-      window.open(r.url, "_blank", "noopener");
-    } catch (e: any) {
-      toast.error(e.message);
-    }
-  };
+  const report = (run: QaRunItem) => navigate(`/qa/runs/${run.id}/report`);
 
   const openCases = async (run: QaRunItem) => {
     setCaseRun(run);

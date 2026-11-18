@@ -53,6 +53,7 @@ import Integrations from "./pages/Integrations";
 import QaSystem from "./pages/QaSystem";
 import QaFeature from "./pages/QaFeature";
 import QaExecution from "./pages/QaExecution";
+import QaReport from "./pages/QaReport";
 import QaTasks from "./pages/QaTasks";
 import QaWorkers from "./pages/QaWorkers";
 import {
@@ -121,7 +122,7 @@ const MENU: MenuItem[] = [
     key: "nav.qaTasks",
     icon: CirclePlay,
     group: "navGroup.delivery",
-    match: ["/qa/tasks", "/qa/batches"],
+    match: ["/qa/tasks", "/qa/batches", "/qa/runs"],
   },
   {
     path: "/projects",
@@ -527,6 +528,7 @@ function Shell() {
               element={<QaFeature />}
             />
             <Route path="/qa/batches/:bid" element={<QaExecution />} />
+            <Route path="/qa/runs/:rid/report" element={<QaReport />} />
             <Route path="/qa/workers" element={<QaWorkers />} />
             <Route path="/nodes" element={<Nodes />} />
             <Route path="/integrations" element={<Integrations />} />

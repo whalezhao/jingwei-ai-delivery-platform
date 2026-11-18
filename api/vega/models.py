@@ -185,6 +185,10 @@ class System(Base):
     # auto_approve_prefixes 全命中才允许自动放行（fail-closed）
     audit_prefixes: Mapped[list | None] = mapped_column(JSON)
     auto_approve_prefixes: Mapped[list | None] = mapped_column(JSON)
+    # 部署触发测试：GitLab 环境名 → QA 项目环境名，如 [{"gitlab":"test","qa":"测试环境"}]；空 = 关闭
+    deploy_env_map: Mapped[list | None] = mapped_column(JSON)
+    # 允许触发测试的部署分支；空 = 回退 mr_target_branch
+    deploy_refs: Mapped[list | None] = mapped_column(JSON)
     # agent-memory 绑定（系统级优先，组 am_team_id 兜底）：随 claude 调用以 x-team-id /
     # x-agent-id 头下发，proxy 据此直选注入团队资产，跳过会话初始化提问
     am_team_id: Mapped[str | None] = mapped_column(String(64))
@@ -193,6 +197,9 @@ class System(Base):
 
     pms: Mapped[list[SystemPM]] = relationship(back_populates="system", cascade="all,delete-orphan")
     owners: Mapped[list[SystemOwner]] = relationship(back_populates="system", cascade="all,delete-orphan")
+    qa_owners: Mapped[list[SystemQaOwner]] = relationship(
+        back_populates="system", cascade="all,delete-orphan"
+    )
 
 
 class SystemPM(Base):
@@ -217,6 +224,18 @@ class SystemOwner(Base):
     system_id: Mapped[int] = mapped_column(ForeignKey("dev_system.id"), index=True)
     person_id: Mapped[int] = mapped_column(ForeignKey("person.id"), index=True)
     system: Mapped[System] = relationship(back_populates="owners")
+
+
+class SystemQaOwner(Base):
+    """系统测试负责人：测试执行开始/结果在研发组 octo 群 @ 的人。"""
+
+    __tablename__ = "system_qa_owner"
+    __table_args__ = (UniqueConstraint("system_id", "person_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    system_id: Mapped[int] = mapped_column(ForeignKey("dev_system.id", ondelete="CASCADE"), index=True)
+    person_id: Mapped[int] = mapped_column(ForeignKey("person.id", ondelete="CASCADE"), index=True)
+    system: Mapped[System] = relationship(back_populates="qa_owners")
 
 
 class GroupTechLead(Base):
@@ -334,8 +353,36 @@ class DevTask(Base):
     escalated_level: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(TZDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(TZDateTime, default=utcnow, onupdate=utcnow)
+    # MR 合入时间：部署触发测试按「合入时间 vs 部署时间」判断待测；旧数据为空回退 updated_at
+    merged_at: Mapped[datetime | None] = mapped_column(TZDateTime)
 
     requirement: Mapped[Requirement] = relationship(back_populates="tasks")
+
+
+class DeployEvent(Base):
+    """GitLab 部署事件：CD 完成信号的落点，按 (系统, 环境, 提交) 去重。"""
+
+    __tablename__ = "deploy_event"
+    __table_args__ = (
+        UniqueConstraint("system_id", "environment", "sha", name="uq_deploy_event_env_sha"),
+        Index("ix_deploy_event_system_time", "system_id", "deployed_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    system_id: Mapped[int] = mapped_column(
+        ForeignKey("dev_system.id", ondelete="CASCADE"), index=True
+    )
+    gitlab_project_id: Mapped[int] = mapped_column(Integer)
+    environment: Mapped[str] = mapped_column(String(64))
+    ref: Mapped[str | None] = mapped_column(String(256))
+    sha: Mapped[str] = mapped_column(String(64))
+    # success / failed / canceled / running —— 只有 success 会触发测试
+    status: Mapped[str] = mapped_column(String(16))
+    deployed_at: Mapped[datetime] = mapped_column(TZDateTime, default=utcnow)
+    payload: Mapped[dict | None] = mapped_column(JSON)
+    # 匹配处理完成时间；为空表示还没处理（webhook 后台任务失败会留待重试）
+    handled_at: Mapped[datetime | None] = mapped_column(TZDateTime)
+    result: Mapped[dict | None] = mapped_column(JSON)
 
 
 class PlanMessage(Base):

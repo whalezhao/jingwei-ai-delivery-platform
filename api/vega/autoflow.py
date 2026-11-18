@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .gitlab import GitlabClient, client_ctx
 from .jobs import _gitlab, mark_requirement_online
-from .models import DevGroup, DevTask, MrReview, Person, System, Requirement
+from .models import DevGroup, DevTask, MrReview, Person, System, Requirement, utcnow
 from .notify import merge_mentions, notify, project_owners
 from .person_links import person_by_gitlab
 
@@ -109,6 +109,7 @@ async def try_autoflow(
         creator = await db.get(Person, dev.creator_id)
         owners = await project_owners(db, project.id)
         dev.status = "done"
+        dev.merged_at = utcnow()
         await mark_requirement_online(db, req)
         await db.commit()
         await notify(

@@ -11,6 +11,7 @@ import {
   CircleCheck,
   CircleHelp,
   CircleStop,
+  Brain,
   CircleX,
   Clock,
   Code2,
@@ -29,6 +30,8 @@ import {
   Pencil,
   PenLine,
   Search,
+  ShieldCheck,
+  Sparkles,
   Target,
   Users,
   Wrench,
@@ -131,6 +134,12 @@ const fmtQaTime = (iso: string | null) =>
       })
     : "";
 /** 空对话时的起手示例（按当前讨论模式给，比一个光标干等着好）。 */
+/** claude 的权限模式，逐轮下发；default 不传 flag（对话态） */
+const PERM_MODES = ["default", "plan", "acceptEdits", "bypassPermissions"] as const;
+
+/** 思考级别：follow = 跟随人员/研发组配置（不覆盖本轮） */
+const EFFORTS = ["follow", "low", "medium", "high", "xhigh", "max"] as const;
+
 const examplesFor = (mode: "requirement" | "plan") =>
   mode === "requirement"
     ? [i18n.t("reqChat.exampleReq1"), i18n.t("reqChat.exampleReq2"), i18n.t("reqChat.exampleReq3")]
@@ -1274,6 +1283,9 @@ export default function RequirementChat() {
   const [me, setMe] = useState<{ name: string; avatar: string | null } | null>(null);
   const [err, setErr] = useState("");
   const [input, setInput] = useState("");
+  // EGM 托管：第一步只出待确认问题，用户回答后自动接手起草。只在内存里
+  // shortcut: 托管态不落库，刷新后回退为从 EGM 菜单手动选「起草设计」
+  const [hostAsk, setHostAsk] = useState(false);
   // 未发送的附件：点发送时先逐个上传，再把 id 绑到这条消息上
   const [files, setFiles] = useState<LocalFile[]>([]);
   const attRef = useRef<HTMLInputElement>(null);
@@ -1302,6 +1314,15 @@ export default function RequirementChat() {
   // 输入框里的团队/专家：每轮随消息下发，切换后下一轮的 claude 请求头即生效
   const [teamId, setTeamId] = useState<string | null>(null);
   const [agentId, setAgentId] = useState<string | null>(null);
+  // claude 权限模式：逐轮随消息下发，选择记在本地（换机器/换人各自保留）
+  const [permMode, setPermMode] = useState<(typeof PERM_MODES)[number]>(() => {
+    const saved = localStorage.getItem("vega.permMode") as (typeof PERM_MODES)[number] | null;
+    return saved && PERM_MODES.includes(saved) ? saved : "default";
+  });
+  const [effortMode, setEffortMode] = useState<(typeof EFFORTS)[number]>(() => {
+    const saved = localStorage.getItem("vega.effort") as (typeof EFFORTS)[number] | null;
+    return saved && EFFORTS.includes(saved) ? saved : "follow";
+  });
   // 列表里解析出的名字：选过专家后按钮直接显示专家名，不再只是"团队 / 专家"
   const [teamName, setTeamName] = useState<string>();
   const [agentName, setAgentName] = useState<string>();
@@ -1684,6 +1705,10 @@ export default function RequirementChat() {
     setErr("");
     setAsk(null); // 直接发言视为「继续聊」，收起选择框
     setSlash(null);
+    // 托管第二段：回答第一段的提问时，这条消息直接交给 egm-draft（显式指定的技能优先）
+    const hosting = hostAsk && !egm && chatMode === "plan";
+    // 托管态用掉即结束；显式点了别的 EGM 动作也算改主意
+    if (hostAsk) setHostAsk(false);
     setLiveEvts([]);
     setSubs([]);
     setThinkTokens(0);
@@ -1694,7 +1719,7 @@ export default function RequirementChat() {
         attachmentIds = await uploadFiles(sending);
       } catch (e: any) {
         setErr(e.message); // 附件没传成，消息不发，输入框内容保留
-        return;
+        return false;
       }
     }
     const optimisticId = -Date.now();
@@ -1717,21 +1742,33 @@ export default function RequirementChat() {
           content: text,
           attachment_ids: attachmentIds,
           mode: chatMode,
+          permission_mode: permMode,
+          effort: effortMode === "follow" ? null : effortMode,
           team_id: teamId,
           agent_id: agentId,
-          egm,
+          egm: hosting ? "draft" : egm,
           review_id: reviewId,
         }),
       });
       // 发送成功后只清掉这一批，期间新加的附件保留
       setFiles((prev) => prev.filter((f) => !sending.some((s) => s.uid === f.uid)));
+      return true;
     } catch (e: any) {
       // 服务端拒收（如另一标签页已把阶段推进）时收回乐观气泡
       setMsgs((m) => m.filter((x) => x.id !== optimisticId));
       setBusy(false);
       busyRef.current = false;
       setErr(e.message);
+      if (hosting) setHostAsk(true); // 出稿没发出去，保持托管态等重发
+      return false;
     }
+  };
+
+  /** EGM 托管第一步：只让它出待确认问题，人回答后由 send() 自动接手出稿。 */
+  const startHost = () => {
+    if (busy || chatMode !== "plan") return;
+    // 第一步真正发出去了才进入托管态；没发出去就别让下一条消息被当成回答
+    void send(t("reqChat.hostPrompt"), "brainstorm").then((ok) => ok && setHostAsk(true));
   };
 
   /** 清除会话（类似 /clear）：清空当前模式聊天记录并换新 claude session；文档与方案不动。 */
@@ -1948,6 +1985,14 @@ export default function RequirementChat() {
   // EGM 能力收进输入框旁的悬浮下拉：每项一个独立图标，不再占一整行
   const latestDoneReview = reviews.find((r) => r.status === "done");
   const egmMenu: EgmItem[] = [
+    {
+      key: "host",
+      icon: <Sparkles size={14} />,
+      label: t("reqChat.hostEgm"),
+      disabled: busy,
+      onClick: startHost,
+    },
+    { key: "divider", divider: true },
     {
       key: "brainstorm",
       icon: <Lightbulb size={14} />,
@@ -2427,6 +2472,15 @@ export default function RequirementChat() {
                   ))}
                 </div>
               )}
+              {hostAsk && chatMode === "plan" && (
+                <div className="rc-host-tip">
+                  <EgmMark size={12} />
+                  <span>{t("reqChat.hostPhase2")}</span>
+                  <button type="button" onClick={() => setHostAsk(false)}>
+                    {t("common.cancel")}
+                  </button>
+                </div>
+              )}
               <textarea
                 className="rc-composer-input"
                 rows={3}
@@ -2530,6 +2584,66 @@ export default function RequirementChat() {
                     </PopoverContent>
                   </Popover>
                 )}
+                <Popover trigger="hover" side="top" align="start" sideOffset={8}>
+                  <PopoverTrigger>
+                    <button
+                      type="button"
+                      className={`rc-tool-btn${effortMode !== "follow" ? " on" : ""}`}
+                      title={t("reqChat.effortMode")}
+                    >
+                      <Brain size={14} />
+                      <span>{t(`reqChat.effort.${effortMode}.label`)}</span>
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent className="p-1.5">
+                    <div className="rc-egm-menu rc-perm-menu">
+                      {EFFORTS.map((m) => (
+                        <button
+                          key={m}
+                          type="button"
+                          className={effortMode === m ? "on" : ""}
+                          onClick={() => {
+                            setEffortMode(m);
+                            localStorage.setItem("vega.effort", m);
+                          }}
+                        >
+                          <b>{t(`reqChat.effort.${m}.label`)}</b>
+                          <em>{t(`reqChat.effort.${m}.desc`)}</em>
+                        </button>
+                      ))}
+                    </div>
+                  </PopoverContent>
+                </Popover>
+                <Popover trigger="hover" side="top" align="start" sideOffset={8}>
+                  <PopoverTrigger>
+                    <button
+                      type="button"
+                      className={`rc-tool-btn${permMode !== "default" ? " on" : ""}`}
+                      title={t("reqChat.permMode")}
+                    >
+                      <ShieldCheck size={14} />
+                      <span>{t(`reqChat.perm.${permMode}.label`)}</span>
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent className="p-1.5">
+                    <div className="rc-egm-menu rc-perm-menu">
+                      {PERM_MODES.map((m) => (
+                        <button
+                          key={m}
+                          type="button"
+                          className={permMode === m ? "on" : ""}
+                          onClick={() => {
+                            setPermMode(m);
+                            localStorage.setItem("vega.permMode", m);
+                          }}
+                        >
+                          <b>{t(`reqChat.perm.${m}.label`)}</b>
+                          <em>{t(`reqChat.perm.${m}.desc`)}</em>
+                        </button>
+                      ))}
+                    </div>
+                  </PopoverContent>
+                </Popover>
                 {chatMode === "plan" && (
                   <Popover trigger="hover" side="top" align="start" sideOffset={8}>
                     <PopoverTrigger>

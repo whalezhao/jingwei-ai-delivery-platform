@@ -11,7 +11,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from ..deps import CurrentPerson, DbSession, require_system_access
 from ..models import (
@@ -32,10 +32,13 @@ from ..schemas import (
     BatchListOut,
     BatchPinIn,
 )
+from ..taskstatus import refresh_task_status
 from .runs import _resolve_data_path
 from .task_common import (
     active_task_ids,
+    delete_batches,
     failed_case_ids,
+    purge_artifacts,
     spawn_runs,
     trim_task_batches,
 )
@@ -382,6 +385,43 @@ async def set_batch_pinned(
     batch.pinned = body.pinned
     await db.commit()
     return {"id": str(batch.id), "pinned": batch.pinned}
+
+
+@router.delete("/{batch_id}", status_code=204)
+async def delete_batch(batch_id: uuid.UUID, user: CurrentPerson, db: DbSession) -> None:
+    """删除一条执行记录：run / 用例结果 / AI 结论 + 本机产物一并清掉。
+
+    正在排队或跑着的不能删 —— worker 手里还攥着那个 run，删了它会写回到一个
+    已经不存在的记录上。
+    """
+    batch = await db.get(RunBatch, batch_id)
+    if batch is None:
+        raise HTTPException(404, "执行记录不存在")
+    await require_system_access(db, batch.system_id, user, "member")
+    active = await db.scalar(
+        select(Run.id)
+        .where(Run.batch_id == batch_id, Run.status.in_(ACTIVE_RUN_STATUSES))
+        .limit(1)
+    )
+    if active:
+        raise HTTPException(409, "该执行还在排队或进行中，请先取消再删除")
+    dirs, midscene_ids = await delete_batches(db, [batch_id])
+    # 任务状态是 run 的聚合值：删完刷新，否则任务列表还显示上一次的结果
+    if batch.task_id is not None:
+        remaining = await db.scalar(
+            select(func.count(Run.id)).where(Run.task_id == batch.task_id)
+        )
+        if remaining:
+            await refresh_task_status(db, batch.task_id)
+        else:
+            await db.execute(
+                update(TestTask)
+                .where(TestTask.id == batch.task_id)
+                .values(status="draft")
+            )
+    await db.commit()
+    # 产物在数据库提交之后删：提交失败时文件还在，重试仍能对上
+    purge_artifacts(dirs, midscene_ids)
 
 
 # ------------------------------------------------------------- 重跑失败用例

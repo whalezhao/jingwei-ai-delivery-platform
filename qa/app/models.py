@@ -13,9 +13,10 @@
 """
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import (
+    JSON,
     BigInteger,
     Boolean,
     CheckConstraint,
@@ -23,7 +24,6 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
-    JSON,
     Numeric,
     String,
     Text,
@@ -71,6 +71,8 @@ class Person(Base):
     username: Mapped[str | None] = mapped_column(String(64))
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     roles: Mapped[list | None] = mapped_column(JSON, default=list)
+    # 测试通知 @ 人用；没有 octo 身份的人只能出现在正文里，不会被真正提醒
+    octo_uid: Mapped[str | None] = mapped_column(String(64))
 
 
 class DevGroup(Base):
@@ -81,6 +83,9 @@ class DevGroup(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(64))
     project_id: Mapped[int | None] = mapped_column(Integer)
+    # 测试执行通知发到组群；组独立 bot 优先，空 = 全局 bot
+    octo_group_no: Mapped[str | None] = mapped_column(String(64))
+    octo_bot_token_enc: Mapped[str | None] = mapped_column(Text)
 
 
 class Project(Base):
@@ -121,6 +126,44 @@ class SystemOwner(Base):
     person_id: Mapped[int] = mapped_column(Integer, index=True)
 
 
+class SystemQaOwner(Base):
+    """系统测试负责人（Vega 的 system_qa_owner）。只读。"""
+
+    __tablename__ = "system_qa_owner"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    system_id: Mapped[int] = mapped_column(Integer, index=True)
+    person_id: Mapped[int] = mapped_column(Integer, index=True)
+
+
+class VegaAppSetting(Base):
+    """Vega 的全局键值配置（app_setting），这里只用 octo 全局 bot token。只读。"""
+
+    __tablename__ = "app_setting"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str | None] = mapped_column(Text)
+
+
+class NotifyLog(Base):
+    """Vega 的通知留痕（notify_log），集成中心的「通知记录」读它。只写。"""
+
+    __tablename__ = "notify_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    group_id: Mapped[int] = mapped_column(Integer, index=True)
+    project_id: Mapped[int | None] = mapped_column(Integer)
+    octo_chat: Mapped[str | None] = mapped_column(String(64))
+    mentioned_uids: Mapped[list] = mapped_column(JSON, default=list)
+    content: Mapped[str] = mapped_column(Text)
+    reason: Mapped[str] = mapped_column(String(64))
+    ok: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Vega 的 notify_log.created_at 是 Python 侧默认值，库上没有 default，必须自己给
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+
+
 class GroupTechLead(Base):
     __tablename__ = "group_tech_lead"
 
@@ -141,6 +184,8 @@ class Requirement(Base):
     description: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(16), index=True)
     claimant_id: Mapped[int | None] = mapped_column(Integer)
+    # 需求文档定稿时把认领权交还池子，产品留痕为提出人（部署触发的测试结果要 @ 他）
+    proposer_id: Mapped[int | None] = mapped_column(Integer)
 
 
 # --------------------------------------------------------------------------- 系统配置
@@ -407,6 +452,14 @@ class TestTask(Timestamped, Base):
         Index("ix_qa_test_tasks_system", "system_id"),
         Index("ix_qa_test_tasks_requirement", "requirement_id"),
         Index("ix_qa_test_tasks_status", "status"),
+        # 部署触发的幂等键：同一次部署、同一需求只建一个测试任务
+        Index(
+            "uq_qa_test_tasks_deploy_req",
+            "deploy_event_id",
+            "requirement_id",
+            unique=True,
+            postgresql_where=text("deploy_event_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = _pk()
@@ -417,6 +470,8 @@ class TestTask(Timestamped, Base):
     requirement_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("requirement.id", ondelete="SET NULL")
     )
+    # 部署触发时记录来源事件（vega.deploy_event.id）；人工发起为 NULL
+    deploy_event_id: Mapped[int | None] = mapped_column(Integer)
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     type: Mapped[str] = mapped_column(String(24), nullable=False, default="case_run")
     description: Mapped[str | None] = mapped_column(Text)
@@ -486,7 +541,7 @@ class RunBatch(Timestamped, Base):
     __tablename__ = "qa_run_batches"
     __table_args__ = (
         CheckConstraint(
-            _in("trigger", "manual", "regression", "rerun", "requirement"),
+            _in("trigger", "manual", "regression", "rerun", "requirement", "deployment"),
             name="ck_qa_run_batches_trigger",
         ),
         Index("ix_qa_run_batches_system", "system_id"),
@@ -518,6 +573,8 @@ class RunBatch(Timestamped, Base):
     # 批次完成通知只发一次：并行槽位下，最后两个 run 可能同时看到「全部终态」。
     # 用一条带条件的 UPDATE 认领通知权，谁把 NULL 改成时间戳谁负责发。
     completed_notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # 同理的「开始通知只发一次」认领列：批次第一个 run 被认领时写时间戳
+    started_notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     runs: Mapped[list["Run"]] = relationship(
         back_populates="batch", passive_deletes=True
@@ -571,6 +628,10 @@ class Run(Timestamped, Base):
     # 认领这个 run 的 worker 进程。多 worker 下用来判断「原 worker 是否还活着」，
     # 只有拥有者失联时才允许恢复逻辑把它标失败。
     owner_worker_id: Mapped[str | None] = mapped_column(String(64))
+    # 调试试跑：用例内容直接挂在 run 上，不落 TestCase；统计查询一律排除
+    is_debug: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    debug_yaml: Mapped[str | None] = mapped_column(Text)
+    debug_step_limit: Mapped[int | None] = mapped_column(Integer)
     # 单系统任务分片：这个 run 只跑其中一部分用例；为空表示老数据/不分片
     case_ids: Mapped[list[str] | None] = mapped_column(JSONB)
     shard_index: Mapped[int | None] = mapped_column(Integer)

@@ -67,7 +67,9 @@ const setup = defineProjectSetup<ProjectContext>({
       args: noSandbox ? ['--no-sandbox', '--disable-dev-shm-usage'] : [],
     });
     onTeardown(() => browser.close());
-    const page = await browser.newPage();
+    // 被测环境常用自签证书（kiri 等本地域名），浏览器默认直接报 ERR_CERT_AUTHORITY_INVALID。
+    // 这是测试专用浏览器，且只访问用户自己配置的环境，忽略证书错误是常态做法。
+    const page = await browser.newPage({ ignoreHTTPSErrors: true });
     const context: ProjectContext = { page };
     onTeardown(async () => { await context.agent?.destroy(); });
     return context;

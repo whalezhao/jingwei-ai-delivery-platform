@@ -14,6 +14,7 @@ from .jobs import (
     _group_tech_leads,
     blocked_mr_scan,
     daily_commit_stats,
+    deploy_poll,
     merge_poll,
     scan_projects,
     sync_members_and_match,
@@ -86,6 +87,14 @@ async def _job_merge_poll() -> None:
             log.exception("merge_poll failed")
 
 
+async def _job_deploy_poll() -> None:
+    async with sessionmaker()() as s:
+        try:
+            log.info("deploy_poll %s", await deploy_poll(s))
+        except Exception:  # noqa: BLE001
+            log.exception("deploy_poll failed")
+
+
 async def _job_requeue_dead() -> None:
     try:
         n = await requeue_dead_nodes()
@@ -143,6 +152,7 @@ def start_scheduler() -> None:
     scheduler.add_job(_job_blocked_mrs, "cron", hour=9, minute=0, id="blocked_mrs_9", max_instances=1)
     scheduler.add_job(_job_blocked_mrs, "interval", hours=1, id="blocked_mrs_hourly", max_instances=1)
     scheduler.add_job(_job_merge_poll, "interval", minutes=10, id="merge_poll", max_instances=1)
+    scheduler.add_job(_job_deploy_poll, "interval", minutes=10, id="deploy_poll", max_instances=1)
     scheduler.add_job(_job_mr_autoflow, "interval", minutes=5, id="mr_autoflow", max_instances=1)
     scheduler.add_job(_job_requeue_dead, "interval", minutes=1, id="requeue_dead", max_instances=1)
     scheduler.start()

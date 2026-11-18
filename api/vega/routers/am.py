@@ -141,6 +141,40 @@ async def list_teams(
     ]
 
 
+async def am_names(
+    db: AsyncSession, me: Person | None, team_id: str | None, agent_id: str | None
+) -> tuple[str | None, str | None]:
+    """团队/专家 id → 展示名，供对话 prompt 里写「绑定：团队 X，专家 Y」。
+
+    hub 不可达（或 AM 未启用）时返回 None，调用方退回 id；网络问题不能挡住发消息。
+    """
+    if not (team_id or agent_id) or not await am_enabled(db):
+        return None, None
+    key = am_user_key(me)
+    base = await hub_base_url(db)
+    tname = aname = None
+    try:
+        if team_id:
+            teams = await _rpc("team/list", {"limit": 100, "offset": 0}, key, base)
+            tname = next(
+                (t.get("name") for t in teams.get("items", []) if t.get("team_id") == team_id), None
+            )
+        if team_id and agent_id:
+            agents = await _rpc(
+                "agent/list",
+                {"team_id": team_id, "status": "active", "limit": 100, "offset": 0},
+                key,
+                base,
+            )
+            aname = next(
+                (a.get("name") for a in agents.get("items", []) if a.get("agent_id") == agent_id),
+                None,
+            )
+    except HTTPException:  # _rpc 把连不上/非 JSON 都抛成 502
+        return None, None
+    return tname, aname
+
+
 @router.get("/agents")
 async def list_agents(
     team_id: str, me: Person = Depends(current_person), db: AsyncSession = Depends(get_db)

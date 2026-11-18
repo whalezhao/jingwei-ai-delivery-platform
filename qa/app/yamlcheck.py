@@ -9,8 +9,34 @@ from typing import Any
 
 import yaml
 
+# 拆文档时要保留的顶层键（beforeEach/beforeAll 等准备动作对每条用例都成立）
+_DOC_LEVEL_KEYS = ("beforeAll", "beforeEach", "afterEach", "tags", "variables")
+
 KNOWN_TOP = {"cases", "beforeAll", "beforeEach", "afterEach", "tags", "variables"}
 LIST_TOP = {"beforeAll", "beforeEach", "afterEach", "tags"}
+
+
+def split_cases(text: str) -> list[str]:
+    """把一份多 case 文档拆成「一条 case 一份文档」。
+
+    一个 TestCase 行只能对应一条 case —— 执行结果按 test_case_id 归集稳定性，
+    一份文档里放多条会让「稳定通过 + 稳定失败」被合并判成 flaky。
+    解析失败时原样返回，交给 validate() 报错。
+    """
+    try:
+        doc = yaml.safe_load(text)
+    except yaml.YAMLError:
+        return [text]
+    if not isinstance(doc, dict) or not isinstance(doc.get("cases"), list):
+        return [text]
+    cases = [case for case in doc["cases"] if isinstance(case, dict)]
+    if len(cases) <= 1:
+        return [text]
+    shared = {key: doc[key] for key in _DOC_LEVEL_KEYS if key in doc}
+    return [
+        yaml.safe_dump({**shared, "cases": [case]}, allow_unicode=True, sort_keys=False)
+        for case in cases
+    ]
 
 
 def validate(text: str) -> tuple[list[str], int]:

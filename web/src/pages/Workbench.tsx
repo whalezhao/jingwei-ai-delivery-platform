@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
+import { qa, type QaSummary } from "../qa";
 import { useGroup } from "../group";
 import Page from "../Page";
 import SearchSelect from "../ui/SearchSelect";
@@ -37,7 +38,20 @@ export default function Workbench() {
     if (groupId) p.set("group_id", String(groupId));
     if (projectId) p.set("system_id", String(projectId));
     const d = await api<{ requirements: Req[] }>(`/api/workbench?${p}`);
-    setReqs(d.requirements);
+    // 测试泳道数据来自 QA（与需求池同一接口）；没有已上线需求就不多打这一枪
+    const online = d.requirements.filter((r) => r.status === "online");
+    if (!online.length) {
+      setReqs(d.requirements);
+      return;
+    }
+    const ids = online.map((r) => r.id).join(",");
+    try {
+      const list = await qa<QaSummary[]>(`/api/requirement-test-summaries?ids=${ids}`);
+      const byId = Object.fromEntries(list.map((s) => [s.requirement_id, s]));
+      setReqs(d.requirements.map((r) => ({ ...r, test: byId[r.id] ?? null })));
+    } catch {
+      setReqs(d.requirements);
+    }
   };
   useEffect(() => {
     load();

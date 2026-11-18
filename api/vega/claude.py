@@ -126,6 +126,11 @@ async def run_claude(
                         flag = {"streamed": True} if (parent, "thinking") in streamed else {}
                         yield {"kind": "thinking", "text": _cap(block["thinking"]), "parent": parent, **flag}
                     elif t == "tool_use":
+                        # agent-memory 的 session-init 表单（AskUserQuestion，未配 team+agent 时
+                        # 由代理注入）在 claude -p 里没有这个工具，只会产出一条红色错误；
+                        # 代理下一轮按"未识别"自行 bypass，语义等同于用户选了跳过。整条扔掉。
+                        if block.get("name") == "AskUserQuestion":
+                            continue
                         yield {
                             "kind": "tool_use",
                             "id": block.get("id", ""),
@@ -137,11 +142,14 @@ async def run_claude(
                 # claude 的工具结果以 user 轮回传
                 for block in evt.get("message", {}).get("content", []):
                     if block.get("type") == "tool_result":
+                        text = _tool_result_text(block.get("content"))
+                        if "AskUserQuestion" in text:  # 同上：session-init 表单的报错噪声
+                            continue
                         yield {
                             "kind": "tool_result",
                             # 并行工具/子代理的结果会乱序回来，靠 id 对上调用方
                             "tool_use_id": block.get("tool_use_id", ""),
-                            "content": _cap(_tool_result_text(block.get("content")), 8_000),
+                            "content": _cap(text, 8_000),
                             "is_error": bool(block.get("is_error")),
                             "parent": parent,
                         }
@@ -204,21 +212,30 @@ async def run_claude(
         raise ClaudeError(f"claude -p 退出码 {rc}: {terminal or '(无 result 事件)'} | {stderr[-300:]}")
 
 
-def plan_args(session_id: str, resume: bool, am_url: str | None = None) -> list[str]:
+def plan_args(
+    session_id: str,
+    resume: bool,
+    am_url: str | None = None,
+    permission_mode: str | None = None,
+) -> list[str]:
     flag = "--resume" if resume else "--session-id"
     # 问答跑在常驻仓基线目录（多个任务共用的检出），Bash 不能整体放行：
     # 一条写命令就把基线弄脏，后续 fetch/checkout 全被本地改动挡住。
     # 只留只读工具 + memory-bridge 的检索 curl（限定 agent-memory 代理地址）。
+    # 不用 --permission-mode plan：plan 模式的系统提示会要求「先调研仓库、产出计划」，
+    # 一句「你好」也会被当成任务（实测跑 30 分钟去读 pom.xml）。只读由白名单保证。
     # am_url 由 runner 从任务 payload 的 claude_env 推出来，跟集成中心配置保持一致。
     am = (am_url or get_settings().am_base_url).rstrip("/")
-    return [
-        "--permission-mode",
-        "plan",
+    argv = [
         "--allowedTools",
         f"Read,Grep,Glob,LS,Bash(curl *{am}/memory-bridge/*)",
         flag,
         session_id,
     ]
+    # 操作者可以在输入框下面选模式；缺省不传，保持对话态（plan 模式会把寒暄也当调研任务）
+    if permission_mode and permission_mode != "default":
+        argv += ["--permission-mode", permission_mode]
+    return argv
 
 
 def dev_args(session_id: str) -> list[str]:

@@ -5,6 +5,11 @@ import { type RefObject, useEffect, useLayoutEffect, useRef } from "react";
 const FOCUSABLE =
   'button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])';
 
+// 下拉/多选/气泡都 portal 到 body，DOM 上不在面板里。它们的搜索框拿到焦点时若
+// 被当成"逃逸"抢回面板，组件会因 focusin 落在自己外面而立即收起（点了没反应）。
+const FLOATING_LAYER =
+  "[data-combobox-content], [data-multi-select-content], [data-popover-portal]";
+
 /** Elements inside `container` that Tab can reach, in DOM order. */
 export function focusablesIn(container: Element | null) {
   return Array.from(
@@ -61,7 +66,11 @@ export function useFocusTrap(
     const onFocus = (event: FocusEvent) => {
       if (!innermost() || !panel.current || panel.current.closest("[inert]"))
         return;
-      if (event.target instanceof Node && !panel.current.contains(event.target))
+      if (
+        event.target instanceof Node &&
+        !panel.current.contains(event.target) &&
+        !(event.target instanceof Element && event.target.closest(FLOATING_LAYER))
+      )
         focusFirst();
     };
     const onKey = (event: KeyboardEvent) => {

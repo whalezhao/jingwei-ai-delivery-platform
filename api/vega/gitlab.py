@@ -126,6 +126,26 @@ class GitlabClient:
         r.raise_for_status()
         return r.json()
 
+    async def list_deployments(self, client: httpx.AsyncClient, project_id: int, **params) -> list[dict]:
+        """项目部署记录（13.12 可用）：environment{name}/sha/ref/status/created_at。"""
+        r = await client.get(
+            f"{self.api}/projects/{project_id}/deployments",
+            params={"per_page": 50, "order_by": "updated_at", "sort": "desc", **params},
+            headers=self._headers(),
+        )
+        r.raise_for_status()
+        return r.json()
+
+    async def list_environments(self, client: httpx.AsyncClient, project_id: int) -> list[dict]:
+        """项目环境列表（供“部署触发测试”的映射下拉）。"""
+        r = await client.get(
+            f"{self.api}/projects/{project_id}/environments",
+            params={"per_page": 100},
+            headers=self._headers(),
+        )
+        r.raise_for_status()
+        return r.json()
+
     async def create_mr(
         self,
         client: httpx.AsyncClient,

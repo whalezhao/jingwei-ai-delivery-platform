@@ -189,7 +189,34 @@ async def claim_next(db) -> Run | None:
     # 「排队中」直到这次执行彻底结束
     await refresh_task_status(db, run.task_id)
     await db.commit()
+    await _notify_started(db, run)
     return run
+
+
+async def _notify_started(db, run: Run) -> None:
+    """批次真正开跑时通知一次测试负责人。
+
+    一个批次会按系统/分片拆成多个 run，并行槽位可能同时认领；用一条带条件的
+    UPDATE 认领通知权，谁把 NULL 写成时间戳谁负责发（同 completed_notified_at）。
+    """
+    if run.batch_id is None:
+        return
+    claimed = await db.execute(
+        update(RunBatch)
+        .where(RunBatch.id == run.batch_id, RunBatch.started_notified_at.is_(None))
+        .values(started_notified_at=datetime.now(UTC))
+    )
+    await db.commit()
+    if claimed.rowcount == 0:
+        return
+    from app.notify import notify_batch_started
+
+    batch = await db.get(RunBatch, run.batch_id)
+    try:
+        await notify_batch_started(db, batch)
+    except Exception:
+        await db.rollback()
+        log.exception("测试开始通知失败（不影响本次执行）")
 
 
 async def collect_cases(db, run: Run) -> list[tuple[uuid.UUID, str]]:
@@ -198,6 +225,10 @@ async def collect_cases(db, run: Run) -> list[tuple[uuid.UUID, str]]:
     task_cases 是任务创建时的快照（权威），再按 run 所属系统过滤 —— YAML 里的
     gotoUrl/BASE_URL 是系统级的，一个 run 只跑一个系统的用例。
     """
+    if run.is_debug:
+        # 调试试跑：YAML 直接挂在 run 上，没有任务可查。
+        # 文件名故意不用 UUID —— 反查不到用例 id，结果落 NULL；随机 UUID 会撞外键。
+        return [("debug", run.debug_yaml)] if run.debug_yaml else []  # type: ignore[list-item]
     if run.task_id is None:
         return []
     stmt = (
@@ -258,6 +289,14 @@ async def notify_batch_finished(db, run: Run) -> None:
     # 先把 AI 排队的写入落库，再做聚合报告 —— 报告合并要读各 run 的产物，
     # 失败了也只影响展示层，不能回滚前面已经完成的入队
     await db.commit()
+    # 结果通知：发失败只留日志，不能让批次收尾（聚合报告）跟着失败
+    from app.notify import notify_batch_finished
+
+    try:
+        await notify_batch_finished(db, await db.get(RunBatch, run.batch_id))
+    except Exception:
+        await db.rollback()
+        log.exception("测试结果通知失败（不影响本次执行）")
     try:
         await _merge_batch_report(run.batch_id)
     except Exception:

@@ -41,6 +41,14 @@ class Settings(BaseSettings):
     # 通知里拼报告链接用；留空则只发相对路径
     public_base_url: str = ""
 
+    # 测试执行通知：与 Vega 集成中心同一个全局 bot。两个服务是独立镜像，
+    # 只能各自从环境读（库里的加密 token 仍优先，见 app/notify.py）。
+    octo_api_url: str = ""
+    octo_bot_token: str = ""
+
+    # 部署触发测试：与 Vega 共享的内部调用密钥（Vega 侧 VEGA_QA_SERVICE_TOKEN）
+    qa_service_token: str = ""
+
     @property
     def runner_path(self) -> Path:
         p = Path(self.runner_dir)

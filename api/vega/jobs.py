@@ -6,7 +6,8 @@ import logging
 from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import delete, select
+import httpx
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -20,6 +21,7 @@ from .matching import run_matching
 from .models import (
     CommitFile,
     DailyStat,
+    DeployEvent,
     DevGroup,
     DevTask,
     FileStat,
@@ -601,6 +603,7 @@ async def merge_poll(db: AsyncSession) -> dict:
         state = mr.get("state")
         if state == "merged" and task.status != "done":
             task.status = "done"
+            task.merged_at = utcnow()
             merged += 1
             await mark_requirement_online(db, req)
             await _notify_task_final(db, group, req, task, "merged")
@@ -613,6 +616,85 @@ async def merge_poll(db: AsyncSession) -> dict:
             await _maybe_escalate(db, group, proj, req, task, mr)
     await db.commit()
     return {"merged": merged, "closed": closed}
+
+
+async def deploy_poll(db: AsyncSession) -> dict:
+    """CD 兜底：GitLab 部署记录 → deploy_event（webhook 丢事件时补录）。
+
+    只补系统配置了 deploy_env_map 的项目；唯一键 (system, env, sha) 去重。
+    另外重试 5 分钟前产生、仍未被处理的事件（上次匹配中途失败）。
+    """
+    from .deploy import handle_deploy_event
+
+    systems = (await db.scalars(select(System).where(System.deploy_env_map.isnot(None)))).all()
+    created = 0
+    for project in systems:
+        group = await db.get(DevGroup, project.group_id)
+        gl = _gitlab(group)
+        if not gl:
+            continue
+        last = await db.scalar(
+            select(func.max(DeployEvent.deployed_at)).where(DeployEvent.system_id == project.id)
+        )
+        params = {"updated_after": last.isoformat()} if last else {}
+        async with client_ctx() as client:
+            try:
+                rows = await gl.list_deployments(client, project.gitlab_project_id, **params)
+            except httpx.HTTPError:
+                log.warning("deploy_poll: list deployments failed for %s", project.path, exc_info=True)
+                continue
+        allowed = project.deploy_refs or [project.mr_target_branch]
+        for row in rows:
+            env = ((row.get("environment") or {}).get("name") or "").strip()
+            sha = row.get("sha") or ""
+            ref = (row.get("ref") or "").removeprefix("refs/heads/")
+            if row.get("status") != "success" or not env or not sha:
+                continue
+            if allowed and ref not in allowed:
+                continue
+            exists = await db.scalar(
+                select(DeployEvent.id).where(
+                    DeployEvent.system_id == project.id,
+                    DeployEvent.environment == env,
+                    DeployEvent.sha == sha,
+                )
+            )
+            if exists:
+                continue
+            raw = row.get("created_at")
+            try:
+                deployed_at = datetime.fromisoformat(raw.replace("Z", "+00:00")) if raw else utcnow()
+            except ValueError:
+                deployed_at = utcnow()
+            ev = DeployEvent(
+                system_id=project.id,
+                gitlab_project_id=project.gitlab_project_id,
+                environment=env,
+                ref=ref or None,
+                sha=sha,
+                status="success",
+                deployed_at=deployed_at,
+                payload=row,
+            )
+            db.add(ev)
+            await db.flush()
+            created += 1
+            await handle_deploy_event(db, ev.id)
+
+    stale = (
+        await db.scalars(
+            select(DeployEvent)
+            .where(
+                DeployEvent.handled_at.is_(None),
+                DeployEvent.deployed_at < utcnow() - timedelta(minutes=5),
+            )
+            .order_by(DeployEvent.id)
+            .limit(20)
+        )
+    ).all()
+    for ev in stale:
+        await handle_deploy_event(db, ev.id)
+    return {"created": created, "retried": len(stale)}
 
 
 # merge_poll 标记 MR 被关闭的哨兵文案；工作台据此区分「MR 关闭」与「已合入」

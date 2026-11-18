@@ -161,3 +161,47 @@ async def test_plan_message_carries_attachment(admin_client, db, seeded, req_cle
         json={"content": "再用一次", "attachment_ids": [att["id"]]},
     )
     assert r.status_code == 400, r.text
+
+async def test_switch_team_agent_rebuilds_session_with_history(admin_client, db, seeded, req_cleanup):
+    """换团队/专家 = 新会话：首轮必须带上该模式的历史，并写明本轮绑定的团队/专家。
+
+    模型看不到 HTTP 头，绑定信息只能写进上下文，否则被问「用的哪个团队/专家」只能回答不知道。
+    """
+    r = await admin_client.post(
+        "/api/requirements",
+        json={"system_id": seeded["project"].id, "title": "切换团队", "req_type": "bug"},
+    )
+    req_id = r.json()["id"]
+    req_cleanup.append(req_id)
+
+    r = await admin_client.post(
+        f"/api/requirements/{req_id}/plan/messages", json={"content": "你好", "mode": "plan"}
+    )
+    assert r.status_code == 200, r.text
+    first = await db.scalar(
+        select(RunnerTask)
+        .where(RunnerTask.requirement_id == req_id, RunnerTask.type == "plan_turn")
+        .order_by(RunnerTask.id.desc())
+    )
+    # 项目/研发组里有团队时也会写进上下文（专家未选就是未选）
+    assert "agent-memory 绑定：团队 team-1，专家 未选" in first.payload["prompt"]
+
+    r = await admin_client.post(
+        f"/api/requirements/{req_id}/plan/messages",
+        json={
+            "content": "继续",
+            "mode": "plan",
+            "team_id": "team-x",
+            "agent_id": "agt-y",
+        },
+    )
+    assert r.status_code == 200, r.text
+    second = await db.scalar(
+        select(RunnerTask)
+        .where(RunnerTask.requirement_id == req_id, RunnerTask.type == "plan_turn")
+        .order_by(RunnerTask.id.desc())
+    )
+    assert second.payload["resume"] is False  # 换人 = 新会话
+    prompt = second.payload["prompt"]
+    assert "换团队/专家前的聊天记录" in prompt and "你好" in prompt
+    assert "团队 team-x，专家 agt-y" in prompt

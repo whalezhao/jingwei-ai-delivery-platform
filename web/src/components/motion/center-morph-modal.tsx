@@ -19,6 +19,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { EASE_OUT } from "@/lib/ease";
+import { useFocusTrap } from "@/lib/hooks/use-focus-trap";
 import { PresenceGate } from "@/lib/presence-gate";
 import { cn } from "@/lib/utils";
 
@@ -164,15 +165,6 @@ export interface CenterMorphModalContentProps {
   backdropClassName?: string;
 }
 
-const FOCUSABLE_SELECTOR = [
-  "a[href]",
-  "button:not([disabled])",
-  "input:not([disabled])",
-  "select:not([disabled])",
-  "textarea:not([disabled])",
-  '[tabindex]:not([tabindex="-1"])',
-].join(",");
-
 const CENTER_FOLDED_CLIP =
   "inset(48% 48% 48% 48% round 30px)";
 const CENTER_OPEN_CLIP = "inset(0% 0% 0% 0% round 30px)";
@@ -185,13 +177,6 @@ const CENTER_UNFOLD_TRANSITION = {
   duration: 0.43,
   ease: CENTER_UNFOLD_EASE,
 } as const;
-
-function getFocusableElements(root: HTMLElement | null) {
-  if (!root) return [];
-  return Array.from(
-    root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR),
-  ).filter((element) => element.tabIndex >= 0);
-}
 
 export function CenterMorphModalContent({
   children,
@@ -210,51 +195,24 @@ export function CenterMorphModalContent({
 
   useEffect(() => setMounted(true), []);
 
+  // 弹层常盖在 Drawer 上：双方都要进同一个 focus trap 栈，最内层才抢得到焦点，
+  // 否则 Drawer 的 trap 会把焦点从弹层输入框里拉回去（输入框点了没反应）。
+  useFocusTrap(
+    context.open && mounted,
+    panelRef,
+    dismissible ? { onEscape: () => context.setOpen(false) } : {},
+  );
+
   useEffect(() => {
     if (!context.open) return;
 
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
 
-    const focusFrame = requestAnimationFrame(() => {
-      const [firstFocusable] = getFocusableElements(panelRef.current);
-      (firstFocusable ?? panelRef.current)?.focus();
-    });
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && dismissible) {
-        event.preventDefault();
-        context.setOpen(false);
-        return;
-      }
-
-      if (event.key !== "Tab") return;
-      const focusable = getFocusableElements(panelRef.current);
-      if (focusable.length === 0) {
-        event.preventDefault();
-        panelRef.current?.focus();
-        return;
-      }
-
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-
-    window.addEventListener("keydown", onKeyDown);
     return () => {
-      cancelAnimationFrame(focusFrame);
-      window.removeEventListener("keydown", onKeyDown);
       document.body.style.overflow = previousOverflow;
-      document.getElementById(context.triggerId)?.focus();
     };
-  }, [context, dismissible]);
+  }, [context.open]);
 
   if (!mounted) return null;
 

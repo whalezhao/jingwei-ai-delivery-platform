@@ -84,6 +84,14 @@ def test_plan_args_have_no_bare_bash():
     assert any("memory-bridge" in t for t in tools)
 
 
+def test_plan_args_permission_mode_opt_in():
+    """默认不带 --permission-mode（plan 模式会把寒暄当任务）；操作者选了才加。"""
+    assert "--permission-mode" not in plan_args("sid", False)
+    assert "--permission-mode" not in plan_args("sid", False, permission_mode="default")
+    args = plan_args("sid", False, permission_mode="plan")
+    assert args[args.index("--permission-mode") + 1] == "plan"
+
+
 async def test_plan_turn_runs_in_baseline(tmp_path, monkeypatch):
     bare, master = _seed_bare(tmp_path)
     url = f"file://{bare}"

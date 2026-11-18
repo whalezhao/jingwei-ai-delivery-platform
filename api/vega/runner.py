@@ -461,7 +461,7 @@ class Runner:
             am_url = self._am_base(payload)
             if art:
                 return egm_plan_args(payload["session_id"], replay, str(art), am_url)
-            return plan_args(payload["session_id"], replay, am_url)
+            return plan_args(payload["session_id"], replay, am_url, payload.get("permission_mode"))
 
         try:
             text = await self._run_plan_claude(task_id, args(resume), payload)

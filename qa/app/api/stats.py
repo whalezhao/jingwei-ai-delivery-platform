@@ -47,7 +47,12 @@ def _run_scope(
     include_infra: bool = False,
 ):
     # 只看跑完的：queued/running 的还没结果，failed/cancelled/timed_out 的没有指标
-    conditions = [Run.system_id == system_id, Run.status.in_(("succeeded", "failed"))]
+    conditions = [
+        Run.system_id == system_id,
+        Run.status.in_(("succeeded", "failed")),
+        # 调试试跑不计入统计口径
+        Run.is_debug.is_(False),
+    ]
     if not include_infra:
         # 排除「非用例原因」的失败（模型额度用尽、服务不可达、网络不通）
         conditions.append(Run.failure_kind.is_(None))
@@ -73,6 +78,7 @@ def _terminal_scope(
     conditions = [
         Run.system_id == system_id,
         Run.status.in_(("succeeded", "failed", "cancelled", "timed_out")),
+        Run.is_debug.is_(False),
     ]
     if date_from is not None:
         conditions.append(

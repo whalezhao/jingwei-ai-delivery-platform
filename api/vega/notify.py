@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from . import octo
 from .config import get_settings
 from .crypto import decrypt
-from .models import DevGroup, NotifyLog, Person, Project, SystemOwner
+from .models import DevGroup, NotifyLog, Person, Project, SystemOwner, SystemQaOwner
 
 
 async def project_owners(db: AsyncSession, system_id: int) -> list[Person]:
@@ -20,6 +20,20 @@ async def project_owners(db: AsyncSession, system_id: int) -> list[Person]:
                 .join(SystemOwner, SystemOwner.person_id == Person.id)
                 .where(SystemOwner.system_id == system_id)
                 .order_by(SystemOwner.id)  # 顺序稳定：MR 只能挂第一个有 GitLab 账号的人
+            )
+        ).all()
+    )
+
+
+async def qa_owners(db: AsyncSession, system_id: int) -> list[Person]:
+    """系统测试负责人：测试开始/结果通知 @ 的人（与 QA 侧读同一张 system_qa_owner）。"""
+    return list(
+        (
+            await db.scalars(
+                select(Person)
+                .join(SystemQaOwner, SystemQaOwner.person_id == Person.id)
+                .where(SystemQaOwner.system_id == system_id)
+                .order_by(SystemQaOwner.id)
             )
         ).all()
     )

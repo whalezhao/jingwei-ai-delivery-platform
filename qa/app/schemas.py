@@ -180,6 +180,10 @@ class CaseDraftIn(In):
 
     messages: list[ChatMessage] = Field(min_length=1)
     current_yaml: str | None = None
+    # append：只允许在已验证的步骤后追加；平台会校验前缀，被改写就丢弃这次结果
+    mode: Literal["rewrite", "append"] = "rewrite"
+    # 调试试跑的 run id，作为续写依据（失败步骤 + 截图）
+    run_id: uuid.UUID | None = None
 
 
 class CaseDraftOut(BaseModel):
@@ -188,6 +192,22 @@ class CaseDraftOut(BaseModel):
     yaml_ok: bool = False
     yaml_errors: list[str] = []
     usage: dict = {}
+    diff: str | None = None
+    lock_violated: bool = False
+    steps: list[dict] = []
+
+
+class TrialRunIn(In):
+    yaml_content: str
+    # 每条 case 只跑前 N 步：调试点在「第 N 步能不能走到」
+    step_limit: int = Field(ge=1, le=60)
+    environment_name: str | None = None
+
+
+class TrialRunOut(BaseModel):
+    run_id: uuid.UUID
+    steps: int
+    case_count: int
 
 
 class YamlValidateOut(BaseModel):
@@ -364,6 +384,8 @@ class RunProgressOut(BaseModel):
 class RunDetailOut(RunOut):
     work_dir: str | None = None
     report_available: bool = False
+    # 调试试跑收尾后带上失败步骤（哪一步、为什么），用于调试面板归因
+    failure_steps: list[dict] = []
     ai_calls: int = 0
     ai_total_tokens: int = 0
     ai_cost_ms: int = 0
@@ -446,6 +468,13 @@ class BatchListOut(BaseModel):
 
 class RequirementRunIn(In):
     environment_name: str | None = Field(default=None, max_length=64)
+
+
+class InternalRequirementRunIn(In):
+    """Vega 部署触发的内部发起请求；deploy_event_id 用于幂等。"""
+
+    environment_name: str | None = Field(default=None, max_length=64)
+    deploy_event_id: int
 
 
 class RequirementTestSummaryOut(BaseModel):

@@ -52,6 +52,7 @@ from ..schemas import (
     RequirementUpdate,
 )
 from . import person_to_out
+from .am import am_names
 from .nodes import HEARTBEAT_OFFLINE_S
 
 log = logging.getLogger(__name__)
@@ -638,7 +639,12 @@ async def claim(
 # ---------- plan 会话 ----------
 
 
-_PLAN_RULE = """[输出约定]
+_PLAN_RULE = """[先判断意图] 只有纯问候、致谢、确认（如「你好」「谢谢」「收到」）才按普通对话简短回答、不调用工具。
+只要在问技术问题或让做事，回答前必须先查团队知识（按系统提示里 <knowledge_tools> 给的 curl 方式调 memory-bridge）：
+- 设计意图 / 背景 / 用法 / 规范（「怎么用」「为什么这么设计」）→ 先查 wiki 资源；
+- 结构 / 符号 / 调用链 / 影响面 → 先查 code-graph 资源。
+查过再答；只读 README、pom 或凭印象就下结论算不合格。资源没有命中或调不通时才回退仓库检索。
+[输出约定]
 1) 给出方案时，把方案正文（完整、可独立阅读的 Markdown）放在下面两行标记之间，标记各占一行：
 <!-- vega:plan:begin -->
 …方案内容…
@@ -661,7 +667,12 @@ _EGM_RULE = """[EGM 设计模式]
 本轮只讨论技术方案，不涉及需求文档。"""
 
 
-_DOC_RULE = """[输出约定]
+_DOC_RULE = """[先判断意图] 只有纯问候、致谢、确认（如「你好」「谢谢」「收到」）才按普通对话简短回答、不调用工具。
+只要在问技术问题或让做事，回答前必须先查团队知识（按系统提示里 <knowledge_tools> 给的 curl 方式调 memory-bridge）：
+- 设计意图 / 背景 / 用法 / 规范（「怎么用」「为什么这么设计」）→ 先查 wiki 资源；
+- 结构 / 符号 / 调用链 / 影响面 → 先查 code-graph 资源。
+查过再答；只读 README、pom 或凭印象就下结论算不合格。资源没有命中或调不通时才回退仓库检索。
+[输出约定]
 1) 这轮讨论需求本身。需要给出/修订需求文档时，把完整的需求文档正文（可独立阅读的 Markdown）放在下面两行标记之间，标记各占一行：
 <!-- vega:doc:begin -->
 …完整需求文档…
@@ -892,6 +903,9 @@ async def post_plan_message(
         )
 
     target = resolve_llm(person, group)
+    # 输入框下面选了思考级别就只覆盖本轮，不改人员/研发组的落库配置
+    if body.effort:
+        target.effort = body.effort
     env = build_claude_env(
         target,
         team_id=team_id,
@@ -905,6 +919,14 @@ async def post_plan_message(
     )
     if first:
         parts = [await _plan_context(db, req)]
+        if team_id or agent_id:
+            # 模型看不到 HTTP 头：本轮绑定的 AM 团队/专家写进上下文，
+            # 否则被问「你现在用的哪个团队/专家」只能回不知道。优先写中文名，取不到退回 id
+            tname, aname = await am_names(db, person, team_id, agent_id)
+            parts.append(
+                f"agent-memory 绑定：团队 {tname or team_id or '未选'}，"
+                f"专家 {aname or agent_id or '未选'}"
+            )
         if history:
             why = "换团队/专家" if switched else "切换运行节点" if node_lost else None
             head = f"[{why}前的聊天记录，供接续]" if why else "[此前的聊天记录，供接续]"
@@ -948,6 +970,8 @@ async def post_plan_message(
         "resume": resume,
         "prompt": prompt,
         "mode": mode,
+        # 逐轮生效的 claude 权限模式（输入框下面的选择器），runner 原样传给 --permission-mode
+        "permission_mode": body.permission_mode,
         "docs": [{"id": d.id, "filename": d.filename} for d in docs],
         "attachments": [
             {"id": a.id, "filename": a.filename, "mime": a.mime, "size": a.size} for a in atts

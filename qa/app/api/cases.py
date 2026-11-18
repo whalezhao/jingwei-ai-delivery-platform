@@ -12,16 +12,19 @@ from ..ai_fix import propose_case_fix
 from ..case_versions import diff_text, rollback_case, snapshot_case
 from ..db import SessionLocal
 from ..deps import CurrentPerson, DbSession, require_case_access, require_feature_access
+from ..environments import environment_for_system
 from ..modelconfig import missing_fields
 from ..models import (
     CaseResult,
-    SystemModelConfig,
     Run,
     RunBatch,
+    System,
+    SystemModelConfig,
     TestCase,
     TestCaseVersion,
 )
 from ..quota import ensure_quota, record_usage
+from ..runner.parsers import read_case_evidence
 from ..schemas import (
     AiFixIn,
     AiFixOut,
@@ -32,12 +35,40 @@ from ..schemas import (
     TestCaseCreate,
     TestCaseOut,
     TestCaseUpdate,
+    TrialRunIn,
+    TrialRunOut,
     YamlValidateIn,
     YamlValidateOut,
 )
+from ..yamlcheck import split_cases
 from ..yamlcheck import validate as validate_yaml
 
 router = APIRouter(tags=["cases"])
+
+
+def _fit_name(name: str, limit: int = 128) -> str:
+    """拆出来的名字可能超出列宽；截断保后缀，避免入库时才炸。"""
+    return name if len(name) <= limit else name[: limit - 1] + "…"
+
+
+async def _trial_context(db, feature, run_id):
+    """把一次调试试跑的结果变成续写依据：失败步骤证据 + 最近一张截图。
+
+    只接受本系统的调试试跑 —— 别的 run 既没有可读产物，也不该被喂进模型。
+    """
+    if run_id is None:
+        return None, None
+    run = await db.get(Run, run_id)
+    if run is None or not run.is_debug or run.system_id != feature.system_id:
+        return None, None
+    from .runs import _resolve_data_path
+
+    result_dir = _resolve_data_path(run.result_dir)
+    if result_dir is None:
+        return None, None
+    evidence = read_case_evidence(result_dir, limit=20)
+    text = json.dumps(evidence, ensure_ascii=False)[:12_000] if evidence else None
+    return text, ai_case.latest_screenshot_data_url(result_dir)
 
 
 async def _draft_ready(feature_id, user, db):
@@ -68,6 +99,7 @@ async def draft_case_with_ai(
     仍然只有一个答案。系统没配好时同样拦住，并说清缺什么。
     """
     feature, config = await _draft_ready(feature_id, user, db)
+    evidence, image = await _trial_context(db, feature, body.run_id)
 
     try:
         result = await ai_case.draft(
@@ -76,6 +108,9 @@ async def draft_case_with_ai(
             history=[m.model_dump() for m in body.messages],
             current_yaml=body.current_yaml,
             feature_name=feature.name,
+            mode=body.mode,
+            evidence=evidence,
+            image=image,
         )
     except httpx.HTTPStatusError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, _describe_http_error(exc)) from exc
@@ -96,6 +131,9 @@ async def draft_case_with_ai(
         yaml_ok=result.yaml_ok,
         yaml_errors=result.yaml_errors,
         usage=result.usage,
+        diff=result.diff,
+        lock_violated=result.lock_violated,
+        steps=result.steps or [],
     )
 
 
@@ -108,6 +146,8 @@ async def draft_case_with_ai_stream(
     事件：delta（增量文本）/ done（结构化结果，形状同 CaseDraftOut）/ error。
     """
     feature, config = await _draft_ready(feature_id, user, db)
+    # 在响应开始前取好：流式生成期间依赖注入的会话不保证还活着
+    evidence, image = await _trial_context(db, feature, body.run_id)
 
     async def events():
         async for item in ai_case.draft_stream(
@@ -115,6 +155,9 @@ async def draft_case_with_ai_stream(
             history=[m.model_dump() for m in body.messages],
             current_yaml=body.current_yaml,
             feature_name=feature.name,
+            mode=body.mode,
+            evidence=evidence,
+            image=image,
         ):
             if item["event"] == "done":
                 tokens = int((item["data"].get("usage") or {}).get("total_tokens") or 0)
@@ -143,6 +186,41 @@ async def draft_case_with_ai_stream(
             # nginx 之类的反代会缓冲 SSE，显式关掉
             "X-Accel-Buffering": "no",
         },
+    )
+
+
+@router.post("/api/features/{feature_id}/ai/trial-run", response_model=TrialRunOut)
+async def trial_run(
+    feature_id: uuid.UUID, body: TrialRunIn, user: CurrentPerson, db: DbSession
+) -> TrialRunOut:
+    """把当前 YAML 的前 N 步真正跑一遍，拿步骤级结果。
+
+    不落 TestCase、不进批次、不计入统计（Run.is_debug）—— 这是调试通道，
+    不是一次正式执行。
+    """
+    feature, _config = await _draft_ready(feature_id, user, db)
+    errors, case_count = validate_yaml(body.yaml_content)
+    if errors:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "；".join(errors))
+    text = ai_case.truncate_steps(body.yaml_content, body.step_limit)
+    env = await environment_for_system(
+        db, feature.system_id, environment_name=body.environment_name
+    )
+    run = Run(
+        system_id=feature.system_id,
+        status="queued",
+        is_debug=True,
+        debug_yaml=text,
+        debug_step_limit=body.step_limit,
+        environment_id=env.id if env else None,
+        environment_name=env.name if env else None,
+        environment_base_url=env.base_url if env else None,
+        created_by=user.id,
+    )
+    db.add(run)
+    await db.commit()
+    return TrialRunOut(
+        run_id=run.id, steps=len(ai_case.steps_of(text)), case_count=case_count
     )
 
 
@@ -213,30 +291,52 @@ async def create_case(
     errors, _ = validate_yaml(body.yaml_content)
     if errors:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "; ".join(errors))
-    exists = (
+
+    # 一个 TestCase 只放一条 case：结果按 test_case_id 归集稳定性，混在一起会判错
+    docs = split_cases(body.yaml_content)
+    names = (
+        [body.name]
+        if len(docs) == 1
+        else [_fit_name(f"{body.name}（{index + 1}）") for index in range(len(docs))]
+    )
+    taken = (
         await db.execute(
-            select(TestCase.id).where(
-                TestCase.feature_id == feature_id, TestCase.name == body.name
+            select(TestCase.name).where(
+                TestCase.feature_id == feature_id, TestCase.name.in_(names)
             )
         )
-    ).first()
-    if exists is not None:
-        raise HTTPException(status.HTTP_409_CONFLICT, "该功能下已有同名用例")
-    data = body.model_dump(exclude={"change_source", "change_note"})
-    case = TestCase(feature_id=feature_id, created_by=user.id, **data)
-    db.add(case)
-    await db.flush()
-    version = await snapshot_case(
-        db,
-        case,
-        source="create",
-        note=body.change_note,
-        user_id=user.id,
+    ).scalars()
+    if duplicate := next(iter(taken), None):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, f"该功能下已有同名用例「{duplicate}」，请改名后重试"
+        )
+
+    data = body.model_dump(
+        exclude={"change_source", "change_note", "name", "yaml_content"}
     )
+    first: TestCase | None = None
+    version_no = 0
+    for name, doc in zip(names, docs):
+        case = TestCase(
+            feature_id=feature_id,
+            name=name,
+            yaml_content=doc,
+            created_by=user.id,
+            **data,
+        )
+        db.add(case)
+        await db.flush()
+        version = await snapshot_case(
+            db, case, source="create", note=body.change_note, user_id=user.id
+        )
+        first = first or case
+        version_no = version.version_no
     await db.commit()
-    case.feature = feature
-    out = TestCaseOut.model_validate(case)
-    out.version_no = version.version_no
+    if first is None:  # 不会发生：docs 至少一份
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "用例创建失败")
+    first.feature = feature
+    out = TestCaseOut.model_validate(first)
+    out.version_no = version_no
     return out
 
 
@@ -270,9 +370,16 @@ async def update_case(
     ).scalar_one()
     data = body.model_dump(exclude_unset=True, exclude={"change_source", "change_note"})
     if "yaml_content" in data:
-        errors, _ = validate_yaml(data["yaml_content"])
+        errors, case_count = validate_yaml(data["yaml_content"])
         if errors:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "; ".join(errors))
+        if case_count > 1:
+            # 编辑不能悄悄拆分（拆出来的新用例归谁说不清），让人明确拆开保存
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"该 YAML 包含 {case_count} 条 case。一个用例只能对应一条 case"
+                "（稳定性按用例统计），请拆成多份分别新建。",
+            )
     if "stage_override" in data and data["stage_override"] not in {
         None,
         "in_iteration",

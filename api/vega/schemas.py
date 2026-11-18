@@ -221,8 +221,12 @@ class SystemIn(BaseModel):
     mr_target_branch: str = "nightly"
     tech_lead_person_ids: list[int] = []
     owner_person_ids: list[int] = []
+    qa_owner_person_ids: list[int] = []
     audit_prefixes: list[str] | None = None
     auto_approve_prefixes: list[str] | None = None
+    # 部署触发测试：GitLab 环境 → QA 环境映射；空 = 关闭
+    deploy_env_map: list[dict] | None = None
+    deploy_refs: list[str] | None = None
     # 建项目时一次性动作：立刻投 EGM bootstrap（不落库，所以不需要迁移）
     run_egm_bootstrap: bool = False
 
@@ -235,8 +239,11 @@ class SystemUpd(BaseModel):
     mr_target_branch: str | None = None
     tech_lead_person_ids: list[int] | None = None
     owner_person_ids: list[int] | None = None
+    qa_owner_person_ids: list[int] | None = None
     audit_prefixes: list[str] | None = None
     auto_approve_prefixes: list[str] | None = None
+    deploy_env_map: list[dict] | None = None
+    deploy_refs: list[str] | None = None
     am_team_id: str | None = None
     am_agent_id: str | None = None
 
@@ -254,8 +261,11 @@ class SystemOut(BaseModel):
     mr_target_branch: str
     tech_lead_person_ids: list[int] = []
     owner_person_ids: list[int] = []
+    qa_owner_person_ids: list[int] = []
     audit_prefixes: list[str] | None = None
     auto_approve_prefixes: list[str] | None = None
+    deploy_env_map: list[dict] | None = None
+    deploy_refs: list[str] | None = None
     am_team_id: str | None = None
     am_agent_id: str | None = None
 
@@ -318,6 +328,11 @@ class PlanMessageIn(BaseModel):
     egm: EGM_SKILL | None = None
     # egm=resolve 时引用哪一份评审报告；空 = 取该需求最新一份已完成的评审
     review_id: int | None = None
+    # claude 的权限模式，逐轮生效：default=对话（工具仍受只读白名单约束）、plan=先调研再出计划；
+    # acceptEdits / bypassPermissions 会放开写与任意命令，可能改动共享基线仓库
+    permission_mode: Literal["default", "plan", "acceptEdits", "bypassPermissions"] = "default"
+    # 思考级别：空 = 跟随解析链（人员 → 研发组 → 平台默认），显式传值只覆盖本轮
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
 
 
 class PlanReviewIn(BaseModel):
@@ -353,6 +368,7 @@ class EgmReportOut(BaseModel):
     branch: str | None = None
     mr_url: str | None = None
     created_at: str | None = None
+    updated_at: str | None = None
 
 
 class PlanClearIn(BaseModel):

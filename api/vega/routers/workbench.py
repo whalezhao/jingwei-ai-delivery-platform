@@ -15,6 +15,7 @@ from ..auth import current_person
 from ..db import get_db
 from ..jobs import MR_CLOSED_MARK
 from ..models import (
+    DeployEvent,
     DevGroup,
     DevTask,
     DevTaskEvent,
@@ -266,6 +267,20 @@ async def workbench(
         for m in rows:
             mrs[(m.system_id, m.mr_iid)] = m
 
+    # 部署触发测试：每个系统最近一次部署（泳道节点数据）
+    deploy_systems = {p.id for p in projects.values() if p.deploy_env_map}
+    deploys: dict[int, DeployEvent] = {}
+    if deploy_systems:
+        rows = (
+            await db.scalars(
+                select(DeployEvent)
+                .where(DeployEvent.system_id.in_(deploy_systems))
+                .order_by(DeployEvent.deployed_at.desc())
+            )
+        ).all()
+        for ev in rows:
+            deploys.setdefault(ev.system_id, ev)
+
     out = []
     for r in reqs:
         p = projects[r.system_id]
@@ -334,6 +349,17 @@ async def workbench(
                 "owners": owners.get(p.id, []),
                 "doc_agent": expert(r, p, "requirement"),  # 协助写需求的专家
                 "plan_agent": expert(r, p, "plan"),  # 共同编写方案的专家
+                # 部署/测试泳道：系统配了映射才画；deploy 是最近一次部署事件
+                "deploy_on": bool(p.deploy_env_map),
+                "deploy": (
+                    {
+                        "environment": deploys[p.id].environment,
+                        "sha": deploys[p.id].sha,
+                        "at": _iso(deploys[p.id].deployed_at),
+                    }
+                    if p.id in deploys
+                    else None
+                ),
                 "tasks": task_items,
             }
         )

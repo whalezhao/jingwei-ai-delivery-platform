@@ -307,6 +307,23 @@ function BatchesTab({ system }: { system: QaSystem }) {
     load();
   }, [system.id]);
 
+  const remove = async (r: QaBatch) => {
+    const ok = await confirm({
+      title: t("qa.batch.deleteConfirm", { name: r.name }),
+      description: t("qa.batch.deleteDesc"),
+      confirmText: t("qa.common.delete"),
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await qa(`/api/batches/${r.id}`, { method: "DELETE" });
+      toast.success(t("qa.batch.deleted"));
+      load();
+    } catch (e: any) {
+      toast.error(e.message);
+    }
+  };
+
   const columns: DataTableColumn<QaBatch>[] = [
     {
       title: t("qa.batch.colName"),
@@ -364,11 +381,20 @@ function BatchesTab({ system }: { system: QaSystem }) {
     },
     {
       title: t("qa.common.actions"),
-      width: 100,
+      width: 150,
       render: (_, r) => (
-        <Link to={`/qa/batches/${r.id}`} className="text-primary">
-          {t("qa.batch.detail")}
-        </Link>
+        <span className="flex gap-3">
+          <Link to={`/qa/batches/${r.id}`} className="text-primary">
+            {t("qa.batch.detail")}
+          </Link>
+          <button
+            type="button"
+            onClick={() => remove(r)}
+            className="text-danger hover:underline"
+          >
+            {t("qa.common.delete")}
+          </button>
+        </span>
       ),
     },
   ];

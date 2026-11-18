@@ -10,6 +10,8 @@ import {
   GitMerge,
   GitPullRequest,
   Lightbulb,
+  ListChecks,
+  Rocket,
   type LucideIcon,
 } from "lucide-react";
 import dayjs from "dayjs";
@@ -77,6 +79,10 @@ export interface Req {
   owners: string[];
   doc_agent: { id: string; name: string } | null;
   plan_agent: { id: string; name: string } | null;
+  // 部署/测试泳道：系统配了环境映射才画 deploy
+  deploy_on: boolean;
+  deploy: { environment: string; sha: string; at: string | null } | null;
+  test?: { status: string; pass_rate: number | null } | null;
   tasks: Task[];
 }
 
@@ -151,8 +157,25 @@ function taskPhase(task: Task, r: Req): [BadgeTone, MsgKey] {
   return ["info", "workbench.phase.developing"];
 }
 
-type NodeKey = "doc" | "plan" | "dev" | "review" | "ci" | "merge" | "notify";
+type NodeKey =
+  | "doc"
+  | "plan"
+  | "dev"
+  | "review"
+  | "ci"
+  | "merge"
+  | "deploy"
+  | "test"
+  | "notify";
 type St = "ok" | "live" | "idle" | "bad";
+
+/** 测试批次状态 → 泳道节点状态 */
+function testState(s?: string | null): St {
+  if (s === "completed") return "ok";
+  if (s === "completed_with_failures" || s === "failed" || s === "cancelled") return "bad";
+  if (s === "queued" || s === "running") return "live";
+  return "idle";
+}
 
 const NODE_LABEL: Record<NodeKey, MsgKey> = {
   doc: "workbench.node.doc",
@@ -161,6 +184,8 @@ const NODE_LABEL: Record<NodeKey, MsgKey> = {
   review: "workbench.node.review",
   ci: "workbench.node.ci",
   merge: "workbench.node.merge",
+  deploy: "workbench.node.deploy",
+  test: "workbench.node.test",
   notify: "workbench.node.notify",
 };
 
@@ -171,7 +196,10 @@ function nodeKeys(r: Req): NodeKey[] {
   const keys: NodeKey[] = r.req_type === "bug" ? ["plan", "dev"] : ["doc", "plan", "dev"];
   if (r.review_on) keys.push("review", "ci");
   if (r.review_on && r.merge_on) keys.push("merge");
-  else keys.push("notify");
+  // 部署泳道只给配了环境映射的系统画；测试只在需求上线后才有意义
+  if (r.deploy_on) keys.push("deploy");
+  if (r.status === "online") keys.push("test");
+  keys.push("notify");
   return keys;
 }
 
@@ -219,6 +247,9 @@ function reqNodes(r: Req): { key: NodeKey; label: MsgKey; state: St }[] {
       state[k] = i < cur ? "ok" : i === cur ? (bad ? "bad" : "live") : "idle";
     });
   }
+  // 部署/测试是需求级状态，不看单个任务：部署过 = ok，测试批次状态各自映射
+  if (r.deploy_on) state.deploy = r.deploy ? "ok" : "idle";
+  if (keys.includes("test")) state.test = testState(r.test?.status);
   return keys.map((k) => ({ key: k, label: NODE_LABEL[k], state: state[k] || "idle" }));
 }
 
@@ -546,7 +577,17 @@ function buildRows(
 }
 
 /** 阶段泳道按固定顺序排列，全部始终显示；列宽等分容器宽度 */
-const LANE_ORDER: NodeKey[] = ["doc", "plan", "dev", "review", "ci", "merge", "notify"];
+const LANE_ORDER: NodeKey[] = [
+  "doc",
+  "plan",
+  "dev",
+  "review",
+  "ci",
+  "merge",
+  "deploy",
+  "test",
+  "notify",
+];
 const LANE_HEAD_H = 30;
 /** 阶段图标：与侧栏菜单同一套 lucide 线性图标 */
 const LANE_ICON: Record<NodeKey, LucideIcon> = {
@@ -556,6 +597,8 @@ const LANE_ICON: Record<NodeKey, LucideIcon> = {
   review: GitPullRequest,
   ci: FlaskConical,
   merge: GitMerge,
+  deploy: Rocket,
+  test: ListChecks,
   notify: Bell,
 };
 /** 阶段列最窄宽度：再窄就没法读，改为整体缩放 */

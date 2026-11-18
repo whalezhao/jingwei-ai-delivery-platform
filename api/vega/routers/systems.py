@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from datetime import timedelta
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,8 +12,19 @@ from ..auth import current_person, require_admin
 from ..config import get_settings
 from ..crypto import decrypt
 from ..db import get_db
+from ..gitlab import GitlabClient, client_ctx
 from ..llm import am_user_key, build_claude_env, resolve_llm
-from ..models import DevGroup, EgmReport, Person, System, SystemOwner, SystemPM, Requirement, utcnow
+from ..models import (
+    DevGroup,
+    EgmReport,
+    Person,
+    Requirement,
+    System,
+    SystemOwner,
+    SystemPM,
+    SystemQaOwner,
+    utcnow,
+)
 from ..numbering import gen_session_id
 from ..person_links import person_ids, set_persons
 from ..queue import enqueue
@@ -23,7 +35,12 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/systems", tags=["systems"])
 
 
-def system_to_out(p: System, tech_lead_ids: list[int], owner_ids: list[int]) -> dict:
+def system_to_out(
+    p: System,
+    tech_lead_ids: list[int],
+    owner_ids: list[int],
+    qa_owner_ids: list[int],
+) -> dict:
     return {
         "id": p.id,
         "group_id": p.group_id,
@@ -35,8 +52,11 @@ def system_to_out(p: System, tech_lead_ids: list[int], owner_ids: list[int]) -> 
         "mr_target_branch": p.mr_target_branch,
         "tech_lead_person_ids": tech_lead_ids,
         "owner_person_ids": owner_ids,
+        "qa_owner_person_ids": qa_owner_ids,
         "audit_prefixes": p.audit_prefixes,
         "auto_approve_prefixes": p.auto_approve_prefixes,
+        "deploy_env_map": p.deploy_env_map,
+        "deploy_refs": p.deploy_refs,
         "am_team_id": p.am_team_id,
         "am_agent_id": p.am_agent_id,
     }
@@ -64,6 +84,7 @@ async def list_projects(
                 p,
                 await person_ids(db, SystemPM, system_id=p.id),
                 await person_ids(db, SystemOwner, system_id=p.id),
+                await person_ids(db, SystemQaOwner, system_id=p.id),
             )
         )
     return out
@@ -96,18 +117,28 @@ async def create_project(
         mr_target_branch=body.mr_target_branch,
         audit_prefixes=body.audit_prefixes,
         auto_approve_prefixes=body.auto_approve_prefixes,
+        deploy_env_map=body.deploy_env_map,
+        deploy_refs=body.deploy_refs,
     )
     db.add(project)
     await db.flush()
     await set_persons(db, SystemPM, body.tech_lead_person_ids, "技术负责人", system_id=project.id)
     await set_persons(db, SystemOwner, body.owner_person_ids, "系统负责人", system_id=project.id)
+    await set_persons(
+        db, SystemQaOwner, body.qa_owner_person_ids, "测试负责人", system_id=project.id
+    )
     await db.commit()
     await db.refresh(project)
-    out = system_to_out(project, body.tech_lead_person_ids, body.owner_person_ids)
+    out = system_to_out(
+        project,
+        body.tech_lead_person_ids,
+        body.owner_person_ids,
+        body.qa_owner_person_ids,
+    )
     if body.run_egm_bootstrap:
         # 项目已建成：投递失败不能让建项目失败，最多日志里留一笔
         try:
-            await enqueue_project_egm_job(db, project, "bootstrap")
+            await enqueue_project_egm_job(db, project, "bootstrap", admin)
             log.info("项目 %s 创建后自动投递 EGM 文档树", project.id)
         except HTTPException as e:
             log.warning("项目 %s 自动文档树跳过：%s", project.id, e.detail)
@@ -137,8 +168,19 @@ async def update_project(
         await set_persons(db, SystemPM, data["tech_lead_person_ids"], "技术负责人", system_id=project.id)
     if data.get("owner_person_ids") is not None:
         await set_persons(db, SystemOwner, data["owner_person_ids"], "系统负责人", system_id=project.id)
+    if data.get("qa_owner_person_ids") is not None:
+        await set_persons(
+            db, SystemQaOwner, data["qa_owner_person_ids"], "测试负责人", system_id=project.id
+        )
     # 前缀两兄弟：显式非 None 才更新（空数组 = 清空配置，None = 不动）
-    for k in ("audit_prefixes", "auto_approve_prefixes", "am_team_id", "am_agent_id"):
+    for k in (
+        "audit_prefixes",
+        "auto_approve_prefixes",
+        "deploy_env_map",
+        "deploy_refs",
+        "am_team_id",
+        "am_agent_id",
+    ):
         if data.get(k) is not None:
             setattr(project, k, data[k])
     await db.commit()
@@ -146,7 +188,31 @@ async def update_project(
         project,
         await person_ids(db, SystemPM, system_id=project.id),
         await person_ids(db, SystemOwner, system_id=project.id),
+        await person_ids(db, SystemQaOwner, system_id=project.id),
     )
+
+
+@router.get("/{system_id}/gitlab-environments")
+async def list_gitlab_environments(
+    system_id: int,
+    db: AsyncSession = Depends(get_db),
+    _me: Person = Depends(current_person),
+) -> list[str]:
+    """读 GitLab 项目环境名，供「部署触发测试」的环境映射选择。"""
+    project = await db.get(System, system_id)
+    if not project:
+        raise HTTPException(404, "系统不存在")
+    group = await db.get(DevGroup, project.group_id)
+    token = decrypt(get_settings().secret_key, group.gitlab_token_enc) if group else None
+    if not group or not token:
+        return []
+    gl = GitlabClient(group.gitlab_base_url, token)
+    try:
+        async with client_ctx() as client:
+            rows = await gl.list_environments(client, project.gitlab_project_id)
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"读取 GitLab 环境失败：{e}") from e
+    return [r["name"] for r in rows if r.get("name")]
 
 
 # ---------- EGM 项目级任务 ----------
@@ -162,7 +228,18 @@ def _report_out(r: EgmReport) -> dict:
         "branch": r.branch,
         "mr_url": r.mr_url,
         "created_at": str(r.created_at) if r.created_at else None,
+        "updated_at": str(r.updated_at) if r.updated_at else None,
     }
+
+
+async def _require_egm_writer(db: AsyncSession, me: Person, system_id: int) -> None:
+    if me.is_admin:
+        return
+    ids = await person_ids(db, SystemOwner, system_id=system_id) + await person_ids(
+        db, SystemPM, system_id=system_id
+    )
+    if me.id not in ids:
+        raise HTTPException(403, "只有系统负责人或技术负责人可操作")
 
 
 @router.post("/{system_id}/egm-jobs", response_model=EgmReportOut)
@@ -176,18 +253,18 @@ async def create_egm_job(
     project = await db.get(System, system_id)
     if not project:
         raise HTTPException(404, "系统不存在")
-    allowed = me.is_admin or me.id in (
-        await person_ids(db, SystemOwner, system_id=project.id)
-        + await person_ids(db, SystemPM, system_id=project.id)
-    )
-    if not allowed:
-        raise HTTPException(403, "只有系统负责人或技术负责人可发起")
-    rep = await enqueue_project_egm_job(db, project, body.kind)
+    await _require_egm_writer(db, me, project.id)
+    rep = await enqueue_project_egm_job(db, project, body.kind, me)
     return _report_out(rep)
 
 
-async def enqueue_project_egm_job(db: AsyncSession, project: System, kind: str) -> EgmReport:
-    """建报告并入队项目级 EGM 任务；手动按钮与每周自动漂移共用。"""
+async def enqueue_project_egm_job(
+    db: AsyncSession, project: System, kind: str, person: Person | None = None
+) -> EgmReport:
+    """建报告并入队项目级 EGM 任务；手动按钮与每周自动漂移共用。
+
+    person 为发起人：手动任务用发起人的 LLM / agent-memory key，自动任务不传（组 → 兜底）。
+    """
     group = await db.get(DevGroup, project.group_id)
     token = decrypt(get_settings().secret_key, group.gitlab_token_enc)
     if not (group.gitlab_base_url and token):
@@ -215,10 +292,10 @@ async def enqueue_project_egm_job(db: AsyncSession, project: System, kind: str) 
         designs = [{"code": r.code, "content": r.plan_md} for r in reqs]
 
     env = build_claude_env(
-        resolve_llm(None, group),
+        resolve_llm(person, group),
         team_id=project.am_team_id or group.am_team_id,
         agent_id=project.am_agent_id,
-        user_key=am_user_key(None),
+        user_key=am_user_key(person),
         conversation_id=gen_session_id(),
     )
     rep = EgmReport(system_id=project.id, kind=kind, status="running")
@@ -304,6 +381,52 @@ async def list_egm_reports(
         )
     ).all()
     return [_report_out(r) for r in rows]
+
+
+@router.delete("/{system_id}/egm-reports/{report_id}")
+async def delete_egm_report(
+    system_id: int,
+    report_id: int,
+    db: AsyncSession = Depends(get_db),
+    me: Person = Depends(current_person),
+) -> dict:
+    """删一条报告：执行中的不能删（结果要回写），runner_task / GitLab 分支不动。"""
+    project = await db.get(System, system_id)
+    if not project:
+        raise HTTPException(404, "系统不存在")
+    await _require_egm_writer(db, me, system_id)
+    rep = await db.get(EgmReport, report_id)
+    if not rep or rep.system_id != system_id:
+        raise HTTPException(404, "报告不存在")
+    if rep.status == "running":
+        raise HTTPException(409, "任务还在执行，结束后再删")
+    await db.delete(rep)
+    await db.commit()
+    return {"ok": True}
+
+
+@router.delete("/{system_id}/egm-reports")
+async def clear_egm_reports(
+    system_id: int,
+    db: AsyncSession = Depends(get_db),
+    me: Person = Depends(current_person),
+) -> dict:
+    project = await db.get(System, system_id)
+    if not project:
+        raise HTTPException(404, "系统不存在")
+    await _require_egm_writer(db, me, system_id)
+    running = await db.scalar(
+        select(EgmReport.id)
+        .where(EgmReport.system_id == system_id, EgmReport.status == "running")
+        .limit(1)
+    )
+    if running:
+        raise HTTPException(409, "有任务还在执行，结束后再清空")
+    rows = (await db.scalars(select(EgmReport).where(EgmReport.system_id == system_id))).all()
+    for r in rows:
+        await db.delete(r)
+    await db.commit()
+    return {"deleted": len(rows)}
 
 
 @router.delete("/{system_id}")

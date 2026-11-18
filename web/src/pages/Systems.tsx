@@ -1,16 +1,15 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Plus, Search, X } from "lucide-react";
+import { Plus, Search } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import Markdown from "react-markdown";
 import { api, isAdmin } from "../api";
-import type { MsgKey } from "../i18n";
+import { qa } from "../qa";
 import { useGroup } from "../group";
 import AmSelect from "../components/AmSelect";
 import { useAmEnabled } from "../am";
 import Page from "../Page";
 import DataTable, { type DataTableColumn } from "../ui/DataTable";
-import Badge, { type BadgeTone } from "../ui/Badge";
+import Badge from "../ui/Badge";
 import SearchSelect from "../ui/SearchSelect";
 import { confirm } from "../ui/confirm";
 import { Field, useForm } from "../ui/form";
@@ -21,8 +20,8 @@ import {
   CenterMorphModal,
   CenterMorphModalContent,
 } from "../components/motion/center-morph-modal";
-import { Drawer } from "../components/motion/drawer";
 import { Input } from "../components/motion/input";
+import EgmReportsDrawer from "../components/EgmReportsDrawer";
 import {
   MultiSelect,
   MultiSelectContent,
@@ -33,12 +32,6 @@ import {
   MultiSelectTrigger,
   MultiSelectValue,
 } from "../components/motion/multi-select";
-
-const EGM_ST: Record<string, { tone: BadgeTone; text: MsgKey }> = {
-  running: { tone: "info", text: "systems.egm.running" },
-  done: { tone: "success", text: "systems.egm.done" },
-  failed: { tone: "danger", text: "systems.egm.failed" },
-};
 
 interface System {
   id: number;
@@ -51,8 +44,11 @@ interface System {
   mr_target_branch: string;
   tech_lead_person_ids: number[];
   owner_person_ids: number[];
+  qa_owner_person_ids: number[];
   audit_prefixes: string[] | null;
   auto_approve_prefixes: string[] | null;
+  deploy_env_map: { gitlab: string; qa: string }[] | null;
+  deploy_refs: string[] | null;
   am_team_id: string | null;
   am_agent_id: string | null;
 }
@@ -83,12 +79,22 @@ const empty = {
   mr_target_branch: "nightly",
   tech_lead_person_ids: [] as number[],
   owner_person_ids: [] as number[],
+  qa_owner_person_ids: [] as number[],
   audit_prefixes: "",
   auto_approve_prefixes: "",
+  deploy_refs: "",
+  deploy_env_map: [] as { gitlab: string; qa: string }[],
   am_team_id: "",
   am_agent_id: "",
   run_egm_bootstrap: false,
 };
+
+/** 逗号/分号分隔的分支名列表；空串 = 未配置（回退 mr_target_branch） */
+const listToDb = (s: string | null | undefined) =>
+  (s || "")
+    .split(/[;；,，\n]/)
+    .map((x) => x.trim())
+    .filter(Boolean);
 
 export default function Systems() {
   const { t } = useTranslation();
@@ -100,10 +106,11 @@ export default function Systems() {
   const [people, setPeople] = useState<any[]>([]);
   const [editing, setEditing] = useState<System | null>(null);
   const [keyword, setKeyword] = useState("");
+  // 部署触发测试：可选环境（GitLab / QA 各一份，项目维度）
+  const [glEnvs, setGlEnvs] = useState<string[]>([]);
+  const [qaEnvs, setQaEnvs] = useState<string[]>([]);
   // EGM 项目级任务：bootstrap 生成 README 树，drift 出设计-代码漂移报告
   const [egmFor, setEgmFor] = useState<System | null>(null);
-  const [egmReports, setEgmReports] = useState<any[]>([]);
-  const [egmBusy, setEgmBusy] = useState(false);
   const form = useForm(empty);
 
   const load = async () => {
@@ -135,8 +142,11 @@ export default function Systems() {
           mr_target_branch: p.mr_target_branch,
           tech_lead_person_ids: p.tech_lead_person_ids ?? [],
           owner_person_ids: p.owner_person_ids ?? [],
+          qa_owner_person_ids: p.qa_owner_person_ids ?? [],
           audit_prefixes: prefixToView(p.audit_prefixes),
           auto_approve_prefixes: prefixToView(p.auto_approve_prefixes),
+          deploy_refs: (p.deploy_refs ?? []).join(";"),
+          deploy_env_map: (p.deploy_env_map ?? []).map((m) => ({ ...m })),
           am_team_id: p.am_team_id ?? "",
           am_agent_id: p.am_agent_id ?? "",
           run_egm_bootstrap: false,
@@ -147,6 +157,18 @@ export default function Systems() {
         };
     setEditing(p ?? ({ id: 0 } as System));
     form.reset(values);
+    // 部署映射的下拉选项：GitLab 环境（项目维度）+ QA 环境（项目维度）
+    if (p?.id) {
+      api<string[]>(`/api/systems/${p.id}/gitlab-environments`)
+        .then(setGlEnvs)
+        .catch(() => setGlEnvs([]));
+      qa<{ name: string }[]>(`/api/systems/${p.id}/environments`)
+        .then((list) => setQaEnvs(list.map((e) => e.name)))
+        .catch(() => setQaEnvs([]));
+    } else {
+      setGlEnvs([]);
+      setQaEnvs([]);
+    }
   };
 
   // 专家列表随团队：项目团队 → 未选回退研发组团队
@@ -170,6 +192,9 @@ export default function Systems() {
       ...form.values,
       audit_prefixes: prefixToDb(form.values.audit_prefixes),
       auto_approve_prefixes: prefixToDb(form.values.auto_approve_prefixes),
+      deploy_refs: listToDb(form.values.deploy_refs),
+      // 半截映射（没选环境）不提交
+      deploy_env_map: form.values.deploy_env_map.filter((m) => m.gitlab && m.qa),
     };
     try {
       if (editing?.id)
@@ -195,31 +220,7 @@ export default function Systems() {
     }
   };
 
-  const openEgm = async (p: System) => {
-    setEgmFor(p);
-    setEgmReports(
-      await api<any[]>(`/api/systems/${p.id}/egm-reports`).catch(() => []),
-    );
-  };
-
-  const runEgm = async (p: System, kind: "bootstrap" | "drift") => {
-    setEgmBusy(true);
-    try {
-      await api(`/api/systems/${p.id}/egm-jobs`, {
-        method: "POST",
-        body: JSON.stringify({ kind }),
-      });
-      toast.success(
-        t(kind === "bootstrap" ? "systems.submittedBootstrap" : "systems.submittedDrift"),
-      );
-      await openEgm(p);
-    } catch (e: any) {
-      toast.error(e.message);
-    } finally {
-      setEgmBusy(false);
-    }
-  };
-
+  
   const gname = (gid: number) => groups.find((g) => g.id === gid)?.name || gid;
   const pname = (pid: number) => people.find((p) => p.id === pid)?.name || pid;
   const term = keyword.trim().toLowerCase();
@@ -289,6 +290,14 @@ export default function Systems() {
           : "—",
     },
     {
+      title: t("systems.colQaOwner"),
+      width: 110,
+      render: (_, r) =>
+        r.qa_owner_person_ids.length
+          ? r.qa_owner_person_ids.map(pname).join(t("systems.listSep"))
+          : "—",
+    },
+    {
       title: t("systems.colPrefixes"),
       width: 150,
       render: (_, r) => (
@@ -317,7 +326,7 @@ export default function Systems() {
     },
     {
       title: t("common.actions"),
-      width: 320,
+      width: 260,
       render: (_, r) => (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <button
@@ -330,22 +339,8 @@ export default function Systems() {
           <button type="button" className={linkClass} onClick={() => open(r)}>
             {t("common.edit")}
           </button>
-          <button type="button" className={linkClass} onClick={() => openEgm(r)}>
+          <button type="button" className={linkClass} onClick={() => setEgmFor(r)}>
             {t("systems.egmReports")}
-          </button>
-          <button
-            type="button"
-            className={linkClass}
-            onClick={() => !egmBusy && runEgm(r, "bootstrap")}
-          >
-            {t("systems.docTree")}
-          </button>
-          <button
-            type="button"
-            className={linkClass}
-            onClick={() => !egmBusy && runEgm(r, "drift")}
-          >
-            {t("systems.driftCheck")}
           </button>
           {isAdmin() ? (
             <button
@@ -482,6 +477,88 @@ export default function Systems() {
                   classNames={{ field: "rounded-lg" }}
                 />
               </Field>
+
+              <div className="sm:col-span-2">
+                <div className="text-[13px] font-medium text-foreground">
+                  {t("systems.deployTitle")}
+                </div>
+                <p className="m-0 mt-1 text-[12px] text-muted-foreground">
+                  {t("systems.deployHint")}
+                </p>
+                <div className="mt-2">
+                  <Input
+                    label={t("systems.deployRefs")}
+                    value={form.values.deploy_refs}
+                    onChange={(v) => form.set("deploy_refs", v)}
+                    placeholder={form.values.mr_target_branch || "nightly"}
+                    classNames={{ field: "rounded-lg" }}
+                  />
+                </div>
+                {editing?.id ? (
+                  <div className="mt-3 flex flex-col gap-2">
+                    {form.values.deploy_env_map.map((m, i) => (
+                      <div key={i} className="flex items-center gap-2">
+                        <div className="flex-1">
+                          <SearchSelect
+                            value={m.gitlab || null}
+                            onChange={(v) => {
+                              const next = [...form.values.deploy_env_map];
+                              next[i] = { ...next[i], gitlab: String(v ?? "") };
+                              form.set("deploy_env_map", next);
+                            }}
+                            options={glEnvs.map((n) => ({ value: n, label: n }))}
+                            placeholder={t("systems.deployGitlabEnv")}
+                          />
+                        </div>
+                        <span className="text-muted-foreground">→</span>
+                        <div className="flex-1">
+                          <SearchSelect
+                            value={m.qa || null}
+                            onChange={(v) => {
+                              const next = [...form.values.deploy_env_map];
+                              next[i] = { ...next[i], qa: String(v ?? "") };
+                              form.set("deploy_env_map", next);
+                            }}
+                            options={qaEnvs.map((n) => ({ value: n, label: n }))}
+                            placeholder={t("systems.deployQaEnv")}
+                          />
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() =>
+                            form.set(
+                              "deploy_env_map",
+                              form.values.deploy_env_map.filter((_, j) => j !== i),
+                            )
+                          }
+                        >
+                          {t("common.delete")}
+                        </Button>
+                      </div>
+                    ))}
+                    <div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() =>
+                          form.set("deploy_env_map", [
+                            ...form.values.deploy_env_map,
+                            { gitlab: "", qa: "" },
+                          ])
+                        }
+                      >
+                        <Plus className="mr-1 size-3.5" />
+                        {t("systems.deployAdd")}
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="mt-2 text-[12px] text-muted-foreground">
+                    {t("systems.deploySaveFirst")}
+                  </p>
+                )}
+              </div>
               <Field label={t("systems.techLead")}>
                 <MultiSelect
                   value={form.values.tech_lead_person_ids.map(String)}
@@ -518,6 +595,40 @@ export default function Systems() {
                   value={form.values.owner_person_ids.map(String)}
                   onValueChange={(values) =>
                     form.set("owner_person_ids", values.map(Number))
+                  }
+                >
+                  <MultiSelectTrigger className="rounded-lg">
+                    <MultiSelectValue placeholder={t("common.search")} />
+                    <MultiSelectInput
+                      aria-label={t("common.search")}
+                      placeholder={t("common.search")}
+                      className="h-7 min-w-24 text-sm outline-none placeholder:text-muted-foreground"
+                    />
+                  </MultiSelectTrigger>
+                  <MultiSelectContent>
+                    <MultiSelectList>
+                      {people.map((p) => (
+                        <MultiSelectItem
+                          key={p.id}
+                          value={String(p.id)}
+                          textValue={p.name}
+                        >
+                          {p.name}
+                        </MultiSelectItem>
+                      ))}
+                      <MultiSelectEmpty>{t("common.noData")}</MultiSelectEmpty>
+                    </MultiSelectList>
+                  </MultiSelectContent>
+                </MultiSelect>
+              </Field>
+              <Field
+                label={t("systems.qaOwner")}
+                tip={t("systems.qaOwnerTooltip")}
+              >
+                <MultiSelect
+                  value={form.values.qa_owner_person_ids.map(String)}
+                  onValueChange={(values) =>
+                    form.set("qa_owner_person_ids", values.map(Number))
                   }
                 >
                   <MultiSelectTrigger className="rounded-lg">
@@ -629,94 +740,7 @@ export default function Systems() {
         </CenterMorphModalContent>
       </CenterMorphModal>
 
-      <Drawer
-        open={!!egmFor}
-        onOpenChange={(next) => {
-          if (!next) setEgmFor(null);
-        }}
-        ariaLabel={t("systems.egmTitle")}
-        className="w-[min(760px,95vw)] max-w-[95vw] p-0"
-      >
-        <div className="flex h-full flex-col">
-          <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-3">
-            <h3 className="m-0 truncate text-base font-semibold text-foreground">
-              {t("systems.egmTitle")}
-              {egmFor ? ` · ${egmFor.path}` : ""}
-            </h3>
-            <div className="flex shrink-0 items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                className="rounded-lg"
-                onClick={() => egmFor && openEgm(egmFor)}
-              >
-                {t("systems.refresh")}
-              </Button>
-              <button
-                type="button"
-                aria-label={t("common.close")}
-                onClick={() => setEgmFor(null)}
-                className="grid size-7 place-items-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-              >
-                <X className="size-4" />
-              </button>
-            </div>
-          </div>
-          <div className="flex-1 overflow-y-auto px-5 py-4">
-            {egmReports.length === 0 ? (
-              <p className="py-10 text-center text-sm text-muted-foreground">
-                {t("systems.noEgm")}
-              </p>
-            ) : (
-              egmReports.map((r) => {
-                const st = EGM_ST[r.status];
-                return (
-                  <div
-                    key={r.id}
-                    className="mb-5 border-b border-border pb-5 last:border-0 last:pb-0"
-                  >
-                    <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                      <Badge tone={r.kind === "bootstrap" ? "info" : "violet"}>
-                        {r.kind === "bootstrap"
-                          ? t("systems.docTree")
-                          : t("systems.driftCheck")}
-                      </Badge>
-                      <Badge tone={st?.tone ?? "neutral"}>
-                        {st ? t(st.text) : r.status}
-                      </Badge>
-                      <span>{r.created_at}</span>
-                      {r.branch ? (
-                        <span className="font-mono">{r.branch}</span>
-                      ) : null}
-                      {r.mr_url ? (
-                        <a
-                          href={r.mr_url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-primary hover:underline"
-                        >
-                          MR
-                        </a>
-                      ) : null}
-                    </div>
-                    {r.report_md ? (
-                      <div className="md-body mt-2">
-                        <Markdown>{r.report_md}</Markdown>
-                      </div>
-                    ) : (
-                      <p className="mt-2 text-xs text-muted-foreground">
-                        {r.status === "running"
-                          ? t("systems.inProgress")
-                          : t("systems.noContent")}
-                      </p>
-                    )}
-                  </div>
-                );
-              })
-            )}
-          </div>
-        </div>
-      </Drawer>
+      <EgmReportsDrawer system={egmFor} onClose={() => setEgmFor(null)} />
     </Page>
   );
 }

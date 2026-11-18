@@ -106,7 +106,7 @@ args = sys.argv[1:]
 def emit(obj):
     print(json.dumps(obj, ensure_ascii=False), flush=True)
 
-if "--permission-mode" in args:
+if "--dangerously-skip-permissions" not in args:
     emit({{"type": "assistant", "message": {{"content": [{{"type": "text", "text": "计划第一段。"}}]}}}})
     emit({{"type": "assistant", "message": {{"content": [{{"type": "text", "text": "计划第二段。"}}]}}}})
     emit({{"type": "result", "result": "最终执行计划全文", "is_error": False}})

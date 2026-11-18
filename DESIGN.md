@@ -83,7 +83,7 @@
 
 数据流三条主线：
 1. **事件线**：GitLab webhook → api → 按项目归属定位研发组/人员 → octo @通知（成功静默、失败触发 LLM 分析）。
-2. **计划线**：人员认领需求 → UI 多轮对话 → 任务队列派到**粘性 runner** 执行 `claude -p --permission-mode plan`（经 agent-memory 绑定 team+agent）→ 沉淀执行计划。
+2. **计划线**：人员认领需求 → UI 多轮对话 → 任务队列派到**粘性 runner** 执行 `claude -p`（只读白名单；不用 plan 模式——它的系统提示会把寒暄也当成调研任务）（经 agent-memory 绑定 team+agent）→ 沉淀执行计划。
 3. **执行线**：确认需求 → 生成任务编号 → runner 领任务，在本地独立 worktree 开发 → push 分支 → api 建 MR → octo @下发人审核 → CI webhook 闭环。
 
 ---
@@ -214,7 +214,7 @@ daily_stat        每日提交统计（项目×人）：date, project_id, person
        该节点已不存在 → 解绑并作废会话，按「无 plan_runner_id」入队，首轮带该模式全量历史（自愈）
   runner 领到任务:
     spawn: claude -p --session-id <uuid> --resume <uuid> \
-             --permission-mode plan \
+             --allowedTools Read,Grep,Glob,LS,Bash(curl *<am>/memory-bridge/*) \
              --output-format stream-json --verbose \
              "<用户消息>"
     env: ANTHROPIC_BASE_URL=http://127.0.0.1:8096/claude-code/default
@@ -341,6 +341,7 @@ POST /runner/tasks/{id}/result  {status, branch?, mr_ready?}
 
 - pipeline webhook：`status=success` → 静默（记库）；`failed` → 拉失败 job 的 trace → 按项目归属的研发组 LLM 一次性 httpx 调用分析根因（不占 claude 会话）→ octo @提交人。
 - MR 合并检测：13.12 无 merge 事件 → merge_poll 每 10 分钟轮询 reviewing 状态任务的 MR（mr-merge-watch 模式）→ 合并/关闭 → 任务毕业通知。
+- 部署触发测试：GitLab Deployment Hook（部署 job 声明 `environment:`）→ `deploy_event`（系统+环境+sha 去重）→ 按系统配置的 `deploy_env_map` 找该系统全部待测需求 → 调 QA 内部接口发起测试（`trigger=deployment`）→ 结果回流工作台「部署/测试」泳道。webhook 丢失时 `deploy_poll` 每 10 分钟从 deployments API 补录。
 - **MR 无人处理升级**（merge_poll 顺带）：MR opened 且按 GitLab `updated_at` 已闲置 ≥12h → `dev_task.escalated_level` 升一级（1~3 级封顶，单调递增不重置、跳级只发当前级），每级 octo @审核人；第 3 级连带 @项目经理（project_pm）。毕业（合并/关闭）即止。
 
 ### 4.7 通知矩阵

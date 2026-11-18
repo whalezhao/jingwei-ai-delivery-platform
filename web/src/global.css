@@ -2773,6 +2773,31 @@ button.rc-fchip:hover { border-color: var(--accent); color: var(--accent); }
   gap: 6px;
   padding: 6px 10px 0;
 }
+/* EGM 托管提示：告诉用户下一条消息会被当成回答并直接出稿 */
+.rc-host-tip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 10px 0;
+  padding: 5px 8px;
+  border: 1px solid rgba(43, 74, 203, 0.14);
+  border-radius: 6px;
+  background: rgba(43, 74, 203, 0.06);
+  font-size: 11.5px;
+  color: var(--accent-deep);
+}
+.rc-host-tip span {
+  flex: 1;
+  min-width: 0;
+}
+.rc-host-tip button {
+  flex: none;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+.rc-host-tip button:hover {
+  color: var(--ink);
+}
 .rc-attach-chip {
   display: inline-flex;
   align-items: center;
@@ -2843,6 +2868,13 @@ button.rc-fchip:hover { border-color: var(--accent); color: var(--accent); }
 .rc-egm-menu button:disabled { opacity: 0.45; cursor: default; }
 .rc-egm-menu hr { margin: 4px 0; border: 0; border-top: 1px solid var(--line); }
 .rc-egm-dot { width: 6px; height: 6px; margin-left: auto; border-radius: 50%; background: var(--danger); }
+/* 权限模式菜单：两行（名称 + 说明），选中项高亮 */
+.rc-perm-menu { min-width: 240px; }
+.rc-perm-menu button { flex-direction: column; align-items: flex-start; gap: 2px; }
+.rc-perm-menu button b { font-size: 12.5px; font-weight: 600; color: var(--ink); }
+.rc-perm-menu button em { font-style: normal; font-size: 11.5px; color: var(--muted); line-height: 1.35; }
+.rc-perm-menu button.on { background: var(--accent-soft); }
+.rc-perm-menu button.on b { color: var(--accent); }
 .rc-mode-seg { display: inline-flex; padding: 2px; border-radius: 8px; background: rgba(20, 23, 28, 0.06); }
 .rc-mode-seg button {
   display: inline-flex;

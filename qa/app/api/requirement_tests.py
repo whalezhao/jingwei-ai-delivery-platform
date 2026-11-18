@@ -3,11 +3,13 @@
 测试在需求所有开发任务合入（Vega `status == "online"`）后开放，管理员可强制提前。
 """
 
+import hmac
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Header, HTTPException, Query, status
 from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError
 
 from ..config import get_settings
 from ..deps import CurrentPerson, DbSession, is_qa, require_system_access
@@ -21,7 +23,7 @@ from ..models import (
     TestTask,
     WorkerHeartbeat,
 )
-from ..schemas import RequirementRunIn, RequirementTestSummaryOut
+from ..schemas import InternalRequirementRunIn, RequirementRunIn, RequirementTestSummaryOut
 from ..taskstatus import ACTIVE_RUN_STATUSES
 from .batches import _run_aggregates, derive_status
 from .task_common import attach_features, spawn_runs
@@ -45,6 +47,88 @@ async def _worker_online(db) -> bool:
     ).first() is not None
 
 
+async def _start_requirement_run(
+    db,
+    requirement: Requirement,
+    *,
+    environment_name: str | None,
+    trigger: str,
+    creator_id: int | None,
+    deploy_event_id: int | None = None,
+) -> dict:
+    """需求 → 测试任务 → 批次/runs。人工发起与部署自动触发共用这一段。"""
+    feature_ids = list(
+        (
+            await db.execute(
+                select(Feature.id).where(
+                    Feature.requirement_id == requirement.id,
+                    Feature.system_id == requirement.system_id,
+                )
+            )
+        ).scalars()
+    )
+    if not feature_ids:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "该需求还没有关联功能；请先在系统的「功能测试」里建功能并关联需求",
+        )
+
+    active = (
+        await db.execute(
+            select(Run.id)
+            .join(TestTask, TestTask.id == Run.task_id)
+            .where(
+                TestTask.requirement_id == requirement.id,
+                Run.status.in_(ACTIVE_RUN_STATUSES),
+            )
+            .limit(1)
+        )
+    ).first()
+    if active is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "该需求已有测试在进行中")
+    if not await _worker_online(db):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "测试 Worker 离线，任务会一直排队；请先启动 Worker"
+        )
+
+    environment_name = (environment_name or "").strip() or None
+    task = TestTask(
+        system_id=requirement.system_id,
+        requirement_id=requirement.id,
+        deploy_event_id=deploy_event_id,
+        name=f"{requirement.code} {requirement.title}"[:128],
+        type="requirement_test",
+        environment_name=environment_name,
+        case_selection_mode="snapshot",
+        created_by=creator_id,
+        status="draft",
+    )
+    db.add(task)
+    await db.flush()
+    case_count = await attach_features(db, task, feature_ids)
+    if case_count == 0:
+        await db.rollback()
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "关联功能下没有启用中的用例"
+        )
+
+    batch, runs = await spawn_runs(
+        db,
+        task,
+        None,
+        trigger=trigger,
+        environment_name=environment_name,
+        created_by_id=creator_id,
+    )
+    await db.commit()
+    return {
+        "task_id": str(task.id),
+        "batch_id": str(batch.id),
+        "run_ids": [str(run.id) for run in runs],
+        "case_count": case_count,
+    }
+
+
 @router.post("/api/requirements/{requirement_id}/run", status_code=201)
 async def run_requirement_test(
     requirement_id: int,
@@ -62,77 +146,51 @@ async def run_requirement_test(
     # 发起 = 维护级动作；需求认领人可以发起自己的需求
     if not (user.is_admin or is_qa(user) or requirement.claimant_id == user.id):
         await require_system_access(db, requirement.system_id, user, "member")
-
-    feature_ids = list(
-        (
-            await db.execute(
-                select(Feature.id).where(
-                    Feature.requirement_id == requirement_id,
-                    Feature.system_id == requirement.system_id,
-                )
-            )
-        ).scalars()
+    return await _start_requirement_run(
+        db,
+        requirement,
+        environment_name=body.environment_name if body else None,
+        trigger="requirement",
+        creator_id=user.id,
     )
-    if not feature_ids:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "该需求还没有关联功能；请先在系统的「功能测试」里建功能并关联需求",
-        )
 
-    active = (
-        await db.execute(
-            select(Run.id)
-            .join(TestTask, TestTask.id == Run.task_id)
-            .where(
-                TestTask.requirement_id == requirement_id,
-                Run.status.in_(ACTIVE_RUN_STATUSES),
-            )
-            .limit(1)
-        )
-    ).first()
-    if active is not None:
-        raise HTTPException(status.HTTP_409_CONFLICT, "该需求已有测试在进行中")
-    if not await _worker_online(db):
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, "测试 Worker 离线，任务会一直排队；请先启动 Worker"
-        )
 
-    environment_name = (
-        (body.environment_name or "").strip() or None if body else None
+@router.post("/internal/requirements/{requirement_id}/run", status_code=201)
+async def internal_run_requirement_test(
+    requirement_id: int,
+    body: InternalRequirementRunIn,
+    db: DbSession,
+    x_vega_service: str = Header(default=""),
+) -> dict:
+    """部署触发的内部入口：共享密钥鉴权，不冒充个人身份（发起人记需求认领人）。"""
+    expected = get_settings().qa_service_token
+    if not expected or not hmac.compare_digest(x_vega_service, expected):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "服务鉴权失败")
+    requirement = await _requirement_or_404(db, requirement_id)
+    if requirement.status != "online":
+        raise HTTPException(status.HTTP_409_CONFLICT, "需求尚未全部合入")
+    exists = await db.scalar(
+        select(TestTask.id).where(
+            TestTask.deploy_event_id == body.deploy_event_id,
+            TestTask.requirement_id == requirement_id,
+        )
     )
-    task = TestTask(
-        system_id=requirement.system_id,
-        requirement_id=requirement_id,
-        name=f"{requirement.code} {requirement.title}"[:128],
-        type="requirement_test",
-        environment_name=environment_name,
-        case_selection_mode="snapshot",
-        created_by=user.id,
-        status="draft",
-    )
-    db.add(task)
-    await db.flush()
-    case_count = await attach_features(db, task, feature_ids)
-    if case_count == 0:
+    if exists:
+        raise HTTPException(status.HTTP_409_CONFLICT, "该需求在此次部署下已发起过测试")
+    try:
+        return await _start_requirement_run(
+            db,
+            requirement,
+            environment_name=body.environment_name,
+            trigger="deployment",
+            creator_id=requirement.claimant_id,
+            deploy_event_id=body.deploy_event_id,
+        )
+    except IntegrityError as exc:  # 并发下唯一索引兜底
         await db.rollback()
         raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, "关联功能下没有启用中的用例"
-        )
-
-    batch, runs = await spawn_runs(
-        db,
-        task,
-        user,
-        trigger="requirement",
-        environment_name=environment_name,
-    )
-    await db.commit()
-    return {
-        "task_id": str(task.id),
-        "batch_id": str(batch.id),
-        "run_ids": [str(run.id) for run in runs],
-        "case_count": case_count,
-    }
+            status.HTTP_409_CONFLICT, "该需求在此次部署下已发起过测试"
+        ) from exc
 
 
 async def _latest_batches(db, requirement_ids: list[int]) -> dict[int, RunBatch]:

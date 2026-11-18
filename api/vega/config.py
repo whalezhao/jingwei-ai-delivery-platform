@@ -26,17 +26,21 @@ class Settings(BaseSettings):
     am_user_key: str = ""  # 平台公共业务用户 user_key（sk-mem-…），人员未绑定 am_user_key 时兜底
     # 兜底层模型（person/group 均未配置时）：am proxy 不映射 claude 原生模型名，
     # 必须显式给它能认的名字，否则 404 model not found
-    am_default_model: str = "Qwen3.8-27B"
-    # 兜底思考等级：人员/组都没选时。claude 默认 high，但 Qwen 只认 xhigh/medium/low
+    am_default_model: str = "deepseek-v4.1-flash"
+    # 兜底思考等级：人员/组都没选时
     am_default_effort: str = "xhigh"
-    # claude 默认 max_tokens 128000 会超 Qwen 128144 总上下文
+    # claude 默认 max_tokens 128000 会超 128144 总上下文
     claude_max_output_tokens: int = 32000
-    claude_max_context_tokens: int = 128144  # Qwen3.8-27B 总上下文；不声明时 CLI 拒识自定义模型名
+    claude_max_context_tokens: int = 128144  # 不声明时 CLI 拒识自定义模型名
 
     # octo bot API。地址与 token 都只走 .env（VEGA_OCTO_API_URL / VEGA_OCTO_BOT_TOKEN），
     # 仓库里不留内部服务域名；任一为空则通知全部记 notify_log 不外发。
     octo_api_url: str = ""
     octo_bot_token: str = ""  # 兜底：集成中心录入的全局 token 优先
+
+    # 部署触发测试：QA 服务地址 + 内部调用密钥（与 qa-api 的 VEGA_QA_SERVICE_TOKEN 一致）
+    qa_base_url: str = "http://qa-api:8000"
+    qa_service_token: str = ""
 
     # claude CLI（测试时指向 stub）
     claude_bin: str = "claude"

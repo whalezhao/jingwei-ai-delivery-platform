@@ -384,6 +384,37 @@ async def test_project_egm_job_endpoint_enqueues_bootstrap(client, db, seeded):
     await db.commit()
 
 
+async def test_project_egm_job_uses_triggering_person_llm(client, db, seeded):
+    """手动发起的项目级 EGM 用发起人自己的 LLM（p-url/p-api-key），不落到 AM 兜底模型。"""
+    import json
+
+    from sqlalchemy import select
+
+    from vega.crypto import decrypt, encrypt
+    from vega.models import RunnerTask
+
+    await _login(client, db, seeded)
+    person = seeded["person"]
+    person.llm_base_url = "http://person.llm/v1"
+    person.llm_model = "p-model"
+    person.llm_api_key_enc = encrypt(get_settings().secret_key, "sk-person")
+    await db.commit()
+
+    r = await client.post(f"/api/systems/{seeded['project'].id}/egm-jobs", json={"kind": "bootstrap"})
+    assert r.status_code == 200, r.text
+    rep = r.json()
+
+    await db.commit()
+    tasks = (await db.scalars(select(RunnerTask).where(RunnerTask.type == "egm_job"))).all()
+    task = next(t for t in tasks if t.payload.get("egm_job_id") == rep["id"])
+    env = json.loads(decrypt(get_settings().secret_key, task.secrets))["claude_env"]
+    assert "p-url: http://person.llm/v1" in env["ANTHROPIC_CUSTOM_HEADERS"]
+    assert "p-api-key: sk-person" in env["ANTHROPIC_CUSTOM_HEADERS"]
+    assert env["ANTHROPIC_MODEL"] == "p-model"
+    task.status = "done"
+    await db.commit()
+
+
 async def test_adopting_a_plan_version_auto_enqueues_review(client, db, seeded, monkeypatch):
     from sqlalchemy import select
 
@@ -471,6 +502,72 @@ async def test_incomplete_or_failed_review_notifies_claimant(db, seeded, monkeyp
     await runner_api._finish_egm_review(db, task, SimpleNamespace(status="failed", data={}, error="boom"))
     assert sent[-1]["reason"] == "egm_review_failed"
     assert "boom" in sent[-1]["content"]
+
+
+async def test_egm_reports_delete_single_and_clear(client, admin_client, db, seeded):
+    from vega.models import EgmReport, System
+
+    await _login(client, db, seeded)
+    pid = seeded["project"].id
+    done = EgmReport(system_id=pid, kind="bootstrap", status="done", report_md="# ok")
+    failed = EgmReport(system_id=pid, kind="drift", status="failed", report_md="boom")
+    running = EgmReport(system_id=pid, kind="drift", status="running")
+    db.add_all([done, failed, running])
+    await db.commit()
+
+    # 执行中的报告不能删；有执行中的也不能清空
+    r = await client.delete(f"/api/systems/{pid}/egm-reports/{running.id}")
+    assert r.status_code == 409
+    r = await client.delete(f"/api/systems/{pid}/egm-reports")
+    assert r.status_code == 409
+
+    r = await client.delete(f"/api/systems/{pid}/egm-reports/{failed.id}")
+    assert r.status_code == 200, r.text
+    ids = [x["id"] for x in (await client.get(f"/api/systems/{pid}/egm-reports")).json()]
+    assert failed.id not in ids and done.id in ids
+
+    # 已删过 / 不存在
+    r = await client.delete(f"/api/systems/{pid}/egm-reports/{failed.id}")
+    assert r.status_code == 404
+
+    # 报告不属于该系统：即便管理员也不许跨系统删
+    other = System(
+        group_id=seeded["group"].id,
+        gitlab_project_id=pid + 90000,
+        path="team/other",
+        name="other",
+        code_prefix="OTH",
+    )
+    db.add(other)
+    await db.commit()
+    r = await admin_client.delete(f"/api/systems/{other.id}/egm-reports/{done.id}")
+    assert r.status_code == 404
+
+    # 执行结束后可整体清空
+    running.status = "done"
+    await db.commit()
+    r = await client.delete(f"/api/systems/{pid}/egm-reports")
+    assert r.status_code == 200, r.text
+    assert r.json()["deleted"] == 2
+    assert (await client.get(f"/api/systems/{pid}/egm-reports")).json() == []
+
+
+async def test_egm_reports_delete_requires_owner(client, db, seeded):
+    from conftest import login_as
+    from vega.models import EgmReport
+
+    await _login(client, db, seeded)
+    pid = seeded["project"].id
+    rep = EgmReport(system_id=pid, kind="bootstrap", status="done")
+    db.add(rep)
+    await db.commit()
+
+    token, _ = await login_as(client, db, f"outsider{seeded['person'].id}")
+    client.headers["Authorization"] = f"Bearer {token}"
+    r = await client.delete(f"/api/systems/{pid}/egm-reports/{rep.id}")
+    assert r.status_code == 403
+    r = await client.delete(f"/api/systems/{pid}/egm-reports")
+    assert r.status_code == 403
 
 
 async def test_egm_drift_sweep_skips_projects_checked_this_week(db, seeded, monkeypatch):

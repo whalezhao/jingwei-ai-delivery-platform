@@ -51,6 +51,14 @@ export default function QaFeaturePage() {
   >([]);
   const [aiYaml, setAiYaml] = useState<string | null>(null);
   const [aiYamlErrors, setAiYamlErrors] = useState<string[]>([]);
+  const [aiDiff, setAiDiff] = useState<string | null>(null);
+  const [aiSteps, setAiSteps] = useState<
+    { case: string; index: number; kind: string; text: string }[]
+  >([]);
+  const [aiRunId, setAiRunId] = useState<string | null>(null);
+  const [trialBusy, setTrialBusy] = useState(false);
+  const [trial, setTrial] = useState<any>(null);
+  const trialTimer = useRef<number | null>(null);
   // null = 还在查；false = 系统没配模型，生成必然失败，先把话说在前面
   const [modelReady, setModelReady] = useState<boolean | null>(null);
   const aiScrollRef = useRef<HTMLDivElement>(null);
@@ -58,6 +66,8 @@ export default function QaFeaturePage() {
   useEffect(() => {
     aiScrollRef.current?.scrollTo({ top: aiScrollRef.current.scrollHeight });
   }, [aiMessages]);
+  // 关掉弹窗后别再轮询试跑结果
+  useEffect(() => () => stopTrial(), []);
   const [versionFor, setVersionFor] = useState<QaCase | null>(null);
   const [versions, setVersions] = useState<QaCaseVersion[]>([]);
   const [running, setRunning] = useState(false);
@@ -145,6 +155,10 @@ export default function QaFeaturePage() {
     setAiInput("");
     setAiYaml(null);
     setAiYamlErrors([]);
+    setAiDiff(null);
+    setAiSteps([]);
+    setAiRunId(null);
+    setTrial(null);
     setModelReady(null);
     try {
       const system = await qa<{ has_model_config: boolean }>(`/api/systems/${systemId}`);
@@ -155,9 +169,10 @@ export default function QaFeaturePage() {
     }
   };
 
-  const aiSend = async () => {
-    const text = aiInput.trim();
+  const aiSend = async (opts?: { mode?: "rewrite" | "append"; text?: string }) => {
+    const text = (opts?.text ?? aiInput).trim();
     if (!text || aiBusy) return;
+    const mode = opts?.mode || "rewrite";
     const history = [...aiMessages, { role: "user" as const, content: text }];
     setAiMessages([...history, { role: "assistant", content: "" }]);
     setAiInput("");
@@ -165,7 +180,12 @@ export default function QaFeaturePage() {
     try {
       await qaStream(
         `/api/features/${fid}/ai/case-draft/stream`,
-        { messages: history, current_yaml: aiYaml },
+        {
+          messages: history,
+          current_yaml: aiYaml,
+          mode,
+          run_id: mode === "append" ? aiRunId : null,
+        },
         (event, data) => {
           if (event === "delta") {
             setAiMessages((msgs) => {
@@ -179,7 +199,10 @@ export default function QaFeaturePage() {
             if (data.yaml != null) {
               setAiYaml(data.yaml);
               setAiYamlErrors(data.yaml_errors || []);
+              setAiSteps(Array.isArray(data.steps) ? data.steps : []);
+              setAiDiff(data.diff || null);
             }
+            if (data.lock_violated) toast.error(t("qa.case.aiLocked"));
             setAiMessages((msgs) => {
               const next = [...msgs];
               next[next.length - 1] = {
@@ -204,6 +227,66 @@ export default function QaFeaturePage() {
     } finally {
       setAiBusy(false);
     }
+  };
+
+  const stopTrial = () => {
+    if (trialTimer.current) window.clearInterval(trialTimer.current);
+    trialTimer.current = null;
+  };
+
+  // 试跑到第 N 步：跑的是「前 N 步」，不是只跑第 N 步
+  const trialRun = async (limit: number) => {
+    if (!aiYaml || trialBusy) return;
+    setTrialBusy(true);
+    setTrial({ status: "queued" });
+    try {
+      const r = await qa<{ run_id: string; steps: number }>(
+        `/api/features/${fid}/ai/trial-run`,
+        {
+          method: "POST",
+          body: JSON.stringify({ yaml_content: aiYaml, step_limit: Math.max(1, limit) }),
+        },
+      );
+      setAiRunId(r.run_id);
+      stopTrial();
+      trialTimer.current = window.setInterval(async () => {
+        try {
+          const run = await qa<any>(`/api/runs/${r.run_id}`);
+          setTrial(run);
+          if (["succeeded", "failed", "cancelled", "timed_out"].includes(run.status)) {
+            stopTrial();
+          }
+        } catch {
+          stopTrial();
+        }
+      }, 2000);
+    } catch (e: any) {
+      toast.error(e.message);
+      setTrial(null);
+    } finally {
+      setTrialBusy(false);
+    }
+  };
+
+  const trialText = (run: any): string => {
+    if (!run) return "";
+    if (["queued", "preparing", "running", "parsing"].includes(run.status)) {
+      return t("qa.case.aiTrialRunning");
+    }
+    if (run.status === "succeeded") return t("qa.case.aiTrialPassed");
+    if (["cancelled", "timed_out"].includes(run.status)) {
+      return t("qa.case.aiTrialInterrupted");
+    }
+    const step = (run.failure_steps || [])
+      .flatMap((item: any) => item.steps || [])
+      .find((s: any) => s.status === "failed" || s.reason);
+    const detail = step ? `：${step.action || ""}${step.reason ? ` — ${step.reason}` : ""}` : "";
+    return `${t("qa.case.aiTrialFailed")}${detail}`;
+  };
+
+  const aiContinue = () => {
+    if (aiBusy) return;
+    aiSend({ mode: "append", text: t("qa.case.aiContinuePrompt") });
   };
 
   const aiAdopt = () => {
@@ -531,23 +614,91 @@ export default function QaFeaturePage() {
                     ))
                   )}
                 </div>
+                {aiYaml && aiSteps.length > 0 ? (
+                  <div className="mt-3 overflow-hidden rounded-lg border border-border">
+                    <div className="flex items-center justify-between gap-2 border-b border-border bg-muted/50 px-3 py-1.5">
+                      <span className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+                        {t("qa.case.aiSteps")}
+                      </span>
+                      {trial ? (
+                        <span
+                          className={`truncate text-[12px] ${
+                            trial.status === "succeeded"
+                              ? "text-success"
+                              : ["queued", "preparing", "running", "parsing"].includes(trial.status)
+                                ? "text-muted-foreground"
+                                : "text-danger"
+                          }`}
+                          title={trialText(trial)}
+                        >
+                          {trialText(trial)}
+                        </span>
+                      ) : null}
+                    </div>
+                    <ol className="m-0 max-h-40 list-none overflow-auto p-1.5">
+                      {aiSteps.map((s, i) => (
+                        <li
+                          key={i}
+                          className="flex items-center gap-2 rounded px-1 py-0.5 hover:bg-muted/60"
+                        >
+                          <span className="w-5 shrink-0 text-right font-mono text-[11px] text-muted-foreground">
+                            {s.index + 1}
+                          </span>
+                          <span className="min-w-0 flex-1 truncate text-[12px]" title={s.text}>
+                            {s.text || s.kind}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => trialRun(s.index + 1)}
+                            disabled={trialBusy}
+                            className="shrink-0 text-[11px] text-primary hover:underline disabled:opacity-50"
+                          >
+                            {t("qa.case.aiTrialHere")}
+                          </button>
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                ) : null}
                 {aiYaml ? (
                   <div className="mt-3 overflow-hidden rounded-lg border border-border">
-                    <div className="flex items-center justify-between border-b border-border bg-muted/50 px-3 py-1.5">
+                    <div className="flex items-center justify-between gap-3 border-b border-border bg-muted/50 px-3 py-1.5">
                       <span className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
                         YAML
                       </span>
-                      <button
-                        type="button"
-                        onClick={aiAdopt}
-                        className="text-[12px] font-medium text-primary hover:underline"
-                      >
-                        {t("qa.case.aiAdopt")}
-                      </button>
+                      <div className="flex items-center gap-3">
+                        {aiRunId ? (
+                          <button
+                            type="button"
+                            onClick={aiContinue}
+                            disabled={aiBusy}
+                            className="text-[12px] font-medium text-primary hover:underline disabled:opacity-50"
+                          >
+                            {t("qa.case.aiContinue")}
+                          </button>
+                        ) : null}
+                        <button
+                          type="button"
+                          onClick={aiAdopt}
+                          className="text-[12px] font-medium text-primary hover:underline"
+                        >
+                          {t("qa.case.aiAdopt")}
+                        </button>
+                      </div>
                     </div>
                     <pre className="m-0 max-h-40 overflow-auto p-3 font-mono text-[12px] leading-relaxed">
                       {aiYaml}
                     </pre>
+                    {aiDiff ? (
+                      <details className="border-t border-border">
+                        <summary className="cursor-pointer px-3 py-1.5 text-[12px] text-muted-foreground">
+                          {t("qa.case.aiDiff")}
+                        </summary>
+                        <pre className="m-0 max-h-40 overflow-auto border-t border-border p-3 font-mono text-[11px] leading-relaxed">
+                          {aiDiff}
+                        </pre>
+                      </details>
+                    ) : null}
                     {aiYamlErrors.length > 0 && (
                       <p className="m-0 border-t border-border px-3 py-2 text-[12px] text-danger">
                         {aiYamlErrors.join("；")}
@@ -575,7 +726,7 @@ export default function QaFeaturePage() {
                   <Button
                     size="sm"
                     className="rounded-lg"
-                    onClick={aiSend}
+                    onClick={() => aiSend()}
                     disabled={aiBusy || !aiInput.trim()}
                   >
                     {aiBusy ? t("qa.case.aiSending") : t("qa.case.aiSend")}

@@ -6,6 +6,7 @@
 - Merge Request Hook → open 播报；update（新推送）若命中项目 audit_prefixes → 入队 AI 初审；
   merge / close 动作当场收尾任务并播报（13.12 有时不发 merge，merge_poll 轮询兜底）
 - Pipeline Hook → success 静默；failed → 后台 LLM 根因分析 → @提交人
+- Deployment Hook → success 落 deploy_event（去重）→ 后台匹配待测需求并触发 QA 测试
 """
 
 from __future__ import annotations
@@ -24,7 +25,17 @@ from ..db import get_db, sessionmaker
 from ..gitlab import client_ctx
 from ..jobs import MR_CLOSED_MARK, _gitlab, _notify_task_final, ci_failure_analysis, mark_requirement_online
 from ..llm import am_user_key, build_claude_env, resolve_llm
-from ..models import DevGroup, DevTask, GitlabEvent, MrReview, Person, System, Requirement, utcnow
+from ..models import (
+    DeployEvent,
+    DevGroup,
+    DevTask,
+    GitlabEvent,
+    MrReview,
+    Person,
+    Requirement,
+    System,
+    utcnow,
+)
 from ..notify import merge_mentions, notify, project_owners
 from ..person_links import gitlab_username_for, person_by_gitlab
 from ..queue import enqueue
@@ -65,6 +76,8 @@ async def gitlab_webhook(
             await _on_mr(db, group, payload, background)
         elif x_gitlab_event == "Pipeline Hook":
             await _on_pipeline(db, group, payload, background, event.id)
+        elif x_gitlab_event == "Deployment Hook":
+            await _on_deployment(db, group, payload, background)
     except Exception:  # noqa: BLE001 事件处理失败不影响 200 返回（GitLab 会重试打爆）
         log.exception("webhook handler failed: %s", x_gitlab_event)
 
@@ -301,6 +314,67 @@ async def _on_pipeline(
     background.add_task(_run)
 
 
+async def _on_deployment(
+    db: AsyncSession, group: DevGroup, payload: dict, background: BackgroundTasks
+) -> None:
+    """部署成功 → 落 deploy_event → 后台匹配待测需求并触发 QA 测试。
+
+    13.12 的 Deployment Hook：status / environment / deployable{ref, sha}。
+    只认 success、且 ref 在系统配置的分支里；重复事件由唯一键挡住。
+    """
+    if payload.get("status") != "success":
+        return
+    project = await db.scalar(
+        select(System).where(
+            System.group_id == group.id, System.gitlab_project_id == _project_id(payload)
+        )
+    )
+    if not project:
+        return
+    deployable = payload.get("deployable") or {}
+    ref = (deployable.get("ref") or payload.get("ref") or "").removeprefix("refs/heads/")
+    allowed = project.deploy_refs or [project.mr_target_branch]
+    if allowed and ref not in allowed:
+        return
+    environment = (payload.get("environment") or "").strip()
+    sha = deployable.get("sha") or payload.get("sha") or ""
+    if not environment or not sha:
+        return
+    exists = await db.scalar(
+        select(DeployEvent.id).where(
+            DeployEvent.system_id == project.id,
+            DeployEvent.environment == environment,
+            DeployEvent.sha == sha,
+        )
+    )
+    if exists:
+        return
+    ev = DeployEvent(
+        system_id=project.id,
+        gitlab_project_id=project.gitlab_project_id,
+        environment=environment,
+        ref=ref or None,
+        sha=sha,
+        status="success",
+        deployed_at=utcnow(),
+        payload=payload,
+    )
+    db.add(ev)
+    await db.flush()
+    event_id = ev.id
+
+    async def _run() -> None:
+        from ..deploy import handle_deploy_event
+
+        async with sessionmaker()() as s:
+            try:
+                await handle_deploy_event(s, event_id)
+            except Exception:  # noqa: BLE001 失败时 handled_at 留空，兜底轮询会重试
+                log.exception("deploy event handling failed: %s", event_id)
+
+    background.add_task(_run)
+
+
 async def _mark_task_final(
     db: AsyncSession,
     group: DevGroup,
@@ -336,6 +410,7 @@ async def _mark_task_final(
         return
     task.status = "done"
     if merged:
+        task.merged_at = utcnow()
         await mark_requirement_online(db, req)
         await _notify_task_final(db, group, req, task, "merged")
     else:

@@ -7,6 +7,9 @@ const BASE = (
   import.meta.env.VITE_QA_API_BASE || (import.meta.env.DEV ? "http://localhost:8100" : "")
 ).replace(/\/+$/, "");
 
+/** QA 服务根地址：报告截图等静态资源不走 qa()，需要自己拼绝对地址。 */
+export const qaBase = BASE;
+
 export class QaError extends Error {
   status: number;
   constructor(status: number, msg: string) {
@@ -345,3 +348,160 @@ export const dur = (ms: number | null | undefined) => {
   const m = Math.floor(ms / 60_000);
   return `${m}m ${Math.round((ms % 60_000) / 1000)}s`;
 };
+
+// ------------------------------------------------------------ 执行报告（v2 结构）
+
+export interface QaReportKeyframe {
+  id: string;
+  url: string;
+  time: number | null;
+  label: string;
+  kind: string;
+}
+
+export interface QaReportTask {
+  index: number;
+  type: string;
+  subType: string;
+  title: string;
+  detail: string;
+  status: string;
+  durationMs: number | null;
+  start: number | null;
+  end: number | null;
+  error: string | null;
+  thought: string;
+  reasoning: string;
+  usage: unknown;
+  param: unknown;
+  output: unknown;
+  log: unknown;
+}
+
+export interface QaReportExecution {
+  id: string;
+  name: string;
+  status: string;
+  start: number | null;
+  end: number | null;
+  durationMs: number | null;
+  tasks: QaReportTask[];
+}
+
+export interface QaReportStep {
+  id: string;
+  index: number;
+  phase: string;
+  node: string;
+  title: string;
+  status: string;
+  durationMs: number | null;
+  startedAt: string | null;
+  endedAt: string | null;
+  summary: string;
+  thought: string;
+  error: string | null;
+  notRunReason: string;
+  continuedAfterError: boolean;
+  synthetic: boolean;
+  keyframes: QaReportKeyframe[];
+  executions: QaReportExecution[];
+  param: unknown;
+  outputData: unknown;
+  metrics: unknown;
+}
+
+export interface QaReportAttempt {
+  index: number;
+  status: string;
+  durationMs: number | null;
+  startedAt: string | null;
+  endedAt: string | null;
+}
+
+export interface QaReportCase {
+  id: string;
+  name: string;
+  caseIndex: number;
+  caseUuid: string | null;
+  runId: string | null;
+  status: string;
+  durationMs: number | null;
+  attemptCount: number;
+  attempts: QaReportAttempt[];
+  steps: QaReportStep[];
+}
+
+export interface QaReportProject {
+  id: string;
+  name: string;
+  projectName: string;
+  runId: string | null;
+  status: string;
+  durationMs: number | null;
+  shardIndex: number | null;
+  shardCount: number | null;
+  cases: QaReportCase[];
+}
+
+export interface QaReportModel {
+  model: string;
+  description: string;
+  calls: number;
+  promptTokens: number;
+  cachedInput: number;
+  completionTokens: number;
+  totalTokens: number;
+  timeCost: number;
+}
+
+export interface QaReportSource {
+  runId: string | null;
+  projectName: string;
+  status: string;
+  startedAt: string | null;
+  durationMs: number | null;
+  shardIndex: number | null;
+  shardCount: number | null;
+}
+
+export interface QaReportData {
+  version: number;
+  kind: string;
+  legacy: boolean;
+  generatedAt: string;
+  group: { name: string; description: string; sdkVersion: string; deviceType: string };
+  stats: {
+    projects: number;
+    cases: number;
+    passed: number;
+    failed: number;
+    notRun: number;
+    steps: number;
+    keyframes: number;
+    start: number | null;
+    end: number | null;
+    durationMs: number | null;
+    modelCallTimeMs: number;
+    tokens: { prompt: number; cached: number; completion: number; total: number };
+    models: QaReportModel[];
+  };
+  sources: QaReportSource[];
+  projects: QaReportProject[];
+}
+
+/** 报告页头部需要的执行元信息（/api/runs/{id}） */
+export interface QaRunDetail {
+  id: string;
+  batch_id: string | null;
+  status: string;
+  model_name: string | null;
+  report_available: boolean;
+  environment_name: string | null;
+  started_at: string | null;
+  ended_at: string | null;
+  duration_ms: number | null;
+  total: number | null;
+  passed: number | null;
+  failed: number | null;
+}

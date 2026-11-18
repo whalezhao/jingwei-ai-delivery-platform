@@ -119,7 +119,8 @@ async def list_runs(
     elif not user.is_admin:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "请指定系统")
 
-    conditions = []
+    # 调试试跑不属于任何批次，不该混进执行记录列表；按 id 仍可单独查
+    conditions = [Run.is_debug.is_(False)]
     if system_id is not None:
         conditions.append(Run.system_id == system_id)
     if task_id is not None:
@@ -166,6 +167,12 @@ async def get_run(run_id: uuid.UUID, user: CurrentPerson, db: DbSession) -> RunD
     resolved_report = _resolve_data_path(run.report_html_path)
     payload.report_available = bool(resolved_report and resolved_report.exists())
     payload.progress = progress
+    if run.is_debug and run.status in {"succeeded", "failed", "timed_out", "cancelled"}:
+        # 试跑的意义就是「第几步错了」：证据只在产物文件里，收尾后读一次
+        result_dir = _resolve_data_path(run.result_dir)
+        payload.failure_steps = (
+            parsers.read_case_evidence(result_dir, limit=5) if result_dir else []
+        )
     return payload
 
 

@@ -96,8 +96,13 @@ services:
       DATABASE_URL: postgresql+asyncpg://vega:${POSTGRES_PASSWORD:?请在 .env 设置 POSTGRES_PASSWORD}@db:5432/vega
       VEGA_SECRET_KEY: ${VEGA_SECRET_KEY:?请在 .env 设置 VEGA_SECRET_KEY}
       ENVIRONMENT_SECRET_KEY: ${QA_ENVIRONMENT_SECRET_KEY:-dev-environment-key-change-me}
+      # 测试通知复用 Vega 集成中心的 octo 全局 bot（配置仍以集成中心录入的为准）
+      OCTO_API_URL: ${VEGA_OCTO_API_URL:-}
+      OCTO_BOT_TOKEN: ${VEGA_OCTO_BOT_TOKEN:-}
       # 用 Bearer token 鉴权、不依赖 cookie，允许任意来源（含局域网 IP/OrbStack 别名访问）
       CORS_ORIGINS: ${QA_CORS_ORIGINS:-*}
+      # 部署触发测试：Vega 内部调用的共享密钥（Vega 侧读 VEGA_QA_SERVICE_TOKEN）
+      QA_SERVICE_TOKEN: ${VEGA_QA_SERVICE_TOKEN:-}
       PUBLIC_BASE_URL: ${QA_PUBLIC_BASE_URL:-http://localhost:8100}
       WORKER_STALE_SECONDS: ${WORKER_STALE_SECONDS:-90}
     volumes:
@@ -139,10 +144,16 @@ services:
       DATABASE_URL: postgresql+asyncpg://vega:${POSTGRES_PASSWORD:?请在 .env 设置 POSTGRES_PASSWORD}@db:5432/vega
       VEGA_SECRET_KEY: ${VEGA_SECRET_KEY:?请在 .env 设置 VEGA_SECRET_KEY}
       ENVIRONMENT_SECRET_KEY: ${QA_ENVIRONMENT_SECRET_KEY:-dev-environment-key-change-me}
+      OCTO_API_URL: ${VEGA_OCTO_API_URL:-}
+      OCTO_BOT_TOKEN: ${VEGA_OCTO_BOT_TOKEN:-}
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
       WORKER_STALE_SECONDS: ${WORKER_STALE_SECONDS:-90}
       HEADLESS: "true"
       CHROMIUM_NO_SANDBOX: "1"
+    # kiri 的本地 DNS 在容器里把 *.kiri.local 解析成 127.0.0.1（容器自己），
+    # 这里改写 /etc/hosts 指向宿主网关，测试容器才够得着宿主上的 kiri 域名。
+    extra_hosts:
+      - "web.vega.kiri.local:host-gateway"
     volumes:
       - qa-run-artifacts:/app/runner/.runs
       - qa-midscene:/app/runner/midscene_run

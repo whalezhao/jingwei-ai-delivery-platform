@@ -8,16 +8,19 @@
 """
 
 import asyncio
+import base64
 import json
 import logging
 import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from pathlib import Path
 
 import httpx
 import yaml
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .case_versions import diff_text
 from .models import SystemModelConfig
 from .yamlcheck import validate as validate_yaml
 
@@ -118,7 +121,9 @@ cases:
 2. 定位必须**具体且唯一**：「登录按钮」太含糊；用「页面中央蓝色的『登录』按钮」。
 3. 一个步骤只做一件事。跨页面时拆成多个 `aiAct`，中间用 `aiWaitFor` 等页面就绪。
 4. 用例要形成完整闭环：从打开页面到验证结果，**最后至少有一条 `aiAssert`**。
-5. 用例名称与断言描述用中文。
+5. **在关键节点插断言**：登录成功、提交成功、页面跳转这类状态变化之后补一条 `aiAssert`。\
+分步试跑时「动作跑通」只代表能执行，不等于结果正确 —— 断言才是可验证的中间状态。
+6. 用例名称与断言描述用中文。
 
 ## 测试数据
 
@@ -167,6 +172,15 @@ cases:
 
 YAML_BLOCK = re.compile(r"```ya?ml\s*\n(.*?)```", re.DOTALL)
 
+# 试跑过前缀之后，只允许往后追加 —— 已确认的步骤是「锁」，模型不能重写
+APPEND_RULE = """
+
+## 本轮模式：只追加
+
+用户已经验证过前面的步骤。**已有用例的所有步骤一个字都不许改**（顺序、措辞、
+options 全部保持原样）。你只能在现有步骤之后追加新步骤；需要新场景时新增一条 case。
+输出仍然是一份完整 YAML。"""
+
 
 @dataclass
 class DraftResult:
@@ -175,6 +189,9 @@ class DraftResult:
     yaml_ok: bool
     yaml_errors: list[str]
     usage: dict
+    diff: str | None = None
+    lock_violated: bool = False
+    steps: list[dict] | None = None
 
 
 def extract_yaml(reply: str) -> str | None:
@@ -211,6 +228,123 @@ def strip_yaml_blocks(reply: str, *, cleared: bool = False) -> str:
     if text:
         return text
     return "已清空右侧的 YAML。" if cleared else "已更新右侧的 YAML。"
+
+
+def steps_of(yaml_text: str) -> list[dict]:
+    """把 YAML 摊平成步骤清单，供调试面板逐步试跑。"""
+    try:
+        doc = yaml.safe_load(yaml_text)
+    except yaml.YAMLError:
+        return []
+    if not isinstance(doc, dict):
+        return []
+    items: list[dict] = []
+    for case in doc.get("cases") or []:
+        if not isinstance(case, dict):
+            continue
+        name = str(case.get("name") or "")
+        for index, step in enumerate(case.get("steps") or []):
+            if not isinstance(step, dict) or not step:
+                continue
+            node = next(iter(step))
+            value = step.get(node)
+            text = value.get("prompt") if isinstance(value, dict) else value
+            items.append(
+                {"case": name, "index": index, "kind": node, "text": str(text or "")[:200]}
+            )
+    return items
+
+
+def truncate_steps(yaml_text: str, limit: int) -> str:
+    """每条 case 只保留前 limit 步 —— 试跑「走得到这里」的最小文档。"""
+    try:
+        doc = yaml.safe_load(yaml_text)
+    except yaml.YAMLError:
+        return yaml_text
+    if not isinstance(doc, dict):
+        return yaml_text
+    changed = False
+    for case in doc.get("cases") or []:
+        if not isinstance(case, dict):
+            continue
+        steps = case.get("steps")
+        if isinstance(steps, list) and len(steps) > limit:
+            case["steps"] = steps[:limit]
+            changed = True
+    if not changed:
+        return yaml_text
+    return yaml.safe_dump(doc, allow_unicode=True, sort_keys=False)
+
+
+def verify_prefix(old_yaml: str, new_yaml: str) -> bool:
+    """追加模式下，新 YAML 必须原样保留旧用例的步骤前缀。
+
+    提示词是软约束，模型仍可能"顺手"改写前几步；这里是硬校验。
+    """
+    try:
+        old = yaml.safe_load(old_yaml or "") or {}
+        new = yaml.safe_load(new_yaml or "") or {}
+    except yaml.YAMLError:
+        return False
+    if not isinstance(old, dict) or not isinstance(new, dict):
+        return False
+    new_cases = {
+        case.get("name"): case
+        for case in (new.get("cases") or [])
+        if isinstance(case, dict)
+    }
+    old_cases = [case for case in (old.get("cases") or []) if isinstance(case, dict)]
+    if not old_cases:
+        return True
+    for case in old_cases:
+        current = new_cases.get(case.get("name"))
+        if current is None:
+            return False
+        old_steps = case.get("steps") or []
+        new_steps = current.get("steps") or []
+        if new_steps[: len(old_steps)] != old_steps:
+            return False
+    return True
+
+
+def latest_screenshot_data_url(result_dir: Path | None, limit: int = 1_500_000) -> str | None:
+    """取最近一张截图作为续写依据。过大或没有就返回 None（调用方退化为纯文本）。"""
+    if result_dir is None or not result_dir.exists():
+        return None
+    files = [path for path in result_dir.rglob("*.png") if path.is_file()]
+    if not files:
+        return None
+    newest = max(files, key=lambda path: path.stat().st_mtime)
+    if newest.stat().st_size > limit:
+        return None
+    return "data:image/png;base64," + base64.b64encode(newest.read_bytes()).decode()
+
+
+def attach_image(messages: list[dict], data_url: str | None) -> list[dict]:
+    """把截图挂到最后一条用户消息上。模型不支持图片时，调用方会退回纯文本重试。"""
+    if not data_url:
+        return messages
+    for message in reversed(messages):
+        if message.get("role") == "user" and isinstance(message.get("content"), str):
+            message["content"] = [
+                {"type": "text", "text": message["content"]},
+                {"type": "image_url", "image_url": {"url": data_url}},
+            ]
+            break
+    return messages
+
+
+def _strip_images(messages: list[dict]) -> list[dict]:
+    out = []
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, list):
+            text = " ".join(
+                part.get("text", "") for part in content if part.get("type") == "text"
+            )
+            message = {**message, "content": text}
+        out.append(message)
+    return out
 
 
 _ACTION_NODES = {
@@ -323,10 +457,21 @@ def build_messages(
     *,
     current_yaml: str | None,
     feature_name: str | None,
+    mode: str = "rewrite",
+    evidence: str | None = None,
 ) -> list[dict]:
     system = SYSTEM_PROMPT
+    if mode == "append":
+        system += APPEND_RULE
     if feature_name:
         system += f"\n\n## 当前上下文\n\n这个用例属于功能「{feature_name}」。"
+    if evidence:
+        system += (
+            "\n\n## 最近的试跑结果\n\n"
+            "下面是执行器给出的事实（每一步做了什么、失败那一步的理由）：\n\n"
+            f"```json\n{evidence}\n```\n\n"
+            "如果失败原因是产品问题而不是用例写法，直接说明，不要硬改。"
+        )
     if current_yaml:
         system += (
             "\n\n## 当前的 YAML\n\n"
@@ -369,6 +514,12 @@ async def call_model(
 
     async with _model_client(timeout) as client:
         response = await client.post(url, json=payload, headers=headers)
+        if response.status_code == 400 and any(
+            isinstance(m.get("content"), list) for m in payload["messages"]
+        ):
+            # 部分 OpenAI 兼容服务不认多模态 content；退回纯文本而不是整轮失败
+            payload["messages"] = _strip_images(payload["messages"])
+            response = await client.post(url, json=payload, headers=headers)
         if response.status_code == 400 and "chat_template_kwargs" in payload:
             payload.pop("chat_template_kwargs")
             response = await client.post(url, json=payload, headers=headers)
@@ -498,13 +649,19 @@ async def stream_model(
             try:
                 async with client.stream("POST", url, json=payload, headers=headers) as response:
                     if response.status_code == 400:
-                        # 有些服务端不认这两个扩展字段；逐个去掉再试
-                        for key in ("stream_options", "chat_template_kwargs"):
-                            if key in payload:
-                                payload.pop(key, None)
-                                break
+                        if any(
+                            isinstance(m.get("content"), list) for m in payload["messages"]
+                        ):
+                            # 服务端不认多模态 content：退回纯文本
+                            payload["messages"] = _strip_images(payload["messages"])
                         else:
-                            response.raise_for_status()
+                            # 有些服务端不认这两个扩展字段；逐个去掉再试
+                            for key in ("stream_options", "chat_template_kwargs"):
+                                if key in payload:
+                                    payload.pop(key, None)
+                                    break
+                            else:
+                                response.raise_for_status()
                         if attempt < STREAM_ATTEMPTS - 1:
                             continue
                         response.raise_for_status()
@@ -568,18 +725,59 @@ def _friendly_stream_error(exc: Exception) -> str:
     return "生成失败，请稍后重试"
 
 
+def _finalize(
+    reply: str, yaml_text: str | None, current_yaml: str | None, mode: str
+) -> tuple[str, str | None, bool, str | None, list[dict]]:
+    """追加模式下的硬校验 + 这一轮的差异与步骤清单。
+
+    模型可能无视「不许改已确认步骤」而重写前缀；这里直接丢弃这次结果，
+    而不是把跑不过的内容交给用户。
+    """
+    lock_violated = False
+    if (
+        yaml_text
+        and mode == "append"
+        and current_yaml
+        and not verify_prefix(current_yaml, yaml_text)
+    ):
+        lock_violated = True
+        yaml_text = None
+        reply = (
+            (reply or "").strip()
+            + "\n\n这次结果改动了已经验证过的步骤，已丢弃（右侧保持原样）。请再试一次。"
+        )
+    diff = (
+        diff_text(current_yaml, yaml_text, "当前", "新版本")
+        if current_yaml and yaml_text
+        else None
+    )
+    return reply, yaml_text, lock_violated, diff, steps_of(yaml_text) if yaml_text else []
+
+
 async def draft_stream(
     config: SystemModelConfig,
     *,
     history: list[dict],
     current_yaml: str | None,
     feature_name: str | None,
+    mode: str = "rewrite",
+    evidence: str | None = None,
+    image: str | None = None,
 ) -> AsyncIterator[dict]:
     """流式生成：先发 delta，最后发一次 done（结构同 CaseDraftOut）。
 
     出错时发 error 事件而不是断开连接 —— 前端能把原因显示在气泡里。
     """
-    messages = build_messages(history, current_yaml=current_yaml, feature_name=feature_name)
+    messages = attach_image(
+        build_messages(
+            history,
+            current_yaml=current_yaml,
+            feature_name=feature_name,
+            mode=mode,
+            evidence=evidence,
+        ),
+        image,
+    )
     parts: list[str] = []
     usage: dict = {}
     try:
@@ -611,6 +809,10 @@ async def draft_stream(
             # 补缓存这一步失败不影响已生成的内容
             pass
 
+    reply, yaml_text, lock_violated, diff, steps = _finalize(
+        reply, yaml_text, current_yaml, mode
+    )
+
     yield {
         "event": "done",
         "data": {
@@ -619,6 +821,9 @@ async def draft_stream(
             "yaml_ok": bool(yaml_text) and not errors,
             "yaml_errors": errors,
             "usage": usage,
+            "diff": diff,
+            "lock_violated": lock_violated,
+            "steps": steps,
         },
     }
 
@@ -630,9 +835,19 @@ async def draft(
     history: list[dict],
     current_yaml: str | None,
     feature_name: str | None,
+    mode: str = "rewrite",
+    evidence: str | None = None,
+    image: str | None = None,
 ) -> DraftResult:
-    messages = build_messages(
-        history, current_yaml=current_yaml, feature_name=feature_name
+    messages = attach_image(
+        build_messages(
+            history,
+            current_yaml=current_yaml,
+            feature_name=feature_name,
+            mode=mode,
+            evidence=evidence,
+        ),
+        image,
     )
     reply, usage = await call_model(config, messages)
 
@@ -648,12 +863,18 @@ async def draft(
             config, messages, reply, yaml_text, usage
         )
 
+    reply, yaml_text, lock_violated, diff, steps = _finalize(
+        reply, yaml_text, current_yaml, mode
+    )
     return DraftResult(
         reply=build_reply(reply, yaml_text),
         yaml_text=yaml_text,
         yaml_ok=bool(yaml_text) and not errors,
         yaml_errors=errors,
         usage=usage,
+        diff=diff,
+        lock_violated=lock_violated,
+        steps=steps,
     )
 
 
