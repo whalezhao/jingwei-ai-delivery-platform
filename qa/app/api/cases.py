@@ -199,7 +199,7 @@ async def trial_run(
     不是一次正式执行。
     """
     feature, _config = await _draft_ready(feature_id, user, db)
-    errors, case_count = validate_yaml(body.yaml_content)
+    errors, _ = validate_yaml(body.yaml_content)
     if errors:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "；".join(errors))
     try:
@@ -208,6 +208,8 @@ async def trial_run(
         )
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    # 返回的是这次真正会跑的范围（前面的 case + 目标 case 的前 N 步）
+    _, case_count = validate_yaml(text)
     env = await environment_for_system(
         db, feature.system_id, environment_name=body.environment_name
     )
