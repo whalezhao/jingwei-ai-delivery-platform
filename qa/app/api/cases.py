@@ -202,7 +202,12 @@ async def trial_run(
     errors, case_count = validate_yaml(body.yaml_content)
     if errors:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "；".join(errors))
-    text = ai_case.truncate_steps(body.yaml_content, body.step_limit)
+    try:
+        text = ai_case.truncate_steps(
+            body.yaml_content, body.step_limit, body.case_index
+        )
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     env = await environment_for_system(
         db, feature.system_id, environment_name=body.environment_name
     )
@@ -275,6 +280,7 @@ async def list_cases(
     for case in cases:
         item = TestCaseOut.model_validate(case)
         item.version_no = versions.get(case.id)
+        item.steps = ai_case.steps_of(case.yaml_content)
         out.append(item)
     return out
 
@@ -351,6 +357,7 @@ async def get_case(case_id: uuid.UUID, user: CurrentPerson, db: DbSession) -> Te
             )
         )
     ).scalar()
+    out.steps = ai_case.steps_of(case.yaml_content)
     return out
 
 

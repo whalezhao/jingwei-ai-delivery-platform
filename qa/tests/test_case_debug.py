@@ -25,6 +25,22 @@ cases:
       - aiAct: 在搜索框输入 zzz
 """
 
+THREE = """beforeEach:
+  - gotoUrl: ${BASE_URL}
+cases:
+  - name: A
+    steps:
+      - aiAct: a1
+      - aiAct: a2
+  - name: B
+    steps:
+      - aiAct: b1
+      - aiAct: b2
+  - name: C
+    steps:
+      - aiAct: c1
+"""
+
 SINGLE = """beforeEach:
   - gotoUrl: ${BASE_URL}
 cases:
@@ -55,6 +71,26 @@ def test_truncate_steps_keeps_prefix_only():
     assert "打开登录页" in short
     # 步数本来就不超过上限时原样返回，不做无意义的重排
     assert truncate_steps(SINGLE, 10) == SINGLE
+
+
+def test_truncate_stops_after_target_case():
+    """case 顺序执行：跑到第 2 条的第 1 步 = 第 1 条整条 + 第 2 条 1 步，第 3 条不跑。"""
+    import yaml
+
+    text = truncate_steps(THREE, 1, 1)
+    doc = yaml.safe_load(text)
+    assert [len(case["steps"]) for case in doc["cases"]] == [2, 1]
+
+    first = yaml.safe_load(truncate_steps(THREE, 1, 0))
+    assert [case["name"] for case in first["cases"]] == ["A"]
+
+
+def test_truncate_rejects_unknown_case_index():
+    try:
+        truncate_steps(SINGLE, 1, 5)
+    except ValueError:
+        return
+    raise AssertionError("越界 case_index 应该报错")
 
 
 def test_verify_prefix_rejects_rewritten_steps():

@@ -140,6 +140,8 @@ class TestCaseOut(BaseModel):
     system_id: int | None = None
     # 最新版本号；前端版本历史入口用
     version_no: int | None = None
+    # 步骤清单（按 case 分组用），AI 修改弹窗一开封就能试跑
+    steps: list[dict] = []
 
 
 class TestCaseCreate(In):
@@ -199,8 +201,10 @@ class CaseDraftOut(BaseModel):
 
 class TrialRunIn(In):
     yaml_content: str
-    # 每条 case 只跑前 N 步：调试点在「第 N 步能不能走到」
+    # 目标 case 在文档里的位置 + 只跑到它的第 N 步；case 按顺序执行，
+    # 前面的整条跑完，后面的不跑
     step_limit: int = Field(ge=1, le=60)
+    case_index: int | None = Field(default=None, ge=0)
     environment_name: str | None = None
 
 

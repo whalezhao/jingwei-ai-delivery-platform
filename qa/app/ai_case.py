@@ -241,7 +241,7 @@ def steps_of(yaml_text: str) -> list[dict]:
     if not isinstance(doc, dict):
         return []
     items: list[dict] = []
-    for case in doc.get("cases") or []:
+    for case_index, case in enumerate(doc.get("cases") or []):
         if not isinstance(case, dict):
             continue
         name = str(case.get("name") or "")
@@ -252,29 +252,51 @@ def steps_of(yaml_text: str) -> list[dict]:
             value = step.get(node)
             text = value.get("prompt") if isinstance(value, dict) else value
             items.append(
-                {"case": name, "index": index, "kind": node, "text": str(text or "")[:200]}
+                {
+                    "case": name,
+                    "case_index": case_index,
+                    "index": index,
+                    "kind": node,
+                    "text": str(text or "")[:200],
+                }
             )
     return items
 
 
-def truncate_steps(yaml_text: str, limit: int) -> str:
-    """每条 case 只保留前 limit 步 —— 试跑「走得到这里」的最小文档。"""
+def truncate_steps(yaml_text: str, limit: int, case_index: int | None = None) -> str:
+    """截到「第 case_index 条的前 limit 步」为止。
+
+    执行器是**顺序**跑同一份文档里的 case 的（core 的 run-workflow-document 里
+    是 for...of + await），所以「跑到这里」的含义是：前面的 case 整条跑完，
+    目标 case 跑前 limit 步，后面的 case 不跑。
+    case_index 为空时退回老行为：每条 case 都只留前 limit 步。
+    """
     try:
         doc = yaml.safe_load(yaml_text)
     except yaml.YAMLError:
         return yaml_text
-    if not isinstance(doc, dict):
+    if not isinstance(doc, dict) or not isinstance(doc.get("cases"), list):
         return yaml_text
-    changed = False
-    for case in doc.get("cases") or []:
-        if not isinstance(case, dict):
-            continue
-        steps = case.get("steps")
+    cases = [case for case in doc["cases"] if isinstance(case, dict)]
+
+    if case_index is None:
+        changed = False
+        for case in cases:
+            steps = case.get("steps")
+            if isinstance(steps, list) and len(steps) > limit:
+                case["steps"] = steps[:limit]
+                changed = True
+        if not changed:
+            return yaml_text
+    else:
+        if not 0 <= case_index < len(cases):
+            raise ValueError("步骤所属的用例不存在，请刷新后重试")
+        target = cases[case_index]
+        steps = target.get("steps")
         if isinstance(steps, list) and len(steps) > limit:
-            case["steps"] = steps[:limit]
-            changed = True
-    if not changed:
-        return yaml_text
+            target["steps"] = steps[:limit]
+        doc["cases"] = cases[: case_index + 1]
+
     return yaml.safe_dump(doc, allow_unicode=True, sort_keys=False)
 
 

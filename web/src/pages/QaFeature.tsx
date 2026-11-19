@@ -24,6 +24,19 @@ import { Switch } from "../components/motion/switch";
 
 const DEFAULT_YAML = "cases:\n  - name: 用例名\n    steps:\n      - aiAssert: 页面正常\n";
 
+type Step = { case: string; case_index: number; index: number; kind: string; text: string };
+
+/** 步骤按 case 分组：一份 YAML 里可以有多个 case，编号要在各自 case 内数。 */
+function groupSteps(steps: Step[]) {
+  const groups: { key: number; name: string; items: Step[] }[] = [];
+  for (const step of steps) {
+    const last = groups[groups.length - 1];
+    if (last && last.key === step.case_index) last.items.push(step);
+    else groups.push({ key: step.case_index, name: step.case, items: [step] });
+  }
+  return groups;
+}
+
 const emptyForm = {
   name: "",
   priority: "P1" as string | null,
@@ -54,9 +67,7 @@ export default function QaFeaturePage() {
   const [aiCase, setAiCase] = useState<QaCase | null>(null);
   const [aiYamlErrors, setAiYamlErrors] = useState<string[]>([]);
   const [aiDiff, setAiDiff] = useState<string | null>(null);
-  const [aiSteps, setAiSteps] = useState<
-    { case: string; index: number; kind: string; text: string }[]
-  >([]);
+  const [aiSteps, setAiSteps] = useState<Step[]>([]);
   const [aiRunId, setAiRunId] = useState<string | null>(null);
   const [trialBusy, setTrialBusy] = useState(false);
   const [trial, setTrial] = useState<any>(null);
@@ -160,7 +171,7 @@ export default function QaFeaturePage() {
     setAiYaml(target?.yaml_content ?? null);
     setAiYamlErrors([]);
     setAiDiff(null);
-    setAiSteps([]);
+    setAiSteps(target?.steps ?? []);
     setAiRunId(null);
     setTrial(null);
     setModelReady(null);
@@ -238,8 +249,9 @@ export default function QaFeaturePage() {
     trialTimer.current = null;
   };
 
-  // 试跑到第 N 步：跑的是「前 N 步」，不是只跑第 N 步
-  const trialRun = async (limit: number) => {
+  // 试跑到「第 caseIndex 条 case 的第 N 步」：case 顺序执行，
+// 前面的整条跑完，后面的不跑（执行器就是这么跑的）
+  const trialRun = async (limit: number, caseIndex: number) => {
     if (!aiYaml || trialBusy) return;
     setTrialBusy(true);
     setTrial({ status: "queued" });
@@ -248,7 +260,11 @@ export default function QaFeaturePage() {
         `/api/features/${fid}/ai/trial-run`,
         {
           method: "POST",
-          body: JSON.stringify({ yaml_content: aiYaml, step_limit: Math.max(1, limit) }),
+          body: JSON.stringify({
+            yaml_content: aiYaml,
+            step_limit: Math.max(1, limit),
+            case_index: caseIndex,
+          }),
         },
       );
       setAiRunId(r.run_id);
@@ -470,6 +486,8 @@ export default function QaFeaturePage() {
     },
   ];
 
+  const stepGroups = groupSteps(aiSteps);
+
   return (
     <Page
       title={`${t("qa.feature.cases")} · ${feature?.name || ""}`}
@@ -662,25 +680,39 @@ export default function QaFeaturePage() {
                       ) : null}
                     </div>
                     <ol className="m-0 max-h-40 list-none overflow-auto p-1.5">
-                      {aiSteps.map((s, i) => (
-                        <li
-                          key={i}
-                          className="flex items-center gap-2 rounded px-1 py-0.5 hover:bg-muted/60"
-                        >
-                          <span className="w-5 shrink-0 text-right font-mono text-[11px] text-muted-foreground">
-                            {s.index + 1}
-                          </span>
-                          <span className="min-w-0 flex-1 truncate text-[12px]" title={s.text}>
-                            {s.text || s.kind}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => trialRun(s.index + 1)}
-                            disabled={trialBusy}
-                            className="shrink-0 text-[11px] text-primary hover:underline disabled:opacity-50"
-                          >
-                            {t("qa.case.aiTrialHere")}
-                          </button>
+                      {stepGroups.map((group) => (
+                        <li key={group.key} className="py-0.5">
+                          {stepGroups.length > 1 ? (
+                            <div
+                              className="truncate px-1 text-[11px] text-muted-foreground"
+                              title={group.name}
+                            >
+                              {group.name || `#${group.key + 1}`}
+                            </div>
+                          ) : null}
+                          <ol className="m-0 list-none p-0">
+                            {group.items.map((s) => (
+                              <li
+                                key={s.index}
+                                className="flex items-center gap-2 rounded px-1 py-0.5 hover:bg-muted/60"
+                              >
+                                <span className="w-5 shrink-0 text-right font-mono text-[11px] text-muted-foreground">
+                                  {s.index + 1}
+                                </span>
+                                <span className="min-w-0 flex-1 truncate text-[12px]" title={s.text}>
+                                  {s.text || s.kind}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => trialRun(s.index + 1, s.case_index)}
+                                  disabled={trialBusy}
+                                  className="shrink-0 text-[11px] text-primary hover:underline disabled:opacity-50"
+                                >
+                                  {t("qa.case.aiTrialHere")}
+                                </button>
+                              </li>
+                            ))}
+                          </ol>
                         </li>
                       ))}
                     </ol>

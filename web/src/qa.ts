@@ -142,6 +142,13 @@ export interface QaCase {
   effective_stage: string;
   system_id: number | null;
   version_no: number | null;
+  steps?: {
+    case: string;
+    case_index: number;
+    index: number;
+    kind: string;
+    text: string;
+  }[];
 }
 
 export interface QaCaseVersion {
