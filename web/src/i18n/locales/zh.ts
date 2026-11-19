@@ -1050,6 +1050,7 @@ export const zh = {
       rollbackConfirm: "回滚到 v{{n}}？会生成一个新版本",
       rolledBack: "已回滚到 v{{n}}",
       aiGen: "AI 生成用例",
+      aiModify: "AI 修改用例",
       aiPrompt: "描述要测什么，AI 会生成用例 YAML",
       aiGenerate: "生成",
       aiNoYaml: "AI 没有给出可用 YAML",

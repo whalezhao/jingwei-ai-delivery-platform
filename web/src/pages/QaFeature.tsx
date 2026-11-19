@@ -50,6 +50,8 @@ export default function QaFeaturePage() {
     { role: "user" | "assistant"; content: string }[]
   >([]);
   const [aiYaml, setAiYaml] = useState<string | null>(null);
+  // 非空表示这次是「修改已有用例」：载入它的 YAML，采用后回到编辑抽屉覆盖保存
+  const [aiCase, setAiCase] = useState<QaCase | null>(null);
   const [aiYamlErrors, setAiYamlErrors] = useState<string[]>([]);
   const [aiDiff, setAiDiff] = useState<string | null>(null);
   const [aiSteps, setAiSteps] = useState<
@@ -149,11 +151,13 @@ export default function QaFeaturePage() {
     }
   };
 
-  const openAi = async () => {
+  const openAi = async (target?: QaCase) => {
+    setAiCase(target ?? null);
     setAiOpen(true);
     setAiMessages([]);
     setAiInput("");
-    setAiYaml(null);
+    // 修改已有用例时把它的 YAML 作为 current_yaml 交出去，模型在原文上改
+    setAiYaml(target?.yaml_content ?? null);
     setAiYamlErrors([]);
     setAiDiff(null);
     setAiSteps([]);
@@ -292,8 +296,20 @@ export default function QaFeaturePage() {
   const aiAdopt = () => {
     if (!aiYaml) return;
     setAiOpen(false);
-    setEditingId(null);
     setErrors(aiYamlErrors);
+    if (aiCase) {
+      // 修改已有用例：回到编辑抽屉，保存时 PATCH 这一条
+      setEditingId(aiCase.id);
+      form.reset({
+        name: aiCase.name,
+        priority: aiCase.priority,
+        description: aiCase.description ?? "",
+        yaml_content: aiYaml,
+        is_active: aiCase.is_active,
+      });
+      return;
+    }
+    setEditingId(null);
     form.reset({
       ...emptyForm,
       name: aiMessages.find((m) => m.role === "user")?.content.slice(0, 40) || feature?.name || "",
@@ -388,11 +404,18 @@ export default function QaFeaturePage() {
     },
     {
       title: t("qa.common.actions"),
-      width: 200,
+      width: 260,
       render: (_, r) => (
         <div className="flex items-center gap-2 text-[12px]">
           <button type="button" onClick={() => open(r)} className="text-primary hover:underline">
             {t("qa.common.edit")}
+          </button>
+          <button
+            type="button"
+            onClick={() => openAi(r)}
+            className="text-primary hover:underline"
+          >
+            {t("qa.case.aiModify")}
           </button>
           <button
             type="button"
@@ -460,7 +483,7 @@ export default function QaFeaturePage() {
             <Plus className="size-4" />
             {t("qa.case.new")}
           </Button>
-          <Button variant="outline" size="sm" className="rounded-lg" onClick={openAi}>
+          <Button variant="outline" size="sm" className="rounded-lg" onClick={() => openAi()}>
             <Sparkles className="size-4" />
             {t("qa.case.aiGen")}
           </Button>
@@ -570,10 +593,13 @@ export default function QaFeaturePage() {
           if (!next) setAiOpen(false);
         }}
       >
-        <CenterMorphModalContent ariaLabel={t("qa.case.aiGen")} className="max-w-[640px]">
+        <CenterMorphModalContent
+          ariaLabel={aiCase ? t("qa.case.aiModify") : t("qa.case.aiGen")}
+          className="max-w-[640px]"
+        >
           <div className="flex max-h-[76vh] flex-col p-6">
             <h2 className="m-0 text-lg font-semibold tracking-[-0.01em] text-foreground">
-              {t("qa.case.aiGen")}
+              {aiCase ? t("qa.case.aiModify") : t("qa.case.aiGen")}
             </h2>
             {modelReady === false ? (
               <div className="mt-4 rounded-lg bg-warning/10 px-3 py-3 text-[13px] leading-relaxed text-foreground">

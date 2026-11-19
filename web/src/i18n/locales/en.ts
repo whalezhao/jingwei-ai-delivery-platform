@@ -1058,6 +1058,7 @@ export const en = {
       rollbackConfirm: "Roll back to v{{n}}? This creates a new version",
       rolledBack: "Rolled back to v{{n}}",
       aiGen: "Generate with AI",
+      aiModify: "Edit with AI",
       aiPrompt: "Describe what to test; AI generates the case YAML",
       aiGenerate: "Generate",
       aiNoYaml: "The model returned no usable YAML",

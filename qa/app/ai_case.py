@@ -124,6 +124,8 @@ cases:
 5. **在关键节点插断言**：登录成功、提交成功、页面跳转这类状态变化之后补一条 `aiAssert`。\
 分步试跑时「动作跑通」只代表能执行，不等于结果正确 —— 断言才是可验证的中间状态。
 6. 用例名称与断言描述用中文。
+7. **一次写完整**：不要用「…」「同上」「后续步骤省略」偷懒，也不要只给前半段。\
+宁可多写几步，也不要交出一份跑不完整的文档。
 
 ## 测试数据
 
@@ -486,7 +488,8 @@ async def call_model(
     messages: list[dict],
     *,
     timeout: float = 180.0,
-    max_tokens: int = 4096,
+    # 步骤多的用例一份 YAML 就可能上千 token；4096 会截在半途，生成一份跑不起来的文档
+    max_tokens: int = 8192,
 ) -> tuple[str, dict]:
     """调系统配置的模型。走 OpenAI 兼容的 chat/completions。"""
     base = (config.base_url or "").rstrip("/")
@@ -630,7 +633,7 @@ async def stream_model(
         "model": config.model_name,
         "messages": messages,
         "temperature": 0.2,
-        "max_tokens": 4096,
+        "max_tokens": 8192,
         "stream": True,
         "stream_options": {"include_usage": True},
     }
