@@ -15,6 +15,7 @@ import logging
 import os
 import re
 import shutil
+import tempfile
 import socket
 import subprocess
 from datetime import date
@@ -136,10 +137,21 @@ def _crg_env() -> dict[str, str]:
     return env
 
 
+# 带 token 的远端地址会作为 argv 传给 git；报错时会进日志/任务结果/通知，先把凭据抹掉
+# （与 routers/runner_api.scrub_token 同一规则）
+_TOKEN_IN_URL = re.compile(r"(oauth2:)[^@\s]+@")
+
+
+def _scrub(value: str) -> str:
+    return _TOKEN_IN_URL.sub(r"\1***@", value)
+
+
 def _git(*args: str, cwd: str | Path | None = None, check: bool = True) -> str:
     r = subprocess.run(["git", *args], cwd=str(cwd) if cwd else None, capture_output=True, text=True)
     if check and r.returncode != 0:
-        raise RuntimeError(f"git {' '.join(args[:3])} 失败: {r.stderr[-300:]}")
+        raise RuntimeError(
+            f"git {_scrub(' '.join(args[:3]))} 失败: {_scrub(r.stderr[-300:])}"
+        )
     return r.stdout
 
 
@@ -649,9 +661,18 @@ class Runner:
         _git("config", "user.name", "Vega Agent", cwd=str(wt))
         _git("config", "user.email", "vega@runner.local", cwd=str(wt))
 
-        # ④ claude 在 worktree 里干活（只见自己的目录，碰不到别的分支）
-        async for evt in run_claude(dev_args(payload["session_id"]), payload["claude_env"], cwd=str(wt), prompt=payload["prompt"]):
-            await self._emit(task_id, evt)
+        # ④ claude 在 worktree 里干活（只见自己的目录，碰不到别的分支）。
+        # 每任务独立 HOME：缓存、历史、工具配置都落在任务自己的目录，任务之间互不可见；
+        # CLAUDE_CONFIG_DIR 仍指向共享配置目录（会话续跑与 MCP 条目在那里）。
+        home = Path(tempfile.mkdtemp(prefix=f"vega-home-{task_id}-"))
+        env = {**payload["claude_env"], "HOME": str(home), "TMPDIR": str(home)}
+        try:
+            async for evt in run_claude(
+                dev_args(payload["session_id"]), env, cwd=str(wt), prompt=payload["prompt"]
+            ):
+                await self._emit(task_id, evt)
+        finally:
+            shutil.rmtree(home, ignore_errors=True)
 
         # ⑤ 校验产出 + push（确定性动作，AI 只负责 commit）
         commits = _git("log", "--oneline", f"refs/heads/{base}..HEAD", cwd=str(wt)).strip()

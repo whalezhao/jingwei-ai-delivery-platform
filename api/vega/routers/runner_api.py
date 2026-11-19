@@ -372,6 +372,13 @@ async def _finish_plan_turn(db: AsyncSession, task: RunnerTask, body: TaskResult
                 "message": {"id": msg.id, "role": "assistant", "content": text, "mode": mode, "events": events},
             },
         )
+        # 返工轮：自动成版并送复审，不需要人再点「采用」
+        try:
+            from ..rework import on_plan_turn_done
+
+            await on_plan_turn_done(db, req, text, task.payload or {})
+        except Exception:  # noqa: BLE001 自动链路失败不吞本轮消息
+            log.warning("rework plan turn failed for req %s", req.id, exc_info=True)
     else:
         # 失败也落 assistant 消息：SSE 只在失败瞬间在线才收得到 plan_error，
         # 不落库的话重放里最后一条永远是 user，前端 busy 永不清（页面像卡死）
@@ -473,6 +480,12 @@ async def _finish_egm_review(db: AsyncSession, task: RunnerTask, body: TaskResul
             head=f"🔴 Goldfish 评审发现 {review.blocker_count} 个阻塞项",
             detail=(titles + "\n" if titles else "") + "在「评审报告」里查看，并按结论修订方案。",
         )
+    try:
+        from ..rework import on_review_done
+
+        await on_review_done(db, review)
+    except Exception:  # noqa: BLE001 返工回路失败不影响评审结论
+        log.warning("rework review hook failed for %s", review.id, exc_info=True)
     if task.requirement_id:
         _pub(
             task.requirement_id,
@@ -742,3 +755,17 @@ async def _finish_mr_review(db: AsyncSession, task: RunnerTask, body: TaskResult
                 await try_autoflow(db, group, project, review, gl, client)
     except Exception:  # noqa: BLE001 评论/gate 失败不吞初审结论
         log.warning("mr_review gate/comment failed for !%s", review.mr_iid, exc_info=True)
+
+    # CRG 判「需修改」→ 启动方案返工（failed 多半是执行器问题，不动方案）
+    if review.verdict == "modify" and task.requirement_id:
+        findings = (review.summary or "").strip()
+        issues = "\n".join(
+            f"- {item.get('title') or item.get('file') or ''}：{item.get('description') or ''}"
+            for item in (review.issues or [])[:10]
+        )
+        try:
+            from ..rework import start_rework
+
+            await start_rework(db, task.requirement_id, (findings + "\n" + issues).strip())
+        except Exception:  # noqa: BLE001 返工投递失败不影响初审结果落库
+            log.warning("start_rework failed for !%s", review.mr_iid, exc_info=True)

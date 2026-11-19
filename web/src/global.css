@@ -879,6 +879,27 @@ body {
 .wb-step.bad small {
   color: var(--danger);
 }
+
+/* 方案返工卡：与技术方案同列、贴在原方案下方，琥珀色虚线区别于正常链路 */
+.wb-rework {
+  width: 100%;
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 10px;
+  border: 1px dashed rgba(196, 122, 18, 0.55);
+  border-radius: 6px;
+  background: rgba(245, 158, 11, 0.08);
+}
+.wb-rework b {
+  font-size: 12px;
+  color: #9a5b06;
+}
+.wb-rework small {
+  font-size: 11px;
+  color: #a86a12;
+}
 .wb-step.idle {
   background: transparent;
   border: 1px dashed rgba(20, 23, 28, 0.16);

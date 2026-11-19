@@ -23,7 +23,15 @@ from ..config import get_settings
 from ..crypto import decrypt
 from ..db import get_db, sessionmaker
 from ..gitlab import client_ctx
-from ..jobs import MR_CLOSED_MARK, _gitlab, _notify_task_final, ci_failure_analysis, mark_requirement_online
+from ..jobs import (
+    MR_CLOSED_MARK,
+    _gitlab,
+    _notify_task_final,
+    ci_failure_analysis,
+    mark_requirement_online,
+    notify_review_mismatch,
+    review_head_mismatch,
+)
 from ..llm import am_user_key, build_claude_env, resolve_llm
 from ..models import (
     DeployEvent,
@@ -131,7 +139,12 @@ async def _on_mr(db: AsyncSession, group: DevGroup, payload: dict, background: B
         # 人工在 GitLab 关闭/合并 MR：当场收尾并播报。只靠 merge_poll 兜底时，
         # 任务创建人和项目负责人最多要等 10 分钟，且 close 事件过去完全没处理。
         await _mark_task_final(
-            db, group, _project_id(payload), attrs.get("iid"), merged=action == "merge"
+            db,
+            group,
+            _project_id(payload),
+            attrs.get("iid"),
+            merged=action == "merge",
+            sha=(attrs.get("last_commit") or {}).get("id"),
         )
     if action in ("open", "reopen", "update"):
         _maybe_enqueue_mr_review(background, group.id, _project_id(payload), payload)
@@ -382,6 +395,7 @@ async def _mark_task_final(
     mr_iid: int | None,
     *,
     merged: bool,
+    sha: str | None = None,
 ) -> None:
     """MR 关了/合了：按「项目 + MR iid」找到任务收尾，并立刻播报（与 merge_poll 同文案）。
 
@@ -412,6 +426,8 @@ async def _mark_task_final(
     if merged:
         task.merged_at = utcnow()
         await mark_requirement_online(db, req)
+        if approved := await review_head_mismatch(db, project.id, mr_iid, sha):
+            await notify_review_mismatch(db, group, req, task, approved, sha)
         await _notify_task_final(db, group, req, task, "merged")
     else:
         task.error = task.error or MR_CLOSED_MARK

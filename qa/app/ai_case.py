@@ -21,6 +21,7 @@ import yaml
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .case_versions import diff_text
+from .modelconfig import model_api_key
 from .models import SystemModelConfig
 from .yamlcheck import validate as validate_yaml
 
@@ -532,7 +533,7 @@ async def call_model(
         payload["chat_template_kwargs"] = {"enable_thinking": False}
 
     headers = {
-        "Authorization": f"Bearer {config.api_key or ''}",
+        "Authorization": f"Bearer {model_api_key(config)}",
         "Content-Type": "application/json",
     }
     url = f"{base}/chat/completions"
@@ -663,7 +664,7 @@ async def stream_model(
         payload["chat_template_kwargs"] = {"enable_thinking": False}
 
     headers = {
-        "Authorization": f"Bearer {config.api_key or ''}",
+        "Authorization": f"Bearer {model_api_key(config)}",
         "Content-Type": "application/json",
     }
     url = f"{base}/chat/completions"

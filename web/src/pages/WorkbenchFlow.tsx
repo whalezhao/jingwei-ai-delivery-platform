@@ -56,6 +56,8 @@ export interface Task {
   agents: { sub: number; events: number } | null;
   mr: Mr | null;
   can_open: boolean;
+  // 0 = 首轮；>0 = 返工后重新派发的任务
+  rework_round?: number;
 }
 export interface Req {
   id: number;
@@ -83,6 +85,8 @@ export interface Req {
   deploy_on: boolean;
   deploy: { environment: string; sha: string; at: string | null } | null;
   test?: { status: string; pass_rate: number | null } | null;
+  // 方案返工回路：非空表示正在由方案专家修订 / 等复审
+  rework?: { round: number; state: string } | null;
   tasks: Task[];
 }
 
@@ -250,6 +254,7 @@ function reqNodes(r: Req): { key: NodeKey; label: MsgKey; state: St }[] {
   // 部署/测试是需求级状态，不看单个任务：部署过 = ok，测试批次状态各自映射
   if (r.deploy_on) state.deploy = r.deploy ? "ok" : "idle";
   if (keys.includes("test")) state.test = testState(r.test?.status);
+  // 方案返工期间把「方案」节点点亮：CRG 判不可通过 → 专家修订 → 复审 → 重新派发
   return keys.map((k) => ({ key: k, label: NODE_LABEL[k], state: state[k] || "idle" }));
 }
 
@@ -337,7 +342,10 @@ type FlowStage = {
   expert: string | null;
   info: ReturnType<typeof nodeInfo>;
 };
-type FlowDatum = { kind: "req"; req: Req } | FlowStage;
+type FlowDatum =
+  | { kind: "req"; req: Req }
+  | { kind: "rework"; req: Req }
+  | FlowStage;
 
 /** 任务卡：并进流程里它当前所处的阶段节点，带该阶段的必要信息 */
 function TaskCard({ task, r, onOpen }: { task: Task; r: Req; onOpen: () => void }) {
@@ -476,7 +484,20 @@ function ReqCard({ req, ctx }: { req: Req; ctx: FlowCtx }) {
 function NodeBody({ datum, ctx }: { datum: FlowDatum; ctx: FlowCtx }) {
   const { t } = useTranslation();
   if (datum.kind === "req") return <ReqCard req={datum.req} ctx={ctx} />;
-  const { req, state, cards, expert, info, label } = datum;
+  if (datum.kind === "rework") {
+    const round = datum.req.rework?.round ?? 1;
+    return (
+      <div className="wb-rework" title={t("workbench.rework")}>
+        <b>{t("workbench.reworkCard", { n: round })}</b>
+        <small>
+          {datum.req.rework?.state === "reviewing"
+            ? t("workbench.reworkReviewing")
+            : t("workbench.reworkPlanning", { n: round })}
+        </small>
+      </div>
+    );
+  }
+  const { req, state, cards, expert, info, label } = datum as FlowStage;
   return (
     <div className={`wb-node ${state}`}>
       {expert && (
@@ -518,6 +539,8 @@ const REQ_W = 232;
 const CARD_W = 252;
 const GAP = 34;
 const ROW_GAP = 26;
+/** 两轮之间留出走线空间，返工回返箭头折在这条空隙里 */
+const REWORK_GAP = 64;
 /** 表格边框与首/末列卡片之间的留白 */
 const PAD = 16;
 /** 连线接在卡片底部往上 26px 处（与旧流程板一致） */
@@ -536,14 +559,12 @@ function buildRows(
   agentNames: Record<string, string>,
   stageW: number,
 ): Draft[][] {
-  return reqs.map((r) => {
+  return reqs.flatMap((r) => {
     const keys = nodeKeys(r);
-    const cardsByNode: Record<string, Task[]> = {};
-    r.tasks.forEach((task) => {
-      const k = taskStage(task, r);
-      (cardsByNode[k] ||= []).push(task);
-    });
-    const lastCard = Math.max(-1, ...r.tasks.map((task) => keys.indexOf(taskStage(task, r))));
+    const round = r.rework?.round ?? 0;
+    // 返工是一次新的执行：上一轮的卡片不复用，两轮画成两行
+    const pass0 = round ? r.tasks.filter((t) => (t.rework_round ?? 0) === 0) : r.tasks;
+    const passN = round ? r.tasks.filter((t) => (t.rework_round ?? 0) === round) : [];
     const project = projects.find((p) => p.id === r.system_id);
     const expertFor = (key: NodeKey) => {
       if (key === "doc") return agentLabel(agentNames, r.doc_agent?.id, r.doc_agent?.name);
@@ -552,27 +573,53 @@ function buildRows(
       return null;
     };
 
-    const stages: Draft[] = [];
-    reqNodes(r).forEach((n, i) => {
-      if (n.state === "idle" && i > lastCard) return;
-      const cards = cardsByNode[n.key] || [];
-      stages.push({
-        id: `req-${r.id}-${n.key}`,
-        w: stageW,
-        datum: {
-          kind: "stage",
-          req: r,
-          key: n.key,
-          label: n.label,
-          state: n.state,
-          cards,
-          expert: expertFor(n.key),
-          info: nodeInfo(r, n.key, n.state),
-        },
+    const stageRow = (tasks: Task[], tag: string, reworkPlan: boolean): Draft[] => {
+      const cardsByNode: Record<string, Task[]> = {};
+      tasks.forEach((task) => {
+        const k = taskStage(task, r);
+        (cardsByNode[k] ||= []).push(task);
       });
-    });
+      const lastCard = Math.max(-1, ...tasks.map((task) => keys.indexOf(taskStage(task, r))));
+      const out: Draft[] = [];
+      // 每轮只看本轮的任务：卡片数、状态文案都按这一行自己的任务算
+      const view = tasks === r.tasks ? r : { ...r, tasks };
+      reqNodes(r).forEach((n, i) => {
+        // 返工件本身可能在还没派发新任务时就该显示，不跟随后面的空阶段一起裁掉
+        const keepReworkPlan = reworkPlan && n.key === "plan";
+        if (n.state === "idle" && i > lastCard && !keepReworkPlan) return;
+        if (n.key === "plan" && reworkPlan) {
+          out.push({ id: `req-${r.id}-rework`, w: stageW, datum: { kind: "rework", req: r } });
+          return;
+        }
+        out.push({
+          id: `req-${r.id}-${tag}${n.key}`,
+          w: stageW,
+          datum: {
+            kind: "stage",
+            req: r,
+            key: n.key,
+            label: n.label,
+            state: n.state,
+            cards: cardsByNode[n.key] || [],
+            expert: expertFor(n.key),
+            info: nodeInfo(view, n.key, n.state),
+          },
+        });
+      });
+      return out;
+    };
 
-    return [{ id: `req-${r.id}`, w: REQ_W, datum: { kind: "req", req: r } }, ...stages];
+    const rows: Draft[][] = [
+      [
+        { id: `req-${r.id}`, w: REQ_W, datum: { kind: "req", req: r } },
+        ...stageRow(pass0, "", false),
+      ],
+    ];
+    if (round && r.rework) {
+      // 第二轮：返工方案 → 新的开发/评审/CI/合并/通知卡片
+      rows.push(stageRow(passN, `p${round}-`, true));
+    }
+    return rows;
   });
 }
 
@@ -630,10 +677,14 @@ function layout(
   const width = Math.max(x - GAP + PAD, 1);
 
   let top = LANE_HEAD_H + 8;
-  rows.forEach((row) => {
+  rows.forEach((row, ri) => {
+    const rework = row.find((d) => (d.datum as any).kind === "rework");
     const hs = row.map((d) => heights[d.id] || 80);
+    const reworkH = rework ? heights[rework.id] || 60 : 0;
     const rowH = Math.max(...hs);
+
     row.forEach((d, i) => {
+      if ((d.datum as any).kind === "rework") return; // 单独定位，不按泳道排
       const h = hs[i];
       const w = i === 0 ? REQ_W : stageW;
       const nx = i === 0 ? PAD : colX[(d.datum as FlowStage).key];
@@ -654,7 +705,36 @@ function layout(
         });
       }
     });
-    top += rowH + ROW_GAP;
+
+    if (rework) {
+      const reworkX = colX.plan + stageW / 2;
+      const reworkY = top + rowH - reworkH / 2;
+      nodes.push({
+        id: rework.id,
+        data: rework.datum,
+        style: { x: reworkX, y: reworkY, size: [stageW, reworkH] },
+      });
+      const reqId = (rework.datum as { req: Req }).req.id;
+      const reviewId = `req-${reqId}-review`;
+      // 上一轮的代码评审 → 本轮的返工方案（打回）；本轮内部的连线由下面的相邻节点循环生成
+      const from = nodes.find((n) => n.id === reviewId);
+      if (from) {
+        // 走两行之间的空隙折返，不压任何卡片：评审卡底 → 行间 → 返工卡顶
+        const srcX = from.style.x;
+        const srcBottom = from.style.y + from.style.size[1] / 2;
+        const bandY = srcBottom + (top - srcBottom) / 2;
+        edges.push({
+          id: `e-rework-in-${reqId}`,
+          source: reviewId,
+          target: rework.id,
+          data: { state: "rework", via: [[srcX, bandY], [reworkX, bandY]] },
+          style: { sourcePort: "down", targetPort: "up" },
+        });
+      }
+    }
+    // 下一行是本需求的返工段时，多留一条带子给回返箭头
+    const nextIsRework = (rows[ri + 1] || []).some((d) => (d.datum as any).kind === "rework");
+    top += rowH + (nextIsRework ? REWORK_GAP : ROW_GAP);
   });
 
   const height = Math.max(top, 1);
@@ -870,14 +950,30 @@ export default function WorkbenchFlow({
               ports: [
                 { key: "in", placement: [0, 1 - PORT_UP / h] },
                 { key: "out", placement: [1, 1 - PORT_UP / h] },
+                // 返工回返箭头专用：从卡片底边下、顶边上，避开 bbox 取交点的偏移
+                { key: "down", placement: [0.5, 1] },
+                { key: "up", placement: [0.5, 0] },
               ],
             };
           },
         },
         edge: {
-          type: "workbench-edge",
+          // 返工回路用折线走两行之间的空隙：直连会把中间的开发 / 评审卡片划穿
+          type: (d: any) => (d.data?.state === "rework" ? "polyline" : "workbench-edge"),
           style: (d: any) => {
             const state = (d.data?.state as string) || "idle";
+            if (state === "rework") {
+              return {
+                stroke: "#d97706",
+                lineWidth: 1.8,
+                lineDash: [6, 4],
+                endArrow: true,
+                endArrowType: "triangle",
+                endArrowSize: 9,
+                controlPoints: d.data?.via,
+                radius: 10,
+              };
+            }
             return {
               stroke: EDGE_COLOR[state] || EDGE_COLOR.idle,
               lineWidth: 1.5,

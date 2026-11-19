@@ -271,6 +271,12 @@ class Requirement(Base):
     plan_session_id: Mapped[str | None] = mapped_column(String(64))
     plan_runner_id: Mapped[int | None] = mapped_column(ForeignKey("runner_node.id"))
     plan_md: Mapped[str | None] = mapped_column(Text)
+    # 方案返工回路：CRG 初审不可通过时，由方案阶段的 AM 专家出修订稿 → EGM 复审 → 重新派发
+    rework_round: Mapped[int] = mapped_column(Integer, default=0)
+    # planning（等修订稿）/ reviewing（等 Goldfish 复审）；NULL = 正常流程
+    rework_state: Mapped[str | None] = mapped_column(String(16))
+    rework_team_id: Mapped[str | None] = mapped_column(String(64))
+    rework_agent_id: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(TZDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(TZDateTime, default=utcnow, onupdate=utcnow)
 
@@ -355,6 +361,10 @@ class DevTask(Base):
     updated_at: Mapped[datetime] = mapped_column(TZDateTime, default=utcnow, onupdate=utcnow)
     # MR 合入时间：部署触发测试按「合入时间 vs 部署时间」判断待测；旧数据为空回退 updated_at
     merged_at: Mapped[datetime | None] = mapped_column(TZDateTime)
+    # 本次执行用的模型/prompt/参数快照：换模型或改 prompt 后，历史结果仍可解释
+    snapshot: Mapped[dict | None] = mapped_column(JSON)
+    # 0 = 首轮；>0 = 第几次返工派发的任务（工作台据此分两段画执行顺序）
+    rework_round: Mapped[int] = mapped_column(Integer, default=0)
 
     requirement: Mapped[Requirement] = relationship(back_populates="tasks")
 

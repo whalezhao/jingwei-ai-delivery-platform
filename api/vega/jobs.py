@@ -29,6 +29,7 @@ from .models import (
     GitlabMember,
     GroupMember,
     GroupTechLead,
+    MrReview,
     System,
     SystemOwner,
     SystemPM,
@@ -577,6 +578,54 @@ async def blocked_mr_scan(db: AsyncSession, group: DevGroup) -> dict:
     return {"notified": notified}
 
 
+async def review_head_mismatch(
+    db: AsyncSession, system_id: int, mr_iid: int | None, merged_sha: str | None
+) -> str | None:
+    """合并时校验：这次合入的 head 是否就是被初审通过的那次提交。
+
+    评审后追加一个 commit 再合并 = 评审被绕过（LoopForge 的 mr gate 就是干这个）。
+    返回被批准的那个 sha（用于告警），没有可判断的评审时返回 None。
+    """
+    if not mr_iid or not merged_sha:
+        return None
+    rows = list(
+        (
+            await db.scalars(
+                select(MrReview)
+                .where(MrReview.system_id == system_id, MrReview.mr_iid == mr_iid)
+                .order_by(MrReview.id.desc())
+            )
+        ).all()
+    )
+    approved = [row for row in rows if row.verdict == "approve"]
+    if not approved:
+        return None
+    if any(row.head_sha == merged_sha for row in approved):
+        return None
+    return approved[0].head_sha
+
+
+async def notify_review_mismatch(
+    db: AsyncSession,
+    group: DevGroup,
+    req: Requirement,
+    task: DevTask,
+    approved_sha: str,
+    merged_sha: str | None,
+) -> None:
+    """评审过的提交和真正合入的不是同一个：必须有人知道。"""
+    owners = await project_owners(db, req.system_id)
+    await notify(
+        db,
+        group,
+        f"⚠️ {req.code}《{req.title}》合入的提交不是评审通过的那次\n"
+        f"评审通过：{approved_sha[:8]} · 实际合入：{(merged_sha or '?')[:8]}\n"
+        f"任务 {task.code}；请确认评审是否被追加提交绕过。",
+        reason="review_sha_mismatch",
+        mention=merge_mentions(*owners),
+    )
+
+
 async def merge_poll(db: AsyncSession) -> dict:
     """13.12 无 merge webhook → 轮询 reviewing 状态任务的 MR。"""
     tasks = list(
@@ -606,6 +655,12 @@ async def merge_poll(db: AsyncSession) -> dict:
             task.merged_at = utcnow()
             merged += 1
             await mark_requirement_online(db, req)
+            if approved := await review_head_mismatch(
+                db, proj.id, task.mr_iid, mr.get("sha")
+            ):
+                await notify_review_mismatch(
+                    db, group, req, task, approved, mr.get("sha")
+                )
             await _notify_task_final(db, group, req, task, "merged")
         elif state == "closed" and task.status != "done":
             task.status = "done"

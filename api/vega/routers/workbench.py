@@ -298,6 +298,8 @@ async def workbench(
                     "code": t.code,
                     "title": t.title,
                     "status": t.status,
+                    # 0 = 首轮，>0 = 返工后的任务；前端据此把两轮画成两段
+                    "rework_round": t.rework_round,
                     # 详情页含需求文档/方案正文：与需求池同一可见性，前端据此禁用入口
                     "can_open": req_open,
                     "branch": t.branch,
@@ -351,6 +353,12 @@ async def workbench(
                 "plan_agent": expert(r, p, "plan"),  # 共同编写方案的专家
                 # 部署/测试泳道：系统配了映射才画；deploy 是最近一次部署事件
                 "deploy_on": bool(p.deploy_env_map),
+                # 方案返工回路：非空时流程图在「方案」「评审」之间画一个返工节点
+                "rework": (
+                    {"round": r.rework_round, "state": r.rework_state}
+                    if r.rework_state
+                    else None
+                ),
                 "deploy": (
                     {
                         "environment": deploys[p.id].environment,

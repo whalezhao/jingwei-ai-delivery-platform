@@ -11,9 +11,10 @@ from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
 
 from ..ai_case import call_model
+from ..crypto import encrypt_secret
 from ..deps import CurrentPerson, DbSession, require_system_access
 from ..model_health import describe_model_error
-from ..modelconfig import missing_fields
+from ..modelconfig import missing_fields, model_api_key
 from ..models import (
     System,
     SystemModelConfig,
@@ -150,7 +151,7 @@ async def update_model_config(
     if body.clear_api_key:
         row.api_key = None
     elif body.api_key:
-        row.api_key = body.api_key.strip()
+        row.api_key = encrypt_secret(body.api_key.strip())
     if body.clear_reasoning:
         row.reasoning_enabled = None
     elif body.reasoning_enabled is not None:
@@ -179,7 +180,7 @@ async def test_model_config(
         system_id=system_id,
         model_name=(body.model_name or (saved.model_name if saved else None)),
         base_url=(body.base_url or (saved.base_url if saved else None)),
-        api_key=(body.api_key or (saved.api_key if saved else None)),
+        api_key=(body.api_key or (model_api_key(saved) if saved else None)),
         model_family=saved.model_family if saved else None,
         init_config_json=saved.init_config_json if saved else None,
         reasoning_enabled=saved.reasoning_enabled if saved else None,

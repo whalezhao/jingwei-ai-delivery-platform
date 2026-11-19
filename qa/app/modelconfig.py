@@ -8,7 +8,15 @@ from fastapi import HTTPException, status
 from sqlalchemy import ColumnElement, and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .crypto import decrypt_secret
 from .models import System, SystemModelConfig
+
+
+def model_api_key(config: SystemModelConfig | None) -> str:
+    """模型密钥：库里存 Fernet 密文（`enc:v1:` 前缀），历史明文原样兼容。"""
+    if config is None or not config.api_key:
+        return ""
+    return decrypt_secret(config.api_key)
 
 REQUIRED_FIELDS: tuple[tuple[str, str], ...] = (
     ("model_name", "模型名"),

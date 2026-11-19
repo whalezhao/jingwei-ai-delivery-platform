@@ -289,3 +289,31 @@ async def test_finish_mr_review_skipped_no_comment(client, db, seeded, monkeypat
     rv = await db.scalar(select(MrReview))
     assert rv.verdict == "failed" and "不可达" in rv.error
     assert notes == []  # sha 都没了，没 MR 可评论
+
+
+# ---------- 合并时校验评审 sha ----------
+
+
+async def test_review_head_mismatch_flags_appended_commit(db, seeded):
+    """评审通过后又推了一个 commit 再合并 → 必须报出来。"""
+    from vega.jobs import review_head_mismatch
+
+    db.add(
+        MrReview(
+            system_id=seeded["project"].id,
+            group_id=seeded["group"].id,
+            mr_iid=7,
+            head_sha=SHA,
+            verdict="approve",
+        )
+    )
+    await db.commit()
+
+    assert await review_head_mismatch(db, seeded["project"].id, 7, SHA) is None
+    assert await review_head_mismatch(db, seeded["project"].id, 7, "b" * 40) == SHA
+
+
+async def test_review_head_mismatch_ignores_unreviewed_mr(db, seeded):
+    from vega.jobs import review_head_mismatch
+
+    assert await review_head_mismatch(db, seeded["project"].id, 99, SHA) is None

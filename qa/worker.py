@@ -31,7 +31,7 @@ from app.environments import (
     environment_for_system,
     load_environment_variables,
 )
-from app.modelconfig import missing_fields
+from app.modelconfig import missing_fields, model_api_key
 from app.models import (
     AppSetting,
     CaseResult,
@@ -84,7 +84,8 @@ def system_model_overrides(config: SystemModelConfig | None) -> dict[str, str]:
         return {}
     overrides: dict[str, str] = {}
     for field, env_key in SYSTEM_MODEL_ENV_KEYS.items():
-        value = getattr(config, field, None)
+        # 密钥存的是密文，注入子进程前才解密
+        value = model_api_key(config) if field == "api_key" else getattr(config, field, None)
         if value:
             overrides[env_key] = value
     # 布尔值要单独处理：False 在这条链路上是有意义的取值，不能被 `if value` 当成空跳过

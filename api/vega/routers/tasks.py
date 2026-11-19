@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -340,6 +342,16 @@ async def enqueue_dev_task(
     }
     task.branch = branch
     task.status = "queued"
+    # 运行快照：模型/prompt/AM 绑定固定下来，事后才能解释「为什么这次是这个结果」
+    task.snapshot = {
+        "model": target.model or "",
+        "model_source": target.source,
+        "effort": target.effort or "",
+        "am_team": project.am_team_id or group.am_team_id or "",
+        "am_agent": project.am_agent_id or (gm.am_agent_id if gm else None) or "",
+        "prompt_sha": hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16],
+        "session_id": payload["session_id"],
+    }
     await enqueue(
         db,
         type="dev_task",
