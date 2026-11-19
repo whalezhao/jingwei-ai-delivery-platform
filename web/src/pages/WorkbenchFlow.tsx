@@ -374,9 +374,10 @@ function TaskCard({ task, r, onOpen }: { task: Task; r: Req; onOpen: () => void 
         >
           🕒 {fmtT(task.updated_at) || "—"}
         </span>
-        <Badge tone={phase[0]} className="wb-phase">{t(phase[1])}</Badge>
       </div>
       <div className="wb-chips">
+        {/* 阶段标签放 chips 行：卡片只有 100 多像素宽，挤在标题行会被顶出卡片外 */}
+        <Badge tone={phase[0]} className="wb-phase">{t(phase[1])}</Badge>
         <a
           className={`wb-chip mono${task.can_open ? "" : " muted"}`}
           title={task.can_open ? t("workbench.viewTask", { code: task.code }) : denied}

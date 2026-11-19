@@ -1071,7 +1071,10 @@ body {
 }
 /* 任务卡时间：最近一次状态变化（悬停看创建/更新全量） */
 .wb-task-time {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-size: 11px;
   color: var(--muted);
   white-space: nowrap;
