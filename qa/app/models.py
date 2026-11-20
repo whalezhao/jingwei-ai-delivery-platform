@@ -632,6 +632,8 @@ class Run(Timestamped, Base):
     is_debug: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     debug_yaml: Mapped[str | None] = mapped_column(Text)
     debug_step_limit: Mapped[int | None] = mapped_column(Integer)
+    # 试跑是否使用 AI 缓存（跨 run 共享目录）。默认开：验证过的步骤第二次直接命中
+    debug_cache: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     # 单系统任务分片：这个 run 只跑其中一部分用例；为空表示老数据/不分片
     case_ids: Mapped[list[str] | None] = mapped_column(JSONB)
     shard_index: Mapped[int | None] = mapped_column(Integer)

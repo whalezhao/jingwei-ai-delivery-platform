@@ -7,6 +7,7 @@ import {
   cloneElement,
   createContext,
   isValidElement,
+  type CSSProperties,
   type ReactElement,
   type ReactNode,
   useCallback,
@@ -163,6 +164,8 @@ export interface CenterMorphModalContentProps {
   closeButtonLabel?: string;
   className?: string;
   backdropClassName?: string;
+  /** Extra inline styles for the panel (e.g. a user-resizable width). */
+  style?: CSSProperties;
 }
 
 const CENTER_FOLDED_CLIP =
@@ -187,6 +190,7 @@ export function CenterMorphModalContent({
   closeButtonLabel = "Close modal",
   className,
   backdropClassName,
+  style,
 }: CenterMorphModalContentProps) {
   const context = useCenterMorphModalContext("CenterMorphModalContent");
   const reduce = useReducedMotion() ?? false;
@@ -290,6 +294,7 @@ export function CenterMorphModalContent({
                       "pointer-events-auto relative w-full max-w-[26rem] origin-center overflow-hidden rounded-[30px] border border-border bg-background will-change-[clip-path]",
                       className,
                     )}
+                    style={style}
                   >
                     {children}
 

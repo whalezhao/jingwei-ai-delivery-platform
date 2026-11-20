@@ -103,6 +103,7 @@ def _build_env(
     system_overrides: dict[str, str] | None = None,
     secret_env: dict[str, str] | None = None,
     system_id: int | None = None,
+    cache: bool = True,
 ) -> dict[str, str]:
     """组装子进程环境。
 
@@ -130,8 +131,12 @@ def _build_env(
     # 每个 run 一个独立的 MIDSCENE_RUN_DIR —— log 因此天然只含本次执行，
     # token 统计不需要记 offset、也不用按时间窗猜归属
     env["MIDSCENE_RUN_DIR"] = staging.runner_relative_run_dir(staged, runner_root)
-    # 缓存目录不能跟着 MIDSCENE_RUN_DIR 走，否则每次执行都是冷缓存
-    env["QA_CACHE_DIR"] = str(staging.shared_cache_dir(runner_root, system_id))
+    # 缓存目录不能跟着 MIDSCENE_RUN_DIR 走，否则每次执行都是冷缓存。
+    # 调试试跑可以按次关掉：读不到就既不读旧结果，也不会写坏共享缓存。
+    if cache:
+        env["QA_CACHE_DIR"] = str(staging.shared_cache_dir(runner_root, system_id))
+    else:
+        env.pop("QA_CACHE_DIR", None)
     env.setdefault("HEADLESS", "true")
 
     # 复刻参考实现的做法：每次执行换一个上游会话头，避免所有 run 挤在同一个会话里
@@ -583,7 +588,13 @@ async def _process(run_id: uuid.UUID) -> None:
         runner_root=runner_root,
         staged=staged,
         env=_build_env(
-            runner_env, staged, runner_root, overrides, secret_vars, system_id=run.system_id
+            runner_env,
+            staged,
+            runner_root,
+            overrides,
+            secret_vars,
+            system_id=run.system_id,
+            cache=run.debug_cache if run.is_debug else True,
         ),
         timeout_ms=timeout_ms,
         poll_cancel=poll_cancel,

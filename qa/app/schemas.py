@@ -199,6 +199,22 @@ class CaseDraftOut(BaseModel):
     steps: list[dict] = []
 
 
+class TrialStepOption(In):
+    case_index: int = Field(ge=0)
+    step: int = Field(ge=0)
+    # 只对 aiAct 生效
+    cache: bool | None = None
+    deep_locate: bool | None = None
+    # 只对 aiWaitFor 生效：None = 不动，null 由模型 dump 后仍是 None
+    timeout_ms: int | None = Field(default=None, ge=0, le=600_000)
+    # 只对 aiAct 生效：balance 等于不写这个键
+    effort: str | None = Field(default=None, pattern="^(fast|balance|deepThink)$")
+    # 单步上下文（aiAct / aiAssert / aiWaitFor）：空串 = 删掉
+    context: str | None = None
+    # 只对 aiAssert 生效：失败文案，写在步骤级而不是 options 里
+    message: str | None = None
+
+
 class TrialRunIn(In):
     yaml_content: str
     # 目标 case 在文档里的位置 + 只跑到它的第 N 步；case 按顺序执行，
@@ -206,6 +222,10 @@ class TrialRunIn(In):
     step_limit: int = Field(ge=1, le=60)
     case_index: int | None = Field(default=None, ge=0)
     environment_name: str | None = None
+    # 跨 run 的 AI 缓存默认开；单步可在 step_options 里覆盖
+    cache: bool = True
+    # 单步选项：cache=False 不走缓存，deep_locate=True 开深度定位
+    step_options: list[TrialStepOption] = []
 
 
 class TrialRunOut(BaseModel):
@@ -390,6 +410,8 @@ class RunDetailOut(RunOut):
     report_available: bool = False
     # 调试试跑收尾后带上失败步骤（哪一步、为什么），用于调试面板归因
     failure_steps: list[dict] = []
+    # 试跑的逐步结果（含通过）：[{case_index, step, status, reason?}]
+    step_results: list[dict] = []
     ai_calls: int = 0
     ai_total_tokens: int = 0
     ai_cost_ms: int = 0

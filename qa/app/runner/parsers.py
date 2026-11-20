@@ -244,6 +244,50 @@ def read_case_evidence(result_dir: Path, limit: int = 12) -> list[dict]:
     return items
 
 
+def read_step_results(result_dir: Path, limit: int = 200) -> list[dict]:
+    """试跑的逐步结果（含通过的步骤）。
+
+    结果文件的 caseIndex 就是 YAML 里 cases 的下标，steps 数组与 YAML 的 steps
+    一一对应 —— 前端用 (case_index, step) 就能把结果写回自己那行。
+    只读最后一次 attempt：重试后的结果才是最终结论。
+    """
+    path = find_summary(result_dir)
+    if path is None:
+        return []
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+
+    items: list[dict] = []
+    for project in doc.get("projects") or []:
+        for case in project.get("cases") or []:
+            attempts = case.get("attempts") or []
+            attempt = attempts[-1] if attempts else {}
+            detail: dict = {}
+            if result_file := attempt.get("resultFile"):
+                try:
+                    detail = json.loads(
+                        (path.parent / result_file).read_text(encoding="utf-8")
+                    )
+                except (OSError, json.JSONDecodeError):
+                    detail = {}
+            case_index = detail.get("caseIndex", case.get("caseIndex"))
+            for index, step in enumerate(detail.get("steps") or []):
+                if len(items) >= limit:
+                    return items
+                item = {
+                    "case_index": case_index,
+                    "step": index,
+                    "status": step.get("status"),
+                }
+                message = (step.get("error") or {}).get("message")
+                if message:
+                    item["reason"] = str(message)[:_EVIDENCE_TEXT_LIMIT]
+                items.append(item)
+    return items
+
+
 def parse_plan_case_count(result_dir: Path) -> int:
     """从 plan.json 数出本次计划执行多少个 case。
 

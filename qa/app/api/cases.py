@@ -208,6 +208,10 @@ async def trial_run(
         )
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    if body.step_options:
+        text = ai_case.apply_step_options(
+            text, [o.model_dump(exclude_unset=True) for o in body.step_options]
+        )
     # 返回的是这次真正会跑的范围（前面的 case + 目标 case 的前 N 步）
     _, case_count = validate_yaml(text)
     env = await environment_for_system(
@@ -219,6 +223,7 @@ async def trial_run(
         is_debug=True,
         debug_yaml=text,
         debug_step_limit=body.step_limit,
+        debug_cache=body.cache,
         environment_id=env.id if env else None,
         environment_name=env.name if env else None,
         environment_base_url=env.base_url if env else None,

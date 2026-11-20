@@ -173,6 +173,10 @@ async def get_run(run_id: uuid.UUID, user: CurrentPerson, db: DbSession) -> RunD
         payload.failure_steps = (
             parsers.read_case_evidence(result_dir, limit=5) if result_dir else []
         )
+        # 逐步结果（含通过）：调试面板每一步后面显示 ✓/✗
+        payload.step_results = (
+            parsers.read_step_results(result_dir) if result_dir else []
+        )
     return payload
 
 

@@ -7,9 +7,18 @@
 import sys
 from pathlib import Path
 
+import yaml
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.ai_case import _finalize, steps_of, truncate_steps, verify_prefix
+from app.ai_case import (
+    _finalize,
+    apply_step_options,
+    extract_yaml,
+    steps_of,
+    truncate_steps,
+    verify_prefix,
+)
 from app.runner.staging import case_id_from_source_path
 from app.yamlcheck import split_cases
 
@@ -138,3 +147,118 @@ def test_finalize_reports_diff_on_append():
     assert not violated and yaml_text == appended
     assert "+      - aiAct: 输入账号" in diff
     assert len(steps) == 3
+
+# ---- 单步选项 -------------------------------------------------------------
+# 缓存/深度定位只属于 aiAct，超时只属于 aiWaitFor：执行器里每个节点的 options
+# 是严格对象，塞错节点会直接判输入不合法。
+
+def test_apply_step_options_per_node():
+    text = """cases:
+  - name: A
+    steps:
+      - aiTap: 点击登录
+      - aiWaitFor:
+          prompt: 出现首页
+      - aiAct:
+          prompt: 填表单
+          options:
+            cacheable: false
+"""
+    doc = yaml.safe_load(
+        apply_step_options(
+            text,
+            [
+                {"case_index": 0, "step": 0, "deep_locate": True},
+                {"case_index": 0, "step": 1, "timeout_ms": 30000},
+                {"case_index": 0, "step": 2, "cache": True},
+            ],
+            ),
+    )
+    steps = doc["cases"][0]["steps"]
+    # aiTap 不再接受缓存/深度定位，原样保留
+    assert steps[0]["aiTap"] == "点击登录"
+    # aiWaitFor 只写超时
+    assert steps[1]["aiWaitFor"]["options"] == {"timeoutMs": 30000}
+    # aiAct：开缓存把原来的 false 改成 true
+    assert steps[2]["aiAct"]["options"] == {"cacheable": True}
+
+    # 关掉 = 删 key；options 空了连 options 本身也不留
+    off = yaml.safe_load(
+        apply_step_options(
+            text,
+            [
+                {"case_index": 0, "step": 1, "timeout_ms": None},
+                {"case_index": 0, "step": 2, "cache": False},
+            ],
+        )
+    )
+    off_steps = off["cases"][0]["steps"]
+    assert off_steps[1]["aiWaitFor"] == {"prompt": "出现首页"}
+    assert off_steps[2]["aiAct"] == {"prompt": "填表单"}
+
+
+# 模型经常把用例夹在解释文字中间，且不一定加围栏：这种回复也要能填到右侧
+
+def test_extract_yaml_from_prose_reply():
+    reply = """用例说明：
+- 覆盖流程：打开首页 → 点击需求池
+
+cases:
+  - name: A
+    steps:
+      - aiAct: 打开首页
+      - aiAssert: 出现需求池
+
+以上请确认。"""
+    text = extract_yaml(reply)
+    assert text is not None
+    assert yaml.safe_load(text)["cases"][0]["name"] == "A"
+
+
+def test_extract_yaml_fence_wins():
+    reply = "说明\n```yaml\ncases:\n  - name: B\n    steps:\n      - aiAssert: y\n```\n补充"
+    text = extract_yaml(reply)
+    assert "name: B" in text
+
+
+def test_extract_yaml_none_when_no_yaml():
+    assert extract_yaml("请提供测试账号和密码。") is None
+
+
+# 规划力度 / 单步上下文 / 断言失败文案：都按「关掉就删 key」的语义写
+
+def test_apply_step_options_effort_context_message():
+    text = """cases:
+  - name: A
+    steps:
+      - aiAct:
+          prompt: 点击提交
+      - aiAssert: 显示成功提示
+"""
+    doc = yaml.safe_load(
+        apply_step_options(
+            text,
+            [
+                {
+                    "case_index": 0,
+                    "step": 0,
+                    "effort": "deepThink",
+                    "context": "按钮在右侧抽屉底部",
+                },
+                {"case_index": 0, "step": 1, "message": "应看到成功提示", "context": ""},
+            ],
+        )
+    )
+    steps = doc["cases"][0]["steps"]
+    assert steps[0]["aiAct"]["options"] == {
+        "effort": "deepThink",
+        "context": "按钮在右侧抽屉底部",
+    }
+    # 断言：message 是步骤级键，简写被展开成块写法；空 context 不写键
+    assert steps[1]["aiAssert"] == {"prompt": "显示成功提示", "message": "应看到成功提示"}
+
+    # balance 是默认值：选了它等于不要这个键
+    doc2 = yaml.safe_load(
+        apply_step_options(text, [{"case_index": 0, "step": 0, "effort": "balance"}])
+    )
+    assert "options" not in doc2["cases"][0]["steps"][0]["aiAct"]

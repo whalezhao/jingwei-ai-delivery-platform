@@ -197,6 +197,36 @@ class DraftResult:
     steps: list[dict] | None = None
 
 
+_YAML_STARTS = ("beforeEach:", "beforeAll:", "cases:")
+
+
+def _bare_yaml(reply: str) -> str | None:
+    """裸 YAML 兜底：模型常把用例贴在解释文字中间，不加围栏。
+
+    从每个疑似文档开头往下取，末尾逐行回退，直到能解析成带 cases 的字典 ——
+    这样「前面一段说明 + YAML + 后面一句补充」也能取到。
+    """
+    lines = reply.splitlines()
+    for i, line in enumerate(lines):
+        head = line.lstrip()
+        if head not in _YAML_STARTS:
+            continue
+        indent = len(line) - len(head)
+        pad = " " * indent
+        chunk = [l[indent:] if l.startswith(pad) else l for l in lines[i:]]
+        for end in range(len(chunk), max(len(chunk) - 20, 0), -1):
+            candidate = "\n".join(chunk[:end]).rstrip()
+            if not candidate:
+                continue
+            try:
+                doc = yaml.safe_load(candidate + "\n")
+            except yaml.YAMLError:
+                continue
+            if isinstance(doc, dict) and doc.get("cases"):
+                return candidate + "\n"
+    return None
+
+
 def extract_yaml(reply: str) -> str | None:
     """从回复里取 YAML。
 
@@ -215,10 +245,7 @@ def extract_yaml(reply: str) -> str | None:
         content = blocks[-1].strip()
         return f"{content}\n" if content else ""
 
-    stripped = reply.strip()
-    if stripped.startswith(("beforeEach:", "cases:", "beforeAll:")) and "cases:" in stripped:
-        return stripped + "\n"
-    return None
+    return _bare_yaml(reply)
 
 
 def strip_yaml_blocks(reply: str, *, cleared: bool = False) -> str:
@@ -262,6 +289,101 @@ def steps_of(yaml_text: str) -> list[dict]:
                 }
             )
     return items
+
+
+# 执行器的节点各自只接受自己的 options：缓存/深度定位是 aiAct 的，
+# 超时是 aiWaitFor 的；塞错节点会直接报输入不合法，所以按节点分表
+_CACHE_NODES = {"aiAct"}
+_TIMEOUT_NODES = {"aiWaitFor"}
+_CONTEXT_NODES = {"aiAct", "aiAssert", "aiWaitFor"}
+_MESSAGE_NODES = {"aiAssert"}
+
+
+def apply_step_options(yaml_text: str, overrides: list[dict]) -> str:
+    """按 (case 下标, 步骤下标) 给单步加执行选项。
+
+    `cache=False` → `options.cacheable: false`（这一步不走 AI 缓存）；
+    `deep_locate=True` → `options.deepLocate: true`（定位时多看一遍画面）。
+    下标以原文档为准：截断只会砍掉尾部，保留下来的步骤下标不变。
+    """
+    wanted = {
+        (int(o["case_index"]), int(o["step"])): o
+        for o in overrides
+        if isinstance(o, dict) and "case_index" in o and "step" in o
+    }
+    if not wanted:
+        return yaml_text
+    try:
+        doc = yaml.safe_load(yaml_text)
+    except yaml.YAMLError:
+        return yaml_text
+    if not isinstance(doc, dict) or not isinstance(doc.get("cases"), list):
+        return yaml_text
+    for case_index, case in enumerate(doc["cases"]):
+        if not isinstance(case, dict):
+            continue
+        steps = []
+        for step_index, step in enumerate(case.get("steps") or []):
+            override = wanted.get((case_index, step_index))
+            if (
+                override is None
+                or not isinstance(step, dict)
+                or len(step) != 1
+            ):
+                steps.append(step)
+                continue
+            node = next(iter(step))
+            value = step[node]
+            if node in (_CACHE_NODES | _TIMEOUT_NODES | _CONTEXT_NODES | _MESSAGE_NODES):
+                def merge(options: dict) -> dict:
+                    # 开 = 写 true；关 = 把这个键删掉（界面上就是「不要这个 key」）
+                    if node in _CACHE_NODES:
+                        cache = override.get("cache")
+                        deep = override.get("deep_locate")
+                        if cache is True:
+                            options["cacheable"] = True
+                        elif cache is False:
+                            options.pop("cacheable", None)
+                        if deep is True:
+                            options["deepLocate"] = True
+                        elif deep is False:
+                            options.pop("deepLocate", None)
+                    elif node in _TIMEOUT_NODES and "timeout_ms" in override:
+                        timeout = override["timeout_ms"]
+                        if timeout is None:
+                            options.pop("timeoutMs", None)
+                        else:
+                            options["timeoutMs"] = int(timeout)
+                    if node in _CACHE_NODES and "effort" in override:
+                        effort = override["effort"]
+                        if effort in (None, "balance"):
+                            options.pop("effort", None)
+                        else:
+                            options["effort"] = effort
+                    if node in _CONTEXT_NODES and "context" in override:
+                        context = (override["context"] or "").strip()
+                        if context:
+                            options["context"] = context
+                        else:
+                            options.pop("context", None)
+                    return options
+
+                merged = merge(dict(value.get("options") or {})) if isinstance(value, dict) else merge({})
+                base_value = value if isinstance(value, dict) else {"prompt": value}
+                base_value = {k: v for k, v in base_value.items() if k != "options"}
+                if merged:
+                    base_value["options"] = merged
+                if node in _MESSAGE_NODES and "message" in override:
+                    msg = (override["message"] or "").strip()
+                    if msg:
+                        base_value["message"] = msg
+                    else:
+                        base_value.pop("message", None)
+                value = base_value
+                step = {node: value}
+            steps.append(step)
+        case["steps"] = steps
+    return yaml.safe_dump(doc, allow_unicode=True, sort_keys=False)
 
 
 def truncate_steps(yaml_text: str, limit: int, case_index: int | None = None) -> str:
@@ -560,6 +682,11 @@ async def call_model(
     return content, data.get("usage") or {}
 
 
+_YAML_ONLY = (
+    "你这次的回复里没有 YAML。请只输出当前完整的 YAML 文档：用 ```yaml 代码块包住，"
+    "包含全部 case 和步骤，不要任何解释文字。"
+)
+
 _CACHE_REVIEW = (
     "请重新检查这份 YAML 的缓存策略：逐个 aiAct 判断是否需要缓存，并把每个 aiAct 都写成"
     "带 options.cacheable（true 或 false）的形式 —— 稳定的导航/准备步骤用 true，"
@@ -822,6 +949,9 @@ async def draft_stream(
 
     reply = "".join(parts)
     yaml_text = extract_yaml(reply)
+    yaml_text, usage = await ensure_yaml(
+        config, messages, reply, yaml_text, usage, retry=bool(current_yaml)
+    )
     errors: list[str] = []
     if yaml_text:
         errors, _ = validate_yaml(yaml_text)
@@ -854,6 +984,46 @@ async def draft_stream(
     }
 
 
+async def ensure_yaml(
+    config: SystemModelConfig,
+    messages: list[dict],
+    reply: str,
+    yaml_text: str | None,
+    usage: dict,
+    *,
+    retry: bool,
+) -> tuple[str | None, dict]:
+    """模型这一轮只回了文字（常见于多 case 的后续对话），补问一次只要 YAML。
+
+    只在第一次没取到 YAML 时多花一次调用；补出来的内容仍要过校验，
+    不合格就维持原样，右侧保留旧内容而不是塞进一份坏文档。
+    """
+    # 只在「已有一份 YAML、用户在继续改」时补问：
+    # 第一次生成时模型回一句反问是正常的，硬要 YAML 会编出一份假的
+    if yaml_text is not None or not retry:
+        return yaml_text, usage
+    try:
+        retry_reply, retry_usage = await call_model(
+            config,
+            [
+                *messages,
+                {"role": "assistant", "content": reply},
+                {"role": "user", "content": _YAML_ONLY},
+            ],
+            timeout=180.0,
+        )
+    except (httpx.HTTPError, ValueError, RuntimeError) as exc:
+        log.warning("补要 YAML 失败：%s", exc)
+        return None, usage
+    candidate = extract_yaml(retry_reply)
+    if not candidate:
+        return None, usage
+    errors, _ = validate_yaml(candidate)
+    if errors:
+        return None, usage
+    return candidate, _merge_usage(usage, retry_usage)
+
+
 async def draft(
     db: AsyncSession,
     config: SystemModelConfig,
@@ -878,6 +1048,9 @@ async def draft(
     reply, usage = await call_model(config, messages)
 
     yaml_text = extract_yaml(reply)
+    yaml_text, usage = await ensure_yaml(
+        config, messages, reply, yaml_text, usage, retry=bool(current_yaml)
+    )
     errors: list[str] = []
     # 空字符串表示模型要清空，不是「给了个非法文档」，不该报校验错
     if yaml_text:

@@ -3055,3 +3055,20 @@ button.rc-fchip:hover { border-color: var(--accent); color: var(--accent); }
 }
 /* 收起成图标轨时没有织纹，菜单要回到居中 */
 [data-state="collapsed"] .nav-weave [data-slot="sidebar-menu"] { padding-left: 0; }
+
+/* 调试面板里的滚动区：macOS 默认悬浮滚动条看不见，这里强制常显细条 */
+.thin-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklab, var(--muted-foreground) 35%, transparent) transparent;
+}
+.thin-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.thin-scroll::-webkit-scrollbar-thumb {
+  border-radius: 4px;
+  background: color-mix(in oklab, var(--muted-foreground) 30%, transparent);
+}
+.thin-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
